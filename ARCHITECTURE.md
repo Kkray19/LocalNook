@@ -67,6 +67,54 @@ content's ideal size up to the window and silently widen it, knocking the notch
 off centre. `host.sizingOptions = []` prevents that. This was a real bug — the
 panel came out 44pt too wide and 22pt off-centre.
 
+### Two windows: drawing and interaction
+
+The panel lies across the top of the screen, above the menu bar. Anything it
+hit-tests, it steals — a click that lands on it never reaches Chrome, the menu
+bar, or whatever else is underneath. Collapsed, it was taking every click in a
+944×214 strip, which made the top of the display unusable for other apps.
+
+**Declining the hit test does not fix this.** `NSWindow` dispatches to the view
+`hitTest` returns; when that is `nil` the event is *dropped*, not forwarded to
+the window below. The click is swallowed silently — indistinguishable from the
+original bug. (`NSHostingView` also hit-tests to itself for every point in its
+bounds regardless of what SwiftUI drew, and `.allowsHitTesting(false)` changes
+nothing, because AppKit never asks SwiftUI.)
+
+The only mechanism that genuinely routes a click past a window is
+`ignoresMouseEvents`, and it is all-or-nothing per window. So the two
+responsibilities are split:
+
+| Window | Size | Role |
+|---|---|---|
+| `NotchPanel` | as wide as it needs to draw (up to ~945pt) | Draws everything. **Inert while collapsed.** |
+| `NotchHitPanel` | exactly the notch (~209×35) | Invisible. **The only window accepting input while collapsed.** |
+
+While the notch is open the roles swap: the panel is visible and covers real
+content, so it takes input and the catcher stands down. `syncInteractivity()`
+keeps exactly one of them live.
+
+Measured effect: the interactive footprint went from 944×214 to 209×35 — a 96%
+reduction — and now sits inside the physical notch, which is not usable screen
+area anyway.
+
+`NotchHitTestView` still restricts hit-testing *within* the panel, as a second
+layer of defence for the expanded state.
+
+#### Consequences worth knowing
+
+- **Live-activity wings are display-only.** When something is playing the drawn
+  strip stretches to ~445pt, but neither hover nor clicks follow it. Tracking
+  that width would expand the notch whenever the pointer crossed the top of the
+  screen. The wings still *cover* menu-bar space visually; turn individual
+  activities off in Settings ▸ Live Activities if that is unwanted.
+- **Hover lives on the catcher, not the panel.** Collapsed, the panel is inert,
+  so its tracking area never fires. A hover test written against the panel will
+  keep passing even if hover is completely broken — `testCatcherHover` drives
+  the shipped catcher for this reason.
+- **A deliberate close latches shut** until the pointer leaves, otherwise the
+  catcher re-opens the notch immediately under a stationary cursor.
+
 ### Window configuration
 
 `NotchPanel` is a borderless, **non-activating** `NSPanel` at level
@@ -104,6 +152,22 @@ readable may go there. `ExpandedNotchView` reserves that strip for "shoulder"
 content either side of the housing — widget title on the left, settings and
 collapse on the right — and puts the tab strip and widget body below it. This
 was also a real bug: the first layout put the widget rail in that strip.
+
+### External displays
+
+"Show on every display" defaults **on**, so a second monitor gets a notch out of
+the box. Displays without a camera housing draw a virtual notch instead; with
+`matchRealNotch` selected — the default — there is no real notch to measure, so
+the height falls back to the configured virtual height rather than collapsing to
+nothing.
+
+Geometry is expressed as a pure `NotchGeometry.DisplayMetrics` value rather than
+reading `NSScreen` directly. The external-display path is the one most likely to
+break and least likely to be plugged in while working on it, so this makes it
+testable without hardware: virtual sizing, menu-bar-relative height, the
+disabled case, and placement on displays whose frame origin is offset — positive
+*and* negative, which is how a second monitor ends up drawing its notch on the
+wrong screen.
 
 ### Multi-display and system events
 

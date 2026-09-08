@@ -111,14 +111,44 @@ its own notch UI, which is what appears in screenshots of the notch area.
 LocalNook sits above it at layer 101. The two do not conflict, but if you want
 to evaluate LocalNook's own appearance, quit NotchNook first.
 
+## Click-through and external displays
+
+`--self-test` now covers the two areas most likely to make LocalNook annoying to
+live with.
+
+**Interactive footprint.** Nine assertions that the collapsed notch accepts
+clicks on itself and passes everything else through, built through the same
+`makeContentView` path the app ships so they cannot drift from real behaviour.
+All five failing cases were reproduced before the fix. Plus eight assertions that
+exactly one of the drawing panel and the catcher accepts input at a time, and
+that the catcher never widens to follow a live activity.
+
+**External displays.** Ten assertions covering virtual-notch sizing,
+menu-bar-relative height, the disabled case, and placement on displays with
+offset frame origins — all driven through `DisplayMetrics`, so they run with no
+second monitor attached. Plus hot-plug: a display-configuration change must not
+duplicate panels or leave orphans pointing at a disconnected screen.
+
+**Measured live**, collapsed, on the built-in display:
+
+```
+layer=102  209x35   ← catcher: the only window taking input
+layer=101  445x35   ← drawing panel: ignoresMouseEvents
+```
+
+Down from a single 944×214 interactive window.
+
 ## Known gaps in coverage
 
 - **Live on-screen hover on the physical notch** has not been observed directly:
   synthesising pointer movement requires Accessibility, which is not granted.
   It is covered by the end-to-end test, which drives the real panel and view.
   A five-second manual check (hover the notch) would confirm it in situ.
-- **External display** behaviour is untested — only one display is attached to
-  this machine.
+- **External display behaviour has not been seen on screen.** The monitor
+  attached to this Mac (G274QPF E2, 2560×1440) is powered off, so
+  `CGGetOnlineDisplayList` reports one display. The geometry and hot-plug paths
+  are covered through `DisplayMetrics`, but placement on a real second monitor
+  is still unverified.
 - **Sleep/wake** handling is implemented and wired to `NSWorkspace.didWake`, but
   has not been exercised through a real sleep cycle.
 - **Permission-denied paths** are asserted structurally rather than by actually
