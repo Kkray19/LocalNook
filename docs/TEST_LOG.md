@@ -144,8 +144,16 @@ Not all "verified" is the same, so this log separates them.
 
 ### Verified by automated check
 
-`--self-test`, **231 assertions** at build 21, run repeatedly against a **frozen**
-copy of the shipped binary. Freezing matters: an earlier 16-run attempt straddled
+`--self-test`, **232 assertions** at build 24, run repeatedly against the shipped
+binary itself rather than a rebuild of the same sources.
+
+Two flakiness investigations in this pass were more informative than the green
+runs. A 15-run of build 21 produced *scattered* failures across unrelated
+sections; the pattern, not any single failure, was the signal, and it led to
+`stop()` leaving the recovery task running so a stopped controller could close a
+later session's notch. A second run surfaced a missed hover crossing when a
+window moves under a stationary pointer — a real case, since attaching a display
+repositions the panel. Freezing matters: an earlier 16-run attempt straddled
 rebuilds and its counts climbed from 188 to 207, which made it useless as
 evidence for any single build.
 
