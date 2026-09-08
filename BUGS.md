@@ -25,6 +25,28 @@ The handling code is covered; the interaction is not.
 
 ## RESOLVED
 
+### 0-. `stop()` left the recovery check running
+
+**Found by:** a frozen 15-run of build 21 showing *scattered* failures across
+unrelated sections — `perform(.open)` not opening, claims surviving a close,
+attribution coming back nil. Individually each looked like a different bug; the
+pattern was cross-contamination.
+
+**Cause:** `stop()` cancelled the geometry and shrink tasks but not the
+once-a-second recovery task. A stopped controller kept polling, still holding
+references to its models, and could close a notch belonging to a later session.
+An earlier edit adding this cancellation had been overwritten by a subsequent
+restructure — the assertion that caught it at the time no longer covered the
+rewritten code.
+
+**Why it matters beyond tests:** "stop" that does not stop is a leak. It is
+called on termination and whenever the controller is rebuilt.
+
+**Fix:** `stop()` cancels it, with an assertion that a stopped controller is not
+polling.
+
+---
+
 ### 0. A window moving under a stationary pointer could miss the crossing
 
 **Observed:** 1 failure in 2 runs of the frozen build-21 binary —

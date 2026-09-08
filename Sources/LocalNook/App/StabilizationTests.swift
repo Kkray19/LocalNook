@@ -70,8 +70,12 @@ enum StabilizationTests {
         controller.start(); controller.perform(.open)
         SelfTest.pumpEvents(for: 0.1)
         controller.perform(.close)
-        SelfTest.pumpEvents(for: 0.8)
-        check("closed panel relinquishes expanded transparent canvas", controller.panelFrames.allSatisfy { $0.width < 500 && $0.height < 60 }, "")
+        // The shrink is deliberately deferred until the closing animation has
+        // finished, so wait for the condition rather than guessing a duration —
+        // a fixed pump fails under load for no real reason.
+        let hasShrunk = { controller.panelFrames.allSatisfy { $0.width < 500 && $0.height < 60 } }
+        SelfTest.waitUntil(hasShrunk, timeout: 3.0)
+        check("closed panel relinquishes expanded transparent canvas", hasShrunk(), "")
         controller.stop()
         let size = NotchGeometry.windowSize(for: NSScreen.main)
         // Stated as intent rather than a fixed number, so it keeps meaning if

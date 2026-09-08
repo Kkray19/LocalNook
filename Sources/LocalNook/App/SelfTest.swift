@@ -785,6 +785,9 @@ enum SelfTest {
 
         controller.stop()
         pumpEvents(for: 0.2)
+        check("stopping the controller stops the recovery check too",
+              !controller.pointerSafetyNetIsRunning,
+              "a stopped controller kept polling, and can close a later session's notch")
     }
 
     /// Hover, end to end, through the catcher that actually handles it.
@@ -1119,7 +1122,7 @@ enum SelfTest {
     /// the behaviour needs, so a slow machine does not produce a false failure
     /// and a fast one does not waste a second.
     @discardableResult
-    private static func waitUntil(
+    static func waitUntil(
         _ condition: () -> Bool,
         timeout: TimeInterval = 3.0
     ) -> Bool {

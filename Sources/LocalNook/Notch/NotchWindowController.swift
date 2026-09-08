@@ -125,6 +125,12 @@ final class NotchWindowController: NSObject {
     func stop() {
         started = false
         cancellables.removeAll()
+        // Stop means stop. A recovery task left running against torn-down state
+        // keeps polling after the controller is finished with, and — because it
+        // still holds a reference to the models — can close a notch belonging to
+        // a later session.
+        pointerSafetyTask?.cancel()
+        pointerSafetyTask = nil
         geometryTask?.cancel()
         geometryTask = nil
         shrinkTasks.values.forEach { $0.cancel() }
