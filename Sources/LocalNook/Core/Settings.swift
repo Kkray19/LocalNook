@@ -25,6 +25,48 @@ enum NotchHeightMode: String, PrefValue, CaseIterable, Identifiable {
     }
 }
 
+/// How the notch surface is painted.
+enum NotchMaterial: String, PrefValue, CaseIterable, Identifiable {
+    /// Opaque black. Matches the camera housing exactly; always available.
+    case solid
+    /// macOS 26 Liquid Glass. Falls back to `solid` on older systems.
+    case liquidGlass
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .solid: "Solid black"
+        case .liquidGlass: "Liquid Glass"
+        }
+    }
+
+    /// Liquid Glass needs macOS 26. Asking for it on an older system is not an
+    /// error — the notch simply stays solid.
+    var isAvailable: Bool {
+        switch self {
+        case .solid: true
+        case .liquidGlass:
+            if #available(macOS 26.0, *) { true } else { false }
+        }
+    }
+}
+
+/// Which Liquid Glass variant to use.
+enum GlassStyle: String, PrefValue, CaseIterable, Identifiable {
+    case regular
+    case clear
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .regular: "Regular"
+        case .clear: "Clear"
+        }
+    }
+}
+
 enum OpenTrigger: String, PrefValue, CaseIterable, Identifiable {
     case hover
     case click
@@ -107,6 +149,21 @@ final class Settings: ObservableObject {
     @Pref("general.showMenuBarIcon", true) var showMenuBarIcon: Bool
     @Pref("general.closeOnEscape", true) var closeOnEscape: Bool
     @Pref("general.hasCompletedFirstRun", false) var hasCompletedFirstRun: Bool
+
+    // MARK: Appearance
+
+    @Pref("appearance.material", NotchMaterial.solid) var notchMaterial: NotchMaterial
+    @Pref("appearance.glassStyle", GlassStyle.regular) var glassStyle: GlassStyle
+    /// Dims behind the glass so widget text stays readable over a bright desktop.
+    @Pref("appearance.glassDimming", 0.30) var glassDimming: Double
+    /// Draw the *collapsed* notch in glass too. Off by default: on a Mac with a
+    /// physical notch this puts a translucent smudge over the camera housing.
+    @Pref("appearance.glassWhenCollapsed", false) var glassWhenCollapsed: Bool
+
+    /// Whether Liquid Glass should actually be used right now.
+    var usesLiquidGlass: Bool {
+        notchMaterial == .liquidGlass && notchMaterial.isAvailable
+    }
 
     // MARK: Notch geometry
 

@@ -48,6 +48,7 @@ enum SelfTest {
         testClickThrough()
         testExternalDisplays()
         testInteractiveFootprint()
+        testLiquidGlass()
         testCatcherHover()
         testCloseLatch()
         testScriptableControl()
@@ -200,6 +201,52 @@ enum SelfTest {
         LiveActivityCenter.shared.previewInject(nil)
         controller.stop()
         pumpEvents(for: 0.2)
+    }
+
+    /// The Liquid Glass toggle and the one rule that makes it look right.
+    private static func testLiquidGlass() {
+        section("Liquid Glass")
+        let settings = Settings.shared
+        let originalMaterial = settings.notchMaterial
+        let originalCollapsed = settings.glassWhenCollapsed
+        let originalStyle = settings.glassStyle
+
+        settings.notchMaterial = .solid
+        check("solid is the default material", originalMaterial == .solid)
+        check("solid never uses glass",
+              !NotchSurface.usesGlass(settings: settings, isOpen: true, hasPhysicalNotch: false))
+
+        settings.notchMaterial = .liquidGlass
+        settings.glassWhenCollapsed = false
+
+        if NotchMaterial.liquidGlass.isAvailable {
+            check("expanded, the notch uses glass",
+                  NotchSurface.usesGlass(settings: settings, isOpen: true, hasPhysicalNotch: true))
+            check("collapsed over a real camera housing, it stays solid",
+                  !NotchSurface.usesGlass(settings: settings, isOpen: false, hasPhysicalNotch: true),
+                  "glass over the housing reads as a smudge")
+            check("collapsed on a display with no housing, it uses glass",
+                  NotchSurface.usesGlass(settings: settings, isOpen: false, hasPhysicalNotch: false))
+
+            settings.glassWhenCollapsed = true
+            check("opting in uses glass over the housing too",
+                  NotchSurface.usesGlass(settings: settings, isOpen: false, hasPhysicalNotch: true))
+            settings.glassWhenCollapsed = false
+
+            settings.glassStyle = .clear
+            check("the glass style round-trips", settings.glassStyle == .clear)
+        } else {
+            check("on a system without Liquid Glass, the notch falls back to solid",
+                  !NotchSurface.usesGlass(settings: settings, isOpen: true, hasPhysicalNotch: false),
+                  "asking for glass on an older macOS must not be an error")
+        }
+
+        check("the material setting round-trips",
+              settings.notchMaterial == .liquidGlass)
+
+        settings.notchMaterial = originalMaterial
+        settings.glassWhenCollapsed = originalCollapsed
+        settings.glassStyle = originalStyle
     }
 
     /// Hover, end to end, through the catcher that actually handles it.

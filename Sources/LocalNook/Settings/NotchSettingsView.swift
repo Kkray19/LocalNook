@@ -16,6 +16,31 @@ struct NotchSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            SettingsSection(
+                title: "Appearance",
+                footer: appearanceFooter
+            ) {
+                Picker("Material", selection: settings.binding(\.notchMaterial)) {
+                    ForEach(NotchMaterial.allCases) { material in
+                        Text(material.label).tag(material)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(!NotchMaterial.liquidGlass.isAvailable)
+
+                if settings.usesLiquidGlass {
+                    Picker("Glass style", selection: settings.binding(\.glassStyle)) {
+                        ForEach(GlassStyle.allCases) { Text($0.label).tag($0) }
+                    }
+                    SettingsSlider(
+                        title: "Dim behind glass", value: settings.binding(\.glassDimming),
+                        range: 0...0.75, step: 0.05, unit: "", format: "%.2f"
+                    )
+                    Toggle("Use glass for the collapsed notch too",
+                           isOn: settings.binding(\.glassWhenCollapsed))
+                }
+            }
+
             SettingsSection(title: "Closed size") {
                 Picker("Height", selection: settings.binding(\.notchHeightMode)) {
                     ForEach(NotchHeightMode.allCases) { Text($0.label).tag($0) }
@@ -121,6 +146,17 @@ struct NotchSettingsView: View {
             "\(settings.virtualNotchHeight)", "\(settings.showOnAllDisplays)",
             settings.preferredScreenID ?? "", "\(settings.useElevatedSpace)",
         ].joined(separator: "|")
+    }
+
+    private var appearanceFooter: String {
+        guard NotchMaterial.liquidGlass.isAvailable else {
+            return "Liquid Glass needs macOS 26 or later. On this system the notch is drawn solid black."
+        }
+        let notched = screens.filter(\.hasPhysicalNotch).count
+        if settings.usesLiquidGlass, notched > 0, !settings.glassWhenCollapsed {
+            return "Expanded, the notch is drawn in Liquid Glass. Collapsed, it stays solid black on the \(notched) display(s) with a real camera housing, so it still blends into the cutout — external displays use glass throughout."
+        }
+        return "Liquid Glass lets the desktop show through the notch. A dark scrim keeps widget text readable over bright wallpaper."
     }
 
     private var displayFooter: String {

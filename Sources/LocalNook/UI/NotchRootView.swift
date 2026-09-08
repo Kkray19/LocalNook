@@ -203,8 +203,12 @@ struct NotchRootView: View {
     }
 
     private var notchBody: some View {
-        NotchShape(topRadius: topRadius, bottomRadius: bottomRadius)
-            .fill(Color.black)
+        NotchSurface(
+            topRadius: topRadius,
+            bottomRadius: bottomRadius,
+            isOpen: isOpen,
+            hasPhysicalNotch: model.displayHasPhysicalNotch
+        )
             .overlay {
                 // Subtle inner edge so the panel reads as an object against a
                 // dark wallpaper rather than a hole.

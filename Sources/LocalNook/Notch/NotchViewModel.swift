@@ -64,6 +64,12 @@ final class NotchViewModel: ObservableObject {
             .store(in: &cancellables)
     }
 
+    /// Whether this panel's display has a real camera housing. Drives whether a
+    /// collapsed notch may be drawn in glass — see NotchSurface.
+    var displayHasPhysicalNotch: Bool {
+        screen?.hasPhysicalNotch ?? false
+    }
+
     var screen: NSScreen? {
         NSScreen.screen(withStableID: screenID) ?? NSScreen.main
     }
