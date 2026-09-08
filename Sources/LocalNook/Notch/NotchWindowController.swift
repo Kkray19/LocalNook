@@ -138,6 +138,15 @@ final class NotchWindowController: NSObject {
 
     var allModels: [NotchViewModel] { Array(models.values) }
 
+    /// Number of live panels. Used by the self-test to catch orphaned windows
+    /// after a display is attached or removed.
+    var panelCount: Int { panels.count }
+
+    /// True when every panel is still associated with a connected display.
+    var allPanelsOnLiveScreens: Bool {
+        panels.keys.allSatisfy { NSScreen.screen(withStableID: $0) != nil }
+    }
+
     // MARK: Panel management
 
     private func primaryScreenID() -> String? {

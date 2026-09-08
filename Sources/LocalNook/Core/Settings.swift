@@ -121,7 +121,7 @@ final class Settings: ObservableObject {
     @Pref("notch.virtualNotchEnabled", true) var virtualNotchEnabled: Bool
     @Pref("notch.virtualNotchHeight", 32.0) var virtualNotchHeight: Double
     @Pref("notch.virtualNotchWidth", 200.0) var virtualNotchWidth: Double
-    @Pref("notch.showOnAllDisplays", false) var showOnAllDisplays: Bool
+    @Pref("notch.showOnAllDisplays", true) var showOnAllDisplays: Bool
     @Pref("notch.preferredScreenID", String?.none) var preferredScreenID: String?
     @Pref("notch.hideInFullscreen", true) var hideInFullscreen: Bool
     /// Opt-in private-API window placement. See ARCHITECTURE.md § Private APIs.

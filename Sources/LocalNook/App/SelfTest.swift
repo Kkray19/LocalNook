@@ -46,6 +46,7 @@ enum SelfTest {
 
         testHoverPath()
         testClickThrough()
+        testExternalDisplays()
         testScriptableControl()
         StabilizationTests.run()
         AppInfo.defaults.removePersistentDomain(forName: AppInfo.testSuiteName)
@@ -158,6 +159,106 @@ enum SelfTest {
               controller.activeModel?.state == .closed)
 
         controller.stop()
+    }
+
+    /// External-monitor geometry, exercised without attaching a monitor.
+    ///
+    /// `DisplayMetrics` exists precisely so these paths are reachable: an
+    /// external display is the case most likely to be broken and least likely to
+    /// be plugged in while developing.
+    private static func testExternalDisplays() {
+        section("External displays")
+        let settings = Settings.shared
+
+        let originalVirtual = settings.virtualNotchEnabled
+        let originalMode = settings.notchHeightMode
+        let originalWidth = settings.virtualNotchWidth
+        let originalAdjust = settings.notchWidthAdjustment
+        settings.virtualNotchEnabled = true
+        settings.notchHeightMode = .matchRealNotch
+        settings.virtualNotchWidth = 200
+        settings.notchWidthAdjustment = 0
+
+        // The monitor actually attached to this Mac: 2560x1440, no notch.
+        let external = NotchGeometry.DisplayMetrics.external(width: 2560)
+        let size = NotchGeometry.closedSize(for: external)
+        check("an external display gets a virtual notch",
+              size.width > 0 && size.height > 0, "got \(size)")
+        check("the virtual notch uses the configured width",
+              abs(size.width - 200) < 0.5, "got \(size.width)")
+        check("matchRealNotch does not collapse a notchless display to zero",
+              size.height > 1, "got \(size.height)")
+
+        settings.notchHeightMode = .matchMenuBar
+        let menuBarSized = NotchGeometry.closedSize(for: .external(width: 2560, menuBarHeight: 24))
+        check("matchMenuBar follows the external menu bar height",
+              abs(menuBarSized.height - 24) < 0.5, "got \(menuBarSized.height)")
+        settings.notchHeightMode = .matchRealNotch
+
+        settings.virtualNotchEnabled = false
+        let disabled = NotchGeometry.closedSize(for: external)
+        check("turning the virtual notch off leaves nothing on external displays",
+              disabled == .zero, "got \(disabled)")
+        settings.virtualNotchEnabled = true
+
+        // A built-in notched panel must still measure from the real notch.
+        let builtIn = NotchGeometry.DisplayMetrics(
+            frameWidth: 1512, safeAreaTop: 32, menuBarHeight: 32, physicalNotchWidth: 185
+        )
+        let builtInSize = NotchGeometry.closedSize(for: builtIn)
+        check("the built-in display still tracks its physical notch",
+              abs(builtInSize.width - (185 + NotchGeometry.physicalWidthBleed)) < 0.5,
+              "got \(builtInSize.width)")
+
+        // Placement on a display whose frame does not start at the origin — the
+        // classic way a second monitor ends up with the notch on the wrong screen.
+        let rightOfBuiltIn = CGRect(x: 1512, y: 0, width: 2560, height: 1440)
+        let origin = NotchGeometry.windowOrigin(
+            inFrame: rightOfBuiltIn, windowSize: CGSize(width: 400, height: 40)
+        )
+        check("the panel centres on the external display, not the built-in one",
+              abs(origin.x - (1512 + (2560 - 400) / 2)) < 0.5, "got x=\(origin.x)")
+        check("the panel pins to the external display's top edge",
+              abs((origin.y + 40) - 1440) < 0.5, "got y=\(origin.y)")
+
+        let leftOfBuiltIn = CGRect(x: -2560, y: 0, width: 2560, height: 1440)
+        let negativeOrigin = NotchGeometry.windowOrigin(
+            inFrame: leftOfBuiltIn, windowSize: CGSize(width: 400, height: 40)
+        )
+        check("a display positioned left of the built-in one places correctly",
+              negativeOrigin.x < 0, "got x=\(negativeOrigin.x)")
+
+        check("showing on every display is the default",
+              settings.showOnAllDisplays,
+              "external monitors would get no notch otherwise")
+
+        // Hot-plug: a display appearing or disappearing must rebuild cleanly and
+        // leave exactly one panel per eligible screen, with no orphans.
+        let controller = NotchWindowController.shared
+        controller.start()
+        pumpEvents(for: 0.4)
+        let eligible = NSScreen.screens.filter { NotchGeometry.shouldDisplay(on: $0) }.count
+        check("one panel per eligible display",
+              controller.panelCount == eligible,
+              "\(controller.panelCount) panels for \(eligible) eligible screens")
+
+        NotificationCenter.default.post(
+            name: NSApplication.didChangeScreenParametersNotification, object: nil
+        )
+        pumpEvents(for: 0.8)
+        check("a display-configuration change does not duplicate panels",
+              controller.panelCount == eligible,
+              "\(controller.panelCount) panels after reconfiguration")
+        check("every panel still sits on a live display",
+              controller.allPanelsOnLiveScreens)
+        controller.stop()
+        pumpEvents(for: 0.2)
+        check("stopping tears every panel down", controller.panelCount == 0)
+
+        settings.virtualNotchEnabled = originalVirtual
+        settings.notchHeightMode = originalMode
+        settings.virtualNotchWidth = originalWidth
+        settings.notchWidthAdjustment = originalAdjust
     }
 
     /// Asserts that clicks land on the notch and pass *through* everywhere else.

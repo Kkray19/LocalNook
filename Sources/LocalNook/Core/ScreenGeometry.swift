@@ -62,27 +62,80 @@ enum NotchGeometry {
     /// Extra room below the panel so the drop shadow is not clipped.
     static let shadowPadding: CGFloat = 24
 
-    static func closedSize(for screen: NSScreen?) -> CGSize {
-        let settings = Settings.shared
-        guard let screen else {
-            return CGSize(width: settings.virtualNotchWidth, height: settings.virtualNotchHeight)
+    /// Everything about a display that affects notch geometry.
+    ///
+    /// Extracted from `NSScreen` so the geometry can be exercised for displays
+    /// that are not physically attached — external monitors in particular, which
+    /// otherwise could only be tested by plugging one in.
+    struct DisplayMetrics: Equatable, Sendable {
+        var frameWidth: CGFloat
+        var safeAreaTop: CGFloat
+        var menuBarHeight: CGFloat
+        /// `nil` when the display has no camera housing.
+        var physicalNotchWidth: CGFloat?
+
+        var hasPhysicalNotch: Bool { physicalNotchWidth != nil && safeAreaTop > 0 }
+
+        init(
+            frameWidth: CGFloat,
+            safeAreaTop: CGFloat,
+            menuBarHeight: CGFloat,
+            physicalNotchWidth: CGFloat?
+        ) {
+            self.frameWidth = frameWidth
+            self.safeAreaTop = safeAreaTop
+            self.menuBarHeight = menuBarHeight
+            self.physicalNotchWidth = physicalNotchWidth
         }
 
-        if screen.hasPhysicalNotch {
-            let width = (screen.physicalNotchWidth ?? 185) + physicalWidthBleed
+        init(_ screen: NSScreen) {
+            self.init(
+                frameWidth: screen.frame.width,
+                safeAreaTop: screen.safeAreaInsets.top,
+                menuBarHeight: screen.menuBarHeight,
+                physicalNotchWidth: screen.hasPhysicalNotch ? screen.physicalNotchWidth : nil
+            )
+        }
+
+        /// A typical external monitor: no camera housing, standard menu bar.
+        static func external(width: CGFloat, menuBarHeight: CGFloat = 24) -> DisplayMetrics {
+            DisplayMetrics(
+                frameWidth: width, safeAreaTop: 0,
+                menuBarHeight: menuBarHeight, physicalNotchWidth: nil
+            )
+        }
+    }
+
+    static func closedSize(for screen: NSScreen?) -> CGSize {
+        guard let screen else {
+            let settings = Settings.shared
+            return CGSize(width: settings.virtualNotchWidth, height: settings.virtualNotchHeight)
+        }
+        return closedSize(for: DisplayMetrics(screen))
+    }
+
+    /// Pure geometry: the collapsed notch size for a display with `metrics`.
+    static func closedSize(for metrics: DisplayMetrics) -> CGSize {
+        let settings = Settings.shared
+
+        if metrics.hasPhysicalNotch {
+            let width = (metrics.physicalNotchWidth ?? 185) + physicalWidthBleed
                 + settings.notchWidthAdjustment
             let height: CGFloat = switch settings.notchHeightMode {
-            case .matchRealNotch: screen.safeAreaInsets.top
-            case .matchMenuBar: screen.menuBarHeight
+            case .matchRealNotch: metrics.safeAreaTop
+            case .matchMenuBar: metrics.menuBarHeight
             case .custom: settings.customNotchHeight
             }
             return CGSize(width: max(60, width), height: max(1, height))
         }
 
-        // Display without a notch: draw a virtual one if the user wants it.
+        // Display without a notch — an external monitor, or a Mac with no
+        // camera housing. Draw a virtual one if the user wants it.
         guard settings.virtualNotchEnabled else { return .zero }
         let height: CGFloat = switch settings.notchHeightMode {
-        case .matchMenuBar: screen.menuBarHeight
+        case .matchMenuBar: metrics.menuBarHeight
+        // `matchRealNotch` is meaningless without a real notch; fall back to
+        // the configured virtual height rather than collapsing to zero.
         default: settings.virtualNotchHeight
         }
         return CGSize(
@@ -129,9 +182,15 @@ enum NotchGeometry {
 
     /// Frame origin that centres the panel on the top edge of `screen`.
     static func windowOrigin(on screen: NSScreen, windowSize: CGSize) -> NSPoint {
+        windowOrigin(inFrame: screen.frame, windowSize: windowSize)
+    }
+
+    /// Pure form, so placement on a display with a non-zero frame origin — every
+    /// external monitor — can be tested without attaching one.
+    static func windowOrigin(inFrame frame: CGRect, windowSize: CGSize) -> NSPoint {
         NSPoint(
-            x: screen.frame.origin.x + (screen.frame.width - windowSize.width) / 2,
-            y: screen.frame.origin.y + screen.frame.height - windowSize.height
+            x: frame.origin.x + (frame.width - windowSize.width) / 2,
+            y: frame.origin.y + frame.height - windowSize.height
         )
     }
 
