@@ -144,6 +144,15 @@ final class NotchWindowController: NSObject {
     /// after a display is attached or removed.
     var panelCount: Int { panels.count }
 
+    /// Number of live input catchers. Must always equal `panelCount`; a
+    /// mismatch means a hot-plug leaked an invisible window onto the menu bar.
+    var catcherCount: Int { hitPanels.count }
+
+    /// Catchers and panels agree on which displays exist.
+    var panelsAndCatchersAgree: Bool {
+        Set(panels.keys) == Set(hitPanels.keys)
+    }
+
     /// Inspection hooks for the self-test: which window is currently live, and
     /// how much of the screen the interactive one covers.
     var inertDrawingPanels: Bool {
@@ -160,14 +169,17 @@ final class NotchWindowController: NSObject {
         }
     }
 
-    /// Frame of the only window that accepts input while collapsed.
-    var catcherFrames: [CGRect] {
-        hitPanels.values.map(\.frame)
+    /// Per-display frames, so a multi-monitor setup can be checked display by
+    /// display rather than comparing whichever entry a dictionary yields first.
+    var catcherFramesByScreen: [String: CGRect] {
+        hitPanels.mapValues(\.frame)
     }
 
-    var drawingPanelFrames: [CGRect] {
-        panels.values.map(\.frame)
+    var drawingPanelFramesByScreen: [String: CGRect] {
+        panels.mapValues(\.frame)
     }
+
+    var modelsByScreen: [String: NotchViewModel] { models }
 
     /// True when every panel is still associated with a connected display.
     var allPanelsOnLiveScreens: Bool {
@@ -228,6 +240,17 @@ final class NotchWindowController: NSObject {
             models.removeValue(forKey: id)
         }
 
+        // Catchers are reconciled against `panels` rather than alongside them.
+        // Attaching a display can hand us a different stable ID for the same
+        // screen as it settles; retiring a panel without its catcher leaves an
+        // invisible window sitting on the menu bar, still eating clicks, with
+        // nothing left pointing at it.
+        for (id, hitPanel) in hitPanels where panels[id] == nil || !wanted.contains(id) {
+            hitPanel.orderOut(nil)
+            hitPanel.close()
+            hitPanels.removeValue(forKey: id)
+        }
+
         for screen in screens {
             guard let id = screen.stableID else { continue }
             if panels[id] == nil {
@@ -235,6 +258,9 @@ final class NotchWindowController: NSObject {
                 let panel = makePanel(for: screen, model: model)
                 panels[id] = panel
                 models[id] = model
+            }
+            // Exactly one catcher per panel, always.
+            if hitPanels[id] == nil, let model = models[id] {
                 hitPanels[id] = makeHitPanel(for: model)
             }
             models[id]?.refreshGeometry()

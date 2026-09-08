@@ -156,27 +156,35 @@ enum SelfTest {
         ))
         pumpEvents(for: 0.8)
 
-        guard let model = controller.activeModel,
-              let catcher = controller.catcherFrames.first,
-              let drawing = controller.drawingPanelFrames.first else {
-            check("panels exist to measure", false)
-            LiveActivityCenter.shared.previewInject(nil)
-            controller.stop()
-            return
-        }
+        let catchers = controller.catcherFramesByScreen
+        let drawn = controller.drawingPanelFramesByScreen
+        let allModels = controller.modelsByScreen
+        check("there is something to measure", !allModels.isEmpty)
 
-        let coreWidth = NotchShape.totalWidth(
-            forBody: model.closedSize.width, topRadius: settings.closedCornerRadius
-        )
-        check("the catcher stays the width of the notch",
-              abs(catcher.width - coreWidth) < 1.5,
-              "catcher \(Int(catcher.width))pt vs notch \(Int(coreWidth))pt")
-        check("the catcher is far smaller than the drawn strip",
-              catcher.width < drawing.width,
-              "catcher \(Int(catcher.width))pt, drawn \(Int(drawing.width))pt")
-        check("the catcher is only as tall as the notch",
-              catcher.height <= model.closedSize.height + 4,
-              "catcher is \(Int(catcher.height))pt tall")
+        // Check every display on its own terms — with two monitors attached the
+        // notch widths differ, and comparing across them proves nothing.
+        for (id, model) in allModels {
+            guard let catcher = catchers[id], let strip = drawn[id] else {
+                check("display \(id.prefix(8)) has both windows", false)
+                continue
+            }
+            let coreWidth = NotchShape.totalWidth(
+                forBody: model.closedSize.width, topRadius: settings.closedCornerRadius
+            )
+            let label = model.screen?.localizedName ?? String(id.prefix(8))
+            check("[\(label)] the catcher stays the width of that display's notch",
+                  abs(catcher.width - coreWidth) < 1.5,
+                  "catcher \(Int(catcher.width))pt vs notch \(Int(coreWidth))pt")
+            check("[\(label)] the catcher is smaller than the drawn strip",
+                  catcher.width < strip.width,
+                  "catcher \(Int(catcher.width))pt, drawn \(Int(strip.width))pt")
+            check("[\(label)] the catcher is only as tall as the notch",
+                  catcher.height <= model.closedSize.height + 4,
+                  "catcher is \(Int(catcher.height))pt tall")
+            check("[\(label)] the catcher sits on that display",
+                  model.screen.map { $0.frame.intersects(catcher) } ?? false,
+                  "catcher at x=\(Int(catcher.minX)) is not on \(label)")
+        }
 
         // Opening hands input to the panel and stands the catcher down.
         controller.perform(.open)
@@ -402,13 +410,28 @@ enum SelfTest {
               controller.panelCount == eligible,
               "\(controller.panelCount) panels for \(eligible) eligible screens")
 
-        NotificationCenter.default.post(
-            name: NSApplication.didChangeScreenParametersNotification, object: nil
-        )
-        pumpEvents(for: 0.8)
+        check("one input catcher per panel",
+              controller.catcherCount == controller.panelCount,
+              "\(controller.catcherCount) catchers for \(controller.panelCount) panels")
+
+        // Repeated reconfiguration is the hot-plug case that leaked an
+        // invisible catcher onto the menu bar of an external display.
+        for _ in 0..<3 {
+            NotificationCenter.default.post(
+                name: NSApplication.didChangeScreenParametersNotification, object: nil
+            )
+            pumpEvents(for: 0.5)
+        }
+        controller.rebuildPanels()
+        pumpEvents(for: 0.3)
         check("a display-configuration change does not duplicate panels",
               controller.panelCount == eligible,
               "\(controller.panelCount) panels after reconfiguration")
+        check("repeated reconfiguration does not leak catchers",
+              controller.catcherCount == eligible,
+              "\(controller.catcherCount) catchers for \(eligible) displays")
+        check("catchers and panels track the same displays",
+              controller.panelsAndCatchersAgree)
         check("every panel still sits on a live display",
               controller.allPanelsOnLiveScreens)
         controller.stop()
