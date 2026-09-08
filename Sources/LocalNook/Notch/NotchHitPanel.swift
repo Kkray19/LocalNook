@@ -75,7 +75,6 @@ final class NotchHitView: NSView {
 
     private var trackingArea: NSTrackingArea?
     private var isInside = false
-    private var moveObserver: Any?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -86,44 +85,6 @@ final class NotchHitView: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
-
-    /// The catcher is repositioned whenever the notch resizes or a display
-    /// changes. A window moving under a stationary pointer does not reliably
-    /// produce `mouseEntered`, so containment is rechecked explicitly.
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if let moveObserver {
-            NotificationCenter.default.removeObserver(moveObserver)
-            self.moveObserver = nil
-        }
-        guard let window else { return }
-        moveObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didMoveNotification, object: window, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.scheduleContainmentRecheck() }
-        }
-    }
-
-    // `isolated` so teardown may touch main-actor state.
-    isolated deinit {
-        if let moveObserver { NotificationCenter.default.removeObserver(moveObserver) }
-    }
-
-    /// Rechecks now and again on the next run-loop pass — `didMoveNotification`
-    /// can arrive before the window server has committed the new frame.
-    func scheduleContainmentRecheck() {
-        recheckContainment()
-        DispatchQueue.main.async { [weak self] in self?.recheckContainment() }
-    }
-
-    func recheckContainment() {
-        guard let window else { return }
-        let screenRect = window.convertToScreen(convert(bounds, to: nil))
-        let nowInside = screenRect.contains(NSEvent.mouseLocation)
-        guard nowInside != isInside else { return }
-        isInside = nowInside
-        onHoverChange?(nowInside)
-    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()

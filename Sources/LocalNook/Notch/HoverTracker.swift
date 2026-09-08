@@ -57,59 +57,6 @@ struct HoverTracker: NSViewRepresentable {
         var onChange: ((Bool) -> Void)?
         private var trackingArea: NSTrackingArea?
         private var isInside = false
-        private var moveObserver: Any?
-
-        /// Re-evaluate containment when the *window* moves.
-        ///
-        /// AppKit delivers `mouseEntered` reliably when the pointer moves onto a
-        /// stationary window, but not always when a window slides under a
-        /// stationary pointer. That happens for real — a display being attached
-        /// repositions the panel, a live activity resizes it — and it is also how
-        /// hover is exercised in tests. Without this the notch simply misses the
-        /// crossing.
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            if let moveObserver {
-                NotificationCenter.default.removeObserver(moveObserver)
-                self.moveObserver = nil
-            }
-            guard let window else { return }
-            moveObserver = NotificationCenter.default.addObserver(
-                forName: NSWindow.didMoveNotification, object: window, queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.scheduleContainmentRecheck() }
-            }
-        }
-
-        // `isolated` so teardown may touch main-actor state.
-        isolated deinit {
-            if let moveObserver { NotificationCenter.default.removeObserver(moveObserver) }
-        }
-
-        /// Rechecks now and again on the next run-loop pass.
-        ///
-        /// `didMoveNotification` can arrive before the window server has
-        /// committed the new frame, so an immediate check may still be measuring
-        /// against the old position. The second pass is not a timed retry — it
-        /// runs as soon as the current turn finishes, by which point the frame
-        /// has landed.
-        func scheduleContainmentRecheck() {
-            recheckContainment()
-            DispatchQueue.main.async { [weak self] in self?.recheckContainment() }
-        }
-
-        /// Compares the pointer against our bounds in screen space and reports a
-        /// change. Screen space avoids relying on the window's cached pointer
-        /// location, which lags a move.
-        func recheckContainment() {
-            guard let window else { return }
-            let screenRect = window.convertToScreen(convert(bounds, to: nil))
-            let nowInside = screenRect.contains(NSEvent.mouseLocation)
-            guard nowInside != isInside else { return }
-            isInside = nowInside
-            HoverTracker.diagnostics.append(nowInside ? "mouseEntered" : "mouseExited")
-            onChange?(nowInside)
-        }
 
         override func updateTrackingAreas() {
             super.updateTrackingAreas()

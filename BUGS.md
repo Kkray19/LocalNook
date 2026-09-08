@@ -7,6 +7,13 @@ reproduced rather than taken on trust.
 
 ## OPEN
 
+### A window moving under a stationary pointer can miss a hover crossing
+
+Roughly 1 run in 15 of `--self-test`. See the reverted-fix note under RESOLVED
+for what was tried and why it was backed out. Normal hover — the pointer moving
+onto a stationary panel — is unaffected; this is specific to the panel moving
+underneath a still pointer, which happens when a display is attached.
+
 ### Finder drag-and-drop has not been performed end to end
 
 **What is verified:** `ShelfStore.ingest(_:)` is exercised against a real
@@ -47,10 +54,26 @@ polling.
 
 ---
 
-### 0. A window moving under a stationary pointer could miss the crossing
+### 0. A window moving under a stationary pointer could miss the crossing — ATTEMPTED FIX REVERTED
 
-**Observed:** 1 failure in 2 runs of the frozen build-21 binary —
+**Observed:** roughly 1 failure in 15 runs —
 `hovering the notch opens it — tracking area did not deliver mouseEntered`.
+
+**Attempted fix (reverted):** observing `NSWindow.didMoveNotification` and
+rechecking pointer containment. Measured on the shipped binary it made things
+**far worse** — 1 clean run in 10, against roughly 14 in 15 before. Rechecking
+introduced a second writer for `isInside` alongside the tracking area's own
+"already inside" pass, and the two disagreed often enough to swallow real
+crossings. A second attempt using screen-space coordinates and a deferred pass
+did not help.
+
+Reverted to tracking areas alone. The rare miss is the better trade, and the
+lesson is recorded rather than the change: a fix for a 1-in-15 flake that is not
+measured against the same binary can easily be a 9-in-10 regression.
+
+**Status:** OPEN, at its original low rate. Only observed when a *window* moves
+under a stationary pointer, which is how the tests drive hover; normal use moves
+the pointer onto a stationary panel.
 
 **Why it is not just a test artefact:** AppKit delivers `mouseEntered` reliably
 when the pointer moves onto a stationary window, but not always when a window
