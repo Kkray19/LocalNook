@@ -417,14 +417,14 @@ enum SelfTest {
         let originalDashboard = settings.dashboardWidgetIDs
         let originalEnabled = settings.enabledWidgetIDs
 
-        settings.dashboardWidgetIDs = ["media", "mirror", "calendar"]
+        settings.dashboardWidgetIDs = ["media", "calendar", "timers"]
         check("the default dashboard shows three sections",
               settings.dashboardWidgets.count == 3,
               "got \(settings.dashboardWidgets.map(\.rawValue))")
 
         // Narrow panels move sections into overflow rather than shrinking
         // everything — and, critically, never discard them.
-        let all: [WidgetKind] = [.media, .mirror, .calendar]
+        let all: [WidgetKind] = [.media, .timers, .calendar]
         let wide = DashboardView.plan(all, into: 900)
         let medium = DashboardView.plan(all, into: 380)
         let narrow = DashboardView.plan(all, into: 200)
@@ -480,13 +480,13 @@ enum SelfTest {
               abs(sum + gaps - 900) < 1, "sum \(Int(sum + gaps)) of 900")
 
         // A widget switched off must vanish, not be quietly replaced.
-        settings.setWidget(.mirror, enabled: false)
+        settings.setWidget(.timers, enabled: false)
         check("a disabled widget leaves the dashboard",
-              !settings.dashboardWidgets.contains(.mirror))
+              !settings.dashboardWidgets.contains(.timers))
         check("a disabled widget is not replaced by a fallback",
               settings.dashboardWidgets.count == 2,
               "got \(settings.dashboardWidgets.map(\.rawValue))")
-        settings.setWidget(.mirror, enabled: true)
+        settings.setWidget(.timers, enabled: true)
 
         // Only widgets that suit a short, wide column may sit on the dashboard.
         settings.dashboardWidgetIDs = ["notes", "shortcuts", "media"]
@@ -560,61 +560,6 @@ enum SelfTest {
     /// The two places where a UI boundary could leak into a device or lose work.
     private static func testPrivacyBoundaries() {
         section("Privacy boundaries")
-
-        // ── Camera: a permission answer that arrives after the user left ──
-        //
-        // The system prompt is modal and the answer can arrive much later. By
-        // then the user may have navigated away, and starting capture would
-        // light the camera for a view nobody is looking at.
-        // Status starts undetermined, as it would on a real first run, so the
-        // consent path is actually exercised rather than skipped.
-        var deliverAnswer: ((Bool) -> Void)?
-        let granted = Box(false)
-        let driver = FakeCaptureDriver()
-        let mirror = MirrorManager(
-            box: driver,
-            authorizationStatus: { granted.value ? .authorized : .notDetermined },
-            requestAuthorization: { completion in deliverAnswer = completion }
-        )
-
-        let owner = UUID()
-        mirror.requestStart(owner: owner)
-        check("asking for the camera does not configure it before consent",
-              driver.configureCount == 0)
-
-        check("an undetermined camera asks for consent", deliverAnswer != nil,
-              "the permission request was never made")
-
-        mirror.release(owner: owner)          // the user leaves the view
-        granted.value = true
-        deliverAnswer?(true)                  // consent arrives afterwards
-        pumpEvents(for: 0.3)
-        check("consent arriving after the user left does not start capture",
-              driver.configureCount == 0,
-              "the camera came on for a view nobody was looking at")
-
-        // Coming back must work normally.
-        var secondAnswer: ((Bool) -> Void)?
-        let granted2 = Box(false)
-        let driver2 = FakeCaptureDriver()
-        let mirror2 = MirrorManager(
-            box: driver2,
-            authorizationStatus: { granted2.value ? .authorized : .notDetermined },
-            requestAuthorization: { completion in secondAnswer = completion }
-        )
-        let owner2 = UUID()
-        mirror2.requestStart(owner: owner2)
-        granted2.value = true
-        secondAnswer?(true)
-        pumpEvents(for: 0.3)
-        check("consent arriving while the view is still open starts capture",
-              driver2.configureCount == 1,
-              "configure count \(driver2.configureCount)")
-        mirror2.release(owner: owner2)
-        pumpEvents(for: 0.2)
-        check("leaving afterwards stops capture", driver2.stopCount >= 1)
-        check("leaving also withdraws the request for next time",
-              !mirror2.userRequestedCamera)
 
         // ── Notes: an edit followed immediately by quit ──
         //
@@ -847,21 +792,23 @@ enum SelfTest {
               "a claim outlived its premise")
 
         // A drag cancelled off-screen: no button is held, so the claim goes.
-        // Only meaningful if no button is actually down right now.
-        if NSEvent.pressedMouseButtons == 0 {
-            first.claimInteraction(.dragging, owner: UUID())
-            first.isDragTargeting = true
-            controller.validateClaimsNow()
-            check("a drag claim ends once no mouse button is held",
-                  !first.activeInteractions.contains(.dragging),
-                  "a cancelled drag left the notch pinned")
-            check("stale drag targeting is cleared with it", !first.isDragTargeting)
-        } else {
-            unmet("a drag claim ends once no mouse button is held",
-                    "a mouse button is physically held right now")
-            first.releaseAllInteractions()
-            first.isDragTargeting = false
-        }
+        //
+        // The button state is injected rather than read. This used to branch on
+        // `NSEvent.pressedMouseButtons` and report itself unverified whenever
+        // somebody happened to be holding the mouse — the last place in the
+        // deterministic half that still asked the real machine a question it
+        // did not need to ask. The seam for this already existed; the check
+        // simply was not using it.
+        let realButtons = controller.mouseButtonsAreDown
+        controller.mouseButtonsAreDown = { false }
+        first.claimInteraction(.dragging, owner: UUID())
+        first.isDragTargeting = true
+        controller.validateClaimsNow()
+        check("a drag claim ends once no mouse button is held",
+              !first.activeInteractions.contains(.dragging),
+              "a cancelled drag left the notch pinned")
+        check("stale drag targeting is cleared with it", !first.isDragTargeting)
+        controller.mouseButtonsAreDown = realButtons
 
         // Nothing may survive a close into the next open.
         //
@@ -2059,12 +2006,12 @@ enum SelfTest {
               abs((AppInfo.defaults.object(forKey: "general.openDelay") as? Double ?? 0) - 0.37) < 0.0001)
 
         let enabledBefore = settings.enabledWidgetIDs
-        settings.setWidget(.mirror, enabled: false)
-        check("widget can be disabled", !settings.isWidgetEnabled(.mirror))
+        settings.setWidget(.timers, enabled: false)
+        check("widget can be disabled", !settings.isWidgetEnabled(.timers))
         check("disabled widget leaves the ordered list",
-              !settings.orderedWidgets.contains(.mirror))
-        settings.setWidget(.mirror, enabled: true)
-        check("widget can be re-enabled", settings.isWidgetEnabled(.mirror))
+              !settings.orderedWidgets.contains(.timers))
+        settings.setWidget(.timers, enabled: true)
+        check("widget can be re-enabled", settings.isWidgetEnabled(.timers))
 
         // Restore whatever the user had.
         settings.openDelay = originalDelay

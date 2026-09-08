@@ -313,45 +313,6 @@ struct CompactCalendarView: View {
     }
 }
 
-// MARK: - Mirror
-
-/// A deliberate action, not a running preview.
-///
-/// The camera must never start because the pointer opened the notch, so this is
-/// a button. Pressing it is what asks for the camera.
-struct MirrorActionCard: View {
-    @ObservedObject var model: NotchViewModel
-    @ObservedObject private var mirror = MirrorManager.shared
-    @LNState private var isHovering = false
-
-    var body: some View {
-        Button {
-            model.page = .tools
-            model.focusedTool = .mirror
-            mirror.requestStart()
-        } label: {
-            VStack(spacing: 6) {
-                ZStack {
-                    Circle()
-                        .fill(isHovering ? Theme.surfaceHover : Theme.surface)
-                        .frame(width: 52, height: 52)
-                    Image(systemName: "web.camera.fill")
-                        .font(.system(size: 19, weight: .light))
-                        .foregroundStyle(Theme.secondaryText)
-                }
-                Text("Mirror")
-                    .font(Theme.caption)
-                    .foregroundStyle(Theme.secondaryText)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in withAnimation(NotchMotion.quick) { isHovering = hovering } }
-        .help("Open the camera mirror")
-    }
-}
-
 // MARK: - Timer
 
 struct CompactTimerView: View {

@@ -106,16 +106,12 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 
     <!-- Purpose strings. macOS shows these verbatim in its permission prompts,
          so each one states exactly what the feature does with the data. -->
-    <key>NSCameraUsageDescription</key>
-    <string>LocalNook shows a live camera preview in the Mirror widget. Video is displayed only — nothing is recorded, saved or sent anywhere.</string>
     <key>NSCalendarsUsageDescription</key>
     <string>LocalNook shows your upcoming events in the notch. Events are read on this Mac and never leave it.</string>
     <key>NSCalendarsFullAccessUsageDescription</key>
     <string>LocalNook shows your upcoming events in the notch. Events are read on this Mac and never leave it.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>LocalNook reads what is playing and sends play, pause and skip commands to your music apps.</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>LocalNook does not record audio. This entry exists only because the camera preview API may request it.</string>
 
     <key>NSAppleEventsUsageDescriptionTargets</key>
     <array>

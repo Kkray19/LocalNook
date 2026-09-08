@@ -120,7 +120,6 @@ private struct DashboardSection: View {
         switch kind {
         case .media: CompactMediaView()
         case .calendar: CompactCalendarView()
-        case .mirror: MirrorActionCard(model: model)
         case .timers: CompactTimerView(model: model)
         case .stats: CompactStatsView()
         case .sessions: CompactSessionsView(model: model)

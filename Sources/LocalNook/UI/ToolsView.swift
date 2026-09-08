@@ -97,7 +97,6 @@ private struct ToolTile: View {
 /// A single tool at full size.
 struct FocusedToolView: View {
     let tool: WidgetKind
-    @ObservedObject private var mirror = MirrorManager.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -116,7 +115,6 @@ struct FocusedToolView: View {
         case .media: MediaWidgetView()
         case .shelf: EmptyView()
         case .calendar: CalendarWidgetView()
-        case .mirror: MirrorWidgetView()
         case .timers: TimerWidgetView()
         case .notes: NotesWidgetView()
         case .todo: TodoWidgetView()

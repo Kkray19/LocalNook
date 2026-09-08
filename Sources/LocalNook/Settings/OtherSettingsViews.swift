@@ -315,10 +315,6 @@ struct WidgetDetailSettingsView: View {
                 }
             }
 
-            SettingsSection(title: "Mirror") {
-                Toggle("Flip horizontally (mirror image)", isOn: settings.binding(\.mirrorFlipHorizontally))
-            }
-
             SettingsSection(
                 title: "AI coding sessions",
                 footer: "LocalNook watches the transcript folders for Claude Code (~/.claude/projects) and Codex (~/.codex/sessions). It reads file timestamps only — it never opens a transcript or reads any conversation."

@@ -90,7 +90,6 @@ enum WidgetKind: String, CaseIterable, Identifiable, Codable {
     case media
     case shelf
     case calendar
-    case mirror
     case timers
     case notes
     case todo
@@ -105,7 +104,6 @@ enum WidgetKind: String, CaseIterable, Identifiable, Codable {
         case .media: "Media"
         case .shelf: "Shelf"
         case .calendar: "Calendar"
-        case .mirror: "Mirror"
         case .timers: "Timers"
         case .notes: "Notes"
         case .todo: "To-Do"
@@ -120,7 +118,6 @@ enum WidgetKind: String, CaseIterable, Identifiable, Codable {
         case .media: "play.circle.fill"
         case .shelf: "tray.full.fill"
         case .calendar: "calendar"
-        case .mirror: "web.camera.fill"
         case .timers: "timer"
         case .notes: "note.text"
         case .todo: "checklist"
@@ -215,7 +212,7 @@ final class Settings: ObservableObject {
     }
 
     /// Widgets shown side by side on the Dashboard, in order.
-    @Pref("widgets.dashboard", ["media", "mirror", "calendar"]) var dashboardWidgetIDs: [String]
+    @Pref("widgets.dashboard", ["media", "calendar", "timers"]) var dashboardWidgetIDs: [String]
 
     /// Dashboard widgets that are both chosen *and* enabled.
     ///
@@ -270,10 +267,6 @@ final class Settings: ObservableObject {
     @Pref("calendar.enabledCalendarIDs", [String]()) var enabledCalendarIDs: [String]
     @Pref("calendar.showAllCalendars", true) var calendarShowAll: Bool
 
-    // MARK: Mirror
-
-    @Pref("mirror.deviceID", String?.none) var mirrorDeviceID: String?
-    @Pref("mirror.flipHorizontally", true) var mirrorFlipHorizontally: Bool
 
     // MARK: Shortcuts
 

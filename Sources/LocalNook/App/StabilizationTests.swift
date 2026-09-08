@@ -1,5 +1,4 @@
 import AppKit
-import AVFoundation
 import EventKit
 import Foundation
 
@@ -86,38 +85,6 @@ enum StabilizationTests {
         check("fullscreen on another equal-size monitor does not suppress this one",
               !FullscreenDetector.covers(CGRect(x: 1512, y: 0, width: 1512, height: 982),
                                         screen: CGRect(x: 0, y: 0, width: 1512, height: 982)), "")
-        var demand = CaptureDemand(); demand.activate()
-        let pending = demand.nextConfiguration(); demand.deactivate()
-        check("camera completion after close is rejected", !demand.accepts(pending), "")
-        demand.activate(); let first = demand.nextConfiguration(); let second = demand.nextConfiguration()
-        check("camera switch discards older configuration", !demand.accepts(first) && demand.accepts(second), "")
-
-        let fake = FakeCaptureDriver()
-        let mirror = MirrorManager(box: fake, authorizationStatus: { .authorized })
-        // Appearing is not consent. The Mirror widget can appear because the
-        // notch opened on hover or a panel rebuilt after a display change, and
-        // none of those may light the camera.
-        mirror.activate()
-        check("merely appearing does not start the camera", fake.configureCount == 0,
-              "capture began without the user asking")
-        mirror.requestStart()
-        check("camera startup requested through driver", fake.configureCount == 1, "")
-        mirror.stop()
-        fake.completeStartup()
-        check("closing during camera startup enqueues stop", fake.stopCount == 1, "")
-        check("late camera callback cannot mark closed mirror running", !mirror.isRunning, "")
-        let sharedDriver = FakeCaptureDriver()
-        let sharedMirror = MirrorManager(box: sharedDriver, authorizationStatus: { .authorized })
-        let ownerA = UUID(), ownerB = UUID()
-        sharedMirror.requestStart(owner: ownerA); sharedMirror.activate(owner: ownerB)
-        sharedMirror.release(owner: ownerA)
-        check("closing one mirror leaves the other preview active", sharedDriver.stopCount == 0, "")
-        sharedMirror.release(owner: ownerB)
-        check("last mirror lease stops capture", sharedDriver.stopCount == 1, "")
-        let deniedDriver = FakeCaptureDriver()
-        let deniedMirror = MirrorManager(box: deniedDriver, authorizationStatus: { .denied })
-        deniedMirror.activate()
-        check("denied camera never configures capture", deniedMirror.isDenied && deniedDriver.configureCount == 0, "")
         check("calendar select-none includes no calendar", !CalendarManager.includesCalendar("a", selectedIDs: []), "")
         check("calendar selection excludes stale identifiers", !CalendarManager.includesCalendar("b", selectedIDs: ["a"]), "")
         check("live activity shoulders center the camera dead zone",
@@ -184,16 +151,3 @@ enum StabilizationTests {
     }
 }
 
-nonisolated final class FakeCaptureDriver: CaptureSessionDriver, @unchecked Sendable {
-    let session = AVCaptureSession()
-    // This fixture is driven exclusively on the main actor.
-    var configureCount = 0
-    var stopCount = 0
-    private var completion: (@Sendable (String?, Bool) -> Void)?
-    func configure(deviceID: String, completion: @escaping @Sendable (String?, Bool) -> Void) {
-        configureCount += 1
-        self.completion = completion
-    }
-    func stop(completion: @escaping @Sendable () -> Void) { stopCount += 1; completion() }
-    func completeStartup() { completion?(nil, true) }
-}

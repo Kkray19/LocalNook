@@ -11,13 +11,11 @@
 //
 
 import AppKit
-import AVFoundation
 import EventKit
 import UserNotifications
 
 enum PermissionKind: String, CaseIterable, Identifiable {
     case accessibility
-    case camera
     case calendar
     case notifications
     case automation
@@ -27,7 +25,6 @@ enum PermissionKind: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .accessibility: "Accessibility"
-        case .camera: "Camera"
         case .calendar: "Calendar"
         case .notifications: "Notifications"
         case .automation: "Automation (Apple Events)"
@@ -37,7 +34,6 @@ enum PermissionKind: String, CaseIterable, Identifiable {
     var usedFor: String {
         switch self {
         case .accessibility: "Not required for hover or the implemented volume HUD. Never requested by LocalNook."
-        case .camera: "The Mirror widget. Video is previewed only, never recorded or written to disk."
         case .calendar: "Showing your upcoming events."
         case .notifications: "Alerting you when a timer finishes."
         case .automation: "Reading and controlling Music and Spotify playback."
@@ -47,7 +43,6 @@ enum PermissionKind: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .accessibility: "accessibility"
-        case .camera: "web.camera"
         case .calendar: "calendar"
         case .notifications: "bell.badge"
         case .automation: "apple.terminal"
@@ -58,7 +53,6 @@ enum PermissionKind: String, CaseIterable, Identifiable {
     var settingsURL: URL? {
         let anchor = switch self {
         case .accessibility: "Privacy_Accessibility"
-        case .camera: "Privacy_Camera"
         case .calendar: "Privacy_Calendars"
         case .notifications: "Notifications"
         case .automation: "Privacy_Automation"
@@ -115,8 +109,6 @@ final class Permissions: ObservableObject {
             switch kind {
             case .accessibility:
                 states[kind] = AXIsProcessTrusted() ? .granted : .notDetermined
-            case .camera:
-                states[kind] = Self.map(AVCaptureDevice.authorizationStatus(for: .video))
             case .calendar:
                 states[kind] = Self.mapEvent(EKEventStore.authorizationStatus(for: .event))
             case .automation:
@@ -143,15 +135,6 @@ final class Permissions: ObservableObject {
             @unknown default: .unknown
             }
             self?.states[.notifications] = state
-        }
-    }
-
-    private static func map(_ status: AVAuthorizationStatus) -> PermissionState {
-        switch status {
-        case .authorized: .granted
-        case .denied, .restricted: .denied
-        case .notDetermined: .notDetermined
-        @unknown default: .unknown
         }
     }
 
