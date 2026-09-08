@@ -64,7 +64,7 @@ final class NotchViewModel: ObservableObject {
             .sink { [weak self] suppressed in
                 guard let self else { return }
                 withAnimation(NotchMotion.content) { self.isSuppressed = suppressed }
-                if suppressed { self.close() }
+                if suppressed { self.close(source: .systemState) }
             }
             .store(in: &cancellables)
     }
@@ -120,6 +120,10 @@ final class NotchViewModel: ObservableObject {
         // back open — wait until it leaves.
         hoverReopenBlocked = isHovering
         withAnimation(NotchMotion.expand) { state = .closed }
+        // A closed notch owns no interaction. Without this a stale claim would
+        // survive into the next open and pin it from the start.
+        releaseAllInteractions()
+        isDragTargeting = false
         NotchTransitionLog.record(
             opened: false, source: source, displayID: screenID, windowNumber: loggedWindowNumber
         )
@@ -167,6 +171,35 @@ final class NotchViewModel: ObservableObject {
     /// True when a close is scheduled but has not fired. Lets tests assert what
     /// the fallback decided without waiting on the close delay.
     var hasPendingClose: Bool { closeTask != nil }
+
+    // MARK: Interaction ownership
+
+    /// Outstanding reasons this particular notch must stay open.
+    @Published private(set) var claims: Set<NotchInteractionClaim> = []
+
+    /// True while anything is holding this notch open. Scoped to this notch —
+    /// interaction on one display never pins another.
+    var isInteracting: Bool { !claims.isEmpty }
+
+    var activeInteractions: Set<NotchInteraction> { Set(claims.map(\.kind)) }
+
+    func claimInteraction(_ kind: NotchInteraction, owner: UUID) {
+        claims.insert(NotchInteractionClaim(kind: kind, owner: owner))
+    }
+
+    /// Ends one owner's claim. Safe to call when none is held.
+    func releaseInteraction(_ kind: NotchInteraction, owner: UUID) {
+        claims.remove(NotchInteractionClaim(kind: kind, owner: owner))
+    }
+
+    /// Ends every claim of a kind, used when its underlying condition is gone.
+    func releaseInteractions(of kind: NotchInteraction) {
+        claims = claims.filter { $0.kind != kind }
+    }
+
+    func releaseAllInteractions() {
+        claims.removeAll()
+    }
 
     func cancelPending() {
         openTask?.cancel(); openTask = nil

@@ -36,14 +36,39 @@ Move the pointer onto the external display's virtual notch and rest it there.
 Hover on the **built-in** display is already confirmed (see BUGS.md); the
 external one has not been observed.
 
+## 3b. Overflow
+
+Make the panel narrow enough to overflow (Settings ▸ Notch ▸ Expanded size,
+width ≈ 430), then open the nook.
+
+1. → The right-hand column shows the **hidden section's own icon** with its name
+   beneath — Calendar, not a bare "+1". With more than one hidden, it shows a
+   count badge and "More".
+2. Click it. → That section opens in Tools.
+3. Press **Escape**. → It closes back to the Dashboard, not straight out of the
+   nook, and nothing is left focused.
+4. Widen the panel again while overflow is open. → The section returns to the
+   Dashboard row and the overflow control disappears.
+
 ## 4. Typing in Notes
 
 1. Tools ▸ Notes, type a sentence.
 2. Move the pointer off the notch entirely and leave it there for five seconds.
    → **The notch must stay open while the text field has focus.** If it closes
-   underneath you, the fallback's interaction guard has regressed.
+   underneath you, the interaction claim has regressed.
+3. Press **Escape** once. → The text field gives up focus; the nook stays open.
+   Press Escape again. → The nook closes.
+4. Click another app. → The nook closes on its own within about a second, because
+   the panel resigned key and the text-editing claim ended.
 3. Quit LocalNook from the menu bar immediately after typing, relaunch, reopen
    Notes. → The sentence is still there.
+
+## 4b. Settings must not pin anything
+
+Open LocalNook Settings from the menu bar item, then hover the notch open and
+move the pointer away.
+→ **The nook still closes.** Previously any focused window of ours pinned every
+nook on every display for as long as it stayed open.
 
 ## 5. Menus and popovers
 

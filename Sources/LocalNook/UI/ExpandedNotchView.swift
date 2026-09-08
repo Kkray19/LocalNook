@@ -104,7 +104,7 @@ struct ExpandedNotchView: View {
             .foregroundStyle(Theme.tertiaryText)
             .help("LocalNook Settings")
 
-            Button { model.close() } label: {
+            Button { model.close(source: .explicitCommand) } label: {
                 Image(systemName: "chevron.up")
                     .font(.system(size: 10, weight: .bold))
             }

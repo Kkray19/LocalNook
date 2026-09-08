@@ -68,6 +68,10 @@ final class NotchHitView: NSView {
     var onHoverChange: ((Bool) -> Void)?
     var onClick: (() -> Void)?
     var onDragEnter: (() -> Void)?
+    /// Called when the drag leaves, is dropped, or is cancelled. Previously
+    /// `draggingExited` did nothing at all, so a drag that entered and left
+    /// without dropping left the notch open with nothing to close it.
+    var onDragEnd: (() -> Void)?
 
     private var trackingArea: NSTrackingArea?
     private var isInside = false
@@ -132,11 +136,20 @@ final class NotchHitView: NSView {
         return .copy
     }
 
-    override func draggingExited(_ sender: (any NSDraggingInfo)?) {}
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        onDragEnd?()
+    }
+
+    override func draggingEnded(_ sender: any NSDraggingInfo) {
+        onDragEnd?()
+    }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        defer { onDragEnd?() }
         // Once open, the expanded panel owns the drop target; if the drop lands
         // here first, hand it to the shelf directly so nothing is lost.
-        ShelfStore.shared.ingest(sender.draggingPasteboard) > 0
+        // Recognised, not merely new: reporting failure for a duplicate makes
+        // AppKit play the rejection animation for a perfectly good drop.
+        return ShelfStore.shared.ingestReportingOutcome(sender.draggingPasteboard).wasHandled
     }
 }

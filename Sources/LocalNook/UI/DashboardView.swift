@@ -64,7 +64,7 @@ struct DashboardView: View {
     }
 
     /// Width reserved for the overflow control when something does not fit.
-    static let overflowWidth: CGFloat = 46
+    static let overflowWidth: CGFloat = 58
 
     /// What is shown, and what moved into the overflow control.
     struct Layout: Equatable {
@@ -146,13 +146,30 @@ private struct OverflowControl: View {
             }
         } label: {
             VStack(spacing: 4) {
-                Image(systemName: "ellipsis.circle")
-                    .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(isHovering ? Theme.primaryText : Theme.secondaryText)
-                Text("+\(hidden.count)")
-                    .font(Theme.caption)
-                    .monospacedDigit()
+                // The hidden section's own icon, not a generic ellipsis: seeing
+                // a calendar glyph says what is behind the control. "+1" alone
+                // means nothing to someone who has not read the code.
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: hidden[0].symbol)
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundStyle(isHovering ? Theme.primaryText : Theme.secondaryText)
+                        .frame(width: 26, height: 20)
+                    if hidden.count > 1 {
+                        Text("\(hidden.count)")
+                            .font(.system(size: 8, weight: .bold))
+                            .monospacedDigit()
+                            .foregroundStyle(Theme.primaryText)
+                            .padding(.horizontal, 3.5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Theme.accent))
+                            .offset(x: 4, y: -3)
+                    }
+                }
+                Text(hidden.count == 1 ? hidden[0].label : "More")
+                    .font(.system(size: 9.5, weight: .medium))
                     .foregroundStyle(isHovering ? Theme.secondaryText : Theme.tertiaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background {
@@ -164,7 +181,10 @@ private struct OverflowControl: View {
         .buttonStyle(.plain)
         .onHover { hovering in withAnimation(NotchMotion.quick) { isHovering = hovering } }
         .help(hidden.count == 1
-              ? "\(hidden[0].label) does not fit — open it"
-              : "\(hidden.count) sections do not fit — open them in Tools")
+              ? "\(hidden[0].label) does not fit here — open it"
+              : "\(hidden.map(\.label).joined(separator: ", ")) do not fit here — open them in Tools")
+        .accessibilityLabel(hidden.count == 1
+              ? "Open \(hidden[0].label)"
+              : "Open \(hidden.count) more sections: \(hidden.map(\.label).joined(separator: ", "))")
     }
 }

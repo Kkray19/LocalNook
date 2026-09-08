@@ -25,6 +25,74 @@ The handling code is covered; the interaction is not.
 
 ## RESOLVED
 
+### 0a. Hover guards could pin the notch open indefinitely
+
+**Found by:** tracing the guard lifecycle rather than by a failing test — the
+guards were written to prevent interruption and were never checked for the
+opposite failure.
+
+Four defects, all in the global guard added in the previous pass:
+
+1. **Settings pinned every notch on every display.** The guard suppressed
+   closing whenever any non-panel window of ours held key focus. Settings stays
+   key for as long as it is focused, so no notch could close while it was open.
+2. **Guards were app-wide, not per-notch.** Typing in the built-in display's
+   notch suppressed closing on the external one.
+3. **`draggingExited` did nothing.** A drag that entered the catcher and left
+   without dropping opened the notch and left nothing to close it.
+4. **Any mouse button held anywhere pinned everything** — including a button held
+   while scrolling in another app.
+
+**Fix:** interaction is now an explicit, owned, per-notch claim
+(`NotchInteraction`). A claim is taken by a named owner against one notch for a
+stated reason, released explicitly, and revalidated against its own condition so
+a missed release cannot leave anything stuck. Nothing expires on a clock; claims
+end when their premise does. Closing a notch releases every claim it holds.
+
+Application-modal sheets remain the one genuinely app-wide hold-off, and they are
+inherently transient.
+
+**Verification:** eleven assertions in "Interaction ownership", including that a
+claim on one display does not pin another and that a Settings-like key window
+pins nothing.
+
+---
+
+### 0b. Internal transitions were logged as `programmatic`
+
+**Found by:** an intermittent provenance assertion — roughly 1 run in 4 attributed
+a scripted open to `programmatic`.
+
+Fullscreen suppression, lock/unlock, wake, outside-clicks and the collapse button
+all called `open`/`close`/`toggle` without naming a cause, so the transition log
+attributed them to the default. That undermines the whole point of provenance:
+a log that cannot tell a system event from a user action proves nothing.
+
+**Fix:** every internal transition now names its cause. The relevant assertions
+also search for the most recent open (or close) rather than the very last entry,
+since a system event can legitimately interleave.
+
+---
+
+### 0c. `ingest` conflated "how many rows appeared" with "was this understood"
+
+Re-dropping a file already on the tray added nothing and reported nothing
+handled, so AppKit played the rejection animation for a perfectly good drop.
+`IngestOutcome` now separates `added` from `duplicates`; the drop handlers report
+`recognised > 0`, and the Tray says "Already in the Tray" rather than appearing
+to do nothing.
+
+---
+
+### 0d. A missing file could still be dragged out of the Tray
+
+`NSItemProvider(contentsOf:)` returns nil for a file that has been moved or
+deleted, and the row handed back an empty provider — the drag would start and
+deliver nothing, which reads as the receiving app misbehaving. Rows whose file
+is gone are no longer draggable.
+
+---
+
 ### 0. `ingest` reported items it had not added
 
 **Observed:** the "Tray (real files)" fixture test caught a duplicate drop

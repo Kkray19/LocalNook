@@ -98,7 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleNotch() {
-        NotchWindowController.shared.activeModel?.toggle()
+        NotchWindowController.shared.activeModel?.toggle(source: .explicitCommand)
     }
 
     @objc private func openSettings() {

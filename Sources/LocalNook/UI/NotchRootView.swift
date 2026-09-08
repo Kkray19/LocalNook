@@ -159,7 +159,7 @@ struct NotchRootView: View {
         model.isDragTargeting = targeting
         if targeting {
             model.page = .tray
-            model.open()
+            model.open(source: .drag)
         } else if model.state == .open {
             model.scheduleClose()
         }
@@ -168,7 +168,7 @@ struct NotchRootView: View {
     private func receive(_ providers: [NSItemProvider]) -> Bool {
         model.isDragTargeting = false
         model.page = .tray
-        model.open()
+        model.open(source: .drag)
 
         var handled = false
         for provider in providers {
@@ -194,7 +194,7 @@ struct NotchRootView: View {
                         let board = NSPasteboard(name: .init("com.localnook.drop"))
                         board.clearContents()
                         board.setString(text, forType: .string)
-                        _ = ShelfStore.shared.ingest(board)
+                        _ = ShelfStore.shared.ingestReportingOutcome(board)
                     }
                 }
             }
@@ -217,7 +217,7 @@ struct NotchRootView: View {
             .contentShape(NotchShape(topRadius: topRadius, bottomRadius: bottomRadius))
             .onTapGesture {
                 guard settings.openTrigger.allowsClick else { return }
-                model.toggle()
+                model.toggle(source: .trackingArea)
             }
     }
 

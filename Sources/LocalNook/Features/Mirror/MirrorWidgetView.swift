@@ -33,6 +33,17 @@ struct MirrorWidgetView: View {
                 ) { mirror.requestStart(owner: previewOwner) }
             } else if let failure = mirror.failureMessage {
                 WidgetMessage(symbol: "exclamationmark.triangle", title: "Camera unavailable", detail: failure)
+            } else if !mirror.userRequestedCamera {
+                // Access is granted, but the user has not asked for the camera
+                // in this session — arriving here from the Dashboard, from
+                // overflow, or from Tools must not light it. Starting is always
+                // a deliberate press.
+                WidgetMessage(
+                    symbol: "web.camera",
+                    title: "Camera is off",
+                    detail: "The preview is shown only. Nothing is recorded, saved or sent anywhere.",
+                    actionTitle: "Start camera"
+                ) { mirror.requestStart(owner: previewOwner) }
             } else {
                 preview
             }

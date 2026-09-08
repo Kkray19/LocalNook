@@ -53,9 +53,21 @@ final class NotchPanel: NSPanel {
         sharingType = .readOnly
     }
 
-    /// Escape collapses the notch rather than beeping.
+    /// Escape dismisses the innermost thing first, then the notch.
+    ///
+    /// While a text field inside the panel has focus, the first Escape gives up
+    /// that focus — otherwise typing a note and pressing Escape out of habit
+    /// would throw the whole panel away. A second Escape, with nothing focused,
+    /// collapses the notch.
     override func cancelOperation(_ sender: Any?) {
         guard Settings.shared.closeOnEscape else { return }
+
+        if let responder = firstResponder, responder !== self,
+           responder is NSTextView || responder is NSTextField {
+            makeFirstResponder(nil)
+            return
+        }
+
         NotificationCenter.default.post(name: .escapePressedInNotch, object: self)
     }
 }

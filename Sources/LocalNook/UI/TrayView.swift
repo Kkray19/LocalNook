@@ -23,6 +23,28 @@ struct TrayView: View {
     @ObservedObject private var shelf = ShelfStore.shared
 
     private var isTargeted: Bool { model.isDragTargeting }
+    @LNState private var note: String?
+    @LNState private var noteTask: Task<Void, Never>?
+
+    /// Says what a drop did, so a duplicate reads as "already here" instead of
+    /// looking like nothing happened.
+    private func announce(_ outcome: ShelfStore.IngestOutcome) {
+        let text: String?
+        switch (outcome.added, outcome.duplicates) {
+        case (0, 0): text = nil
+        case (0, let d): text = d == 1 ? "Already in the Tray" : "All \(d) already in the Tray"
+        case (let a, 0): text = a == 1 ? "Added 1 item" : "Added \(a) items"
+        case (let a, let d): text = "Added \(a), \(d) already here"
+        }
+        guard let text else { return }
+        note = text
+        noteTask?.cancel()
+        noteTask = Task {
+            try? await Task.sleep(for: .seconds(2.2))
+            guard !Task.isCancelled else { return }
+            note = nil
+        }
+    }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -86,14 +108,21 @@ struct TrayView: View {
                         .onDrag {
                             // Hand the real file over so it can be dragged back
                             // out to Finder, Mail or anywhere else.
-                            if let url = item.url {
-                                return NSItemProvider(contentsOf: url) ?? NSItemProvider()
+                            //
+                            // A row whose file has since been moved or deleted
+                            // must not offer an empty provider: the drag would
+                            // start and then deliver nothing, which reads as the
+                            // receiving app being broken.
+                            if item.stillExists, let url = item.url,
+                               let provider = NSItemProvider(contentsOf: url) {
+                                return provider
                             }
-                            if let payload = item.payload {
+                            if let payload = item.payload, item.kind != .file {
                                 return NSItemProvider(object: payload as NSString)
                             }
                             return NSItemProvider()
                         }
+                        .disabled(!item.stillExists && item.payload == nil)
                         .contextMenu {
                             Button("Open") { shelf.open(item) }
                             Button("Reveal in Finder") { shelf.reveal(item) }
@@ -121,6 +150,12 @@ struct TrayView: View {
                     .font(Theme.caption)
                     .foregroundStyle(Theme.secondaryText)
             }
+            if let note {
+                Text(note)
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.accent)
+                    .transition(.opacity)
+            }
             Spacer()
             TrayAction(symbol: "eye", help: "Quick Look") {
                 let urls = shelf.selection.isEmpty
@@ -128,7 +163,7 @@ struct TrayView: View {
                 QuickLookController.shared.preview(urls)
             }
             TrayAction(symbol: "doc.on.clipboard", help: "Paste from clipboard") {
-                _ = shelf.pasteFromClipboard()
+                announce(shelf.ingestReportingOutcome(.general))
             }
             if !shelf.selection.isEmpty {
                 TrayAction(symbol: "minus.circle", help: "Remove selected") {

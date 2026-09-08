@@ -294,7 +294,28 @@ final class NotchWindowController: NSObject {
 
         panel.contentView = Self.makeContentView(for: model, size: size)
         panel.orderFrontRegardless()
+        observeKeyFocus(of: panel, model: model)
         return panel
+    }
+
+    /// Claims `.textEditing` for exactly the notch whose panel holds key focus.
+    ///
+    /// Key status is what a focused text field actually depends on, and it is
+    /// per-window, so this is naturally scoped to one display. Clicking another
+    /// app resigns key and the claim ends on its own.
+    private func observeKeyFocus(of panel: NotchPanel, model: NotchViewModel) {
+        let owner = UUID()
+        let center = NotificationCenter.default
+        center.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: panel, queue: .main
+        ) { [weak model] _ in
+            MainActor.assumeIsolated { model?.claimInteraction(.textEditing, owner: owner) }
+        }
+        center.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: panel, queue: .main
+        ) { [weak model] _ in
+            MainActor.assumeIsolated { model?.releaseInteraction(.textEditing, owner: owner) }
+        }
     }
 
     /// Builds the panel's content view.
@@ -353,10 +374,19 @@ final class NotchWindowController: NSObject {
             guard let model, Settings.shared.openTrigger.allowsClick else { return }
             model.toggle(source: .trackingArea)
         }
+        let dragOwner = UUID()
         view.onDragEnter = { [weak model] in
             guard let model, Settings.shared.shelfAutoExpandOnDrag else { return }
             model.page = .tray
+            model.claimInteraction(.dragging, owner: dragOwner)
             model.open(source: .drag)
+        }
+        // Explicit release. Validation also drops this claim once no button is
+        // held, so a drag cancelled off-screen cannot leave the notch pinned.
+        view.onDragEnd = { [weak model] in
+            guard let model else { return }
+            model.releaseInteraction(.dragging, owner: dragOwner)
+            model.isDragTargeting = false
         }
 
         panel.contentView = view
@@ -437,28 +467,75 @@ final class NotchWindowController: NSObject {
     /// Notes while looking elsewhere, picking from a menu, dragging a file in —
     /// and closing the notch underneath the user would be worse than the missed
     /// event this exists to recover from.
-    private var isInDeliberateInteraction: Bool {
-        // Typing: the panel itself holds key focus, e.g. a note being edited.
-        if panels.values.contains(where: { $0.isKeyWindow }) { return true }
+    /// A sheet or alert genuinely blocks the whole app, so it is the one
+    /// condition that legitimately applies to every notch at once. It is also
+    /// inherently transient — it cannot pin anything indefinitely.
+    private var isApplicationModal: Bool { NSApp.modalWindow != nil }
 
-        // A sheet or alert is up.
-        if NSApp.modalWindow != nil { return true }
-
-        // Another of our own windows took focus — Settings, Quick Look.
-        if let key = NSApp.keyWindow, !(key is NotchPanel) { return true }
-
-        // A menu or popover is on screen. These are separate windows whose
-        // classes are private, so the class name is the available signal.
-        if NSApp.windows.contains(where: { window in
+    /// Whether a menu or popover is currently on screen.
+    ///
+    /// Their classes are private, so the class name is the available signal.
+    /// Deliberately *not* used as a blanket guard: it feeds the `.menu` claim,
+    /// which is attributed to a notch and revalidated, so a menu that vanishes
+    /// without notice cannot leave anything pinned.
+    private var isMenuOnScreen: Bool {
+        NSApp.windows.contains { window in
             guard window.isVisible else { return false }
             let name = window.className
             return name.contains("Menu") || name.contains("Popover")
-        }) { return true }
+        }
+    }
 
-        // A button is held down — a drag or a press is in flight.
-        if NSEvent.pressedMouseButtons != 0 { return true }
+    /// Drops claims whose premise no longer holds.
+    ///
+    /// Explicit release is the normal path; this catches the cases where it can
+    /// be missed — a drag cancelled off-screen, a window that disappeared, a
+    /// menu dismissed by clicking elsewhere. Nothing expires on a clock, only on
+    /// its own condition going away.
+    private func validateInteractionClaims() {
+        let menuOnScreen = isMenuOnScreen
+        let buttonDown = mouseButtonsAreDown()
 
-        return false
+        for (id, model) in models {
+            // Text editing lasts exactly as long as this display's panel holds
+            // key focus. Another app becoming key ends it immediately.
+            if !(panels[id]?.isKeyWindow ?? false) {
+                model.releaseInteractions(of: .textEditing)
+            }
+            // A drag needs a button held down. Releasing the mouse anywhere —
+            // including outside the panel — ends the claim, so a cancelled drag
+            // cannot leave the notch pinned.
+            if !buttonDown {
+                model.releaseInteractions(of: .dragging)
+                if model.isDragTargeting { model.isDragTargeting = false }
+            }
+            if !menuOnScreen {
+                model.releaseInteractions(of: .menu)
+            }
+        }
+
+        // A menu is raised from somewhere; attribute it to the notch under the
+        // pointer, not to every display.
+        if menuOnScreen, let (id, _) = modelUnderPointer() {
+            models[id]?.claimInteraction(.menu, owner: Self.menuOwner)
+        }
+    }
+
+    /// Stable owner token for the menu claim, which has no natural owner object.
+    private static let menuOwner = UUID()
+
+    /// Whether a mouse button is currently held.
+    ///
+    /// Injectable so a drag can be simulated: a real drag always has a button
+    /// down, and without this seam a test can only exercise the *stale* case and
+    /// would wrongly conclude that live drags get interrupted.
+    var mouseButtonsAreDown: () -> Bool = { NSEvent.pressedMouseButtons != 0 }
+
+    private func modelUnderPointer() -> (String, NotchViewModel)? {
+        let mouse = NSEvent.mouseLocation
+        return models.first { id, _ in
+            NSScreen.screen(withStableID: id)?.frame.contains(mouse) ?? false
+        }
     }
 
     /// Whether the recovery check is currently scheduled. Must be false when
@@ -469,13 +546,29 @@ final class NotchWindowController: NSObject {
     /// deterministically instead of waiting on its one-second cadence.
     func runPointerSafetyCheckNow() { closeIfPointerHasLeft() }
 
-    /// True when the fallback would decline to act right now.
-    var fallbackIsHoldingOff: Bool { isInDeliberateInteraction }
+    /// True when the fallback would decline to act on `model` right now.
+    func fallbackIsHoldingOff(for model: NotchViewModel) -> Bool {
+        isApplicationModal || model.isInteracting || model.isDragTargeting
+    }
+
+    /// Kept for the pointer-fallback test's coarse check.
+    var fallbackIsHoldingOff: Bool {
+        isApplicationModal || models.values.contains { $0.isInteracting }
+    }
+
+    /// Runs claim validation on demand, for tests.
+    func validateClaimsNow() { validateInteractionClaims() }
 
     private func closeIfPointerHasLeft() {
-        guard !isInDeliberateInteraction else { return }
+        validateInteractionClaims()
+        // The only genuinely app-wide hold-off left.
+        guard !isApplicationModal else { return }
+
         let mouse = NSEvent.mouseLocation
         for (id, model) in models where model.state == .open {
+            // Scoped to this notch: interaction on one display never pins
+            // another, and Settings taking focus pins nothing at all.
+            guard !model.isInteracting else { continue }
             guard !model.isDragTargeting else { continue }
             guard let panel = panels[id] else { continue }
             // A generous margin: this must never fight legitimate hover, only
@@ -683,9 +776,9 @@ final class NotchWindowController: NSObject {
             guard let screen = NSScreen.screen(withStableID: id) else { continue }
             let inside = hoverRegion(for: model, on: screen).contains(mouse)
             if inside {
-                if settings.openTrigger.allowsClick { model.toggle() }
+                if settings.openTrigger.allowsClick { model.toggle(source: .outsideClick) }
             } else if model.state == .open {
-                model.close()
+                model.close(source: .outsideClick)
             }
         }
         syncKeyStatus()
@@ -816,7 +909,7 @@ final class NotchWindowController: NSObject {
         geometryTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled, let self, self.started else { return }
-            self.allModels.forEach { $0.close() }
+            self.allModels.forEach { $0.close(source: .systemState) }
             self.rebuildPanels()
             self.repositionAll()
         }
@@ -825,7 +918,7 @@ final class NotchWindowController: NSObject {
     private func setLocked(_ locked: Bool) {
         isScreenLocked = locked
         if locked {
-            allModels.forEach { $0.close() }
+            allModels.forEach { $0.close(source: .systemState) }
             panels.values.forEach { $0.orderOut(nil) }
         } else {
             panels.values.forEach { $0.orderFrontRegardless() }

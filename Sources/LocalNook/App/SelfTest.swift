@@ -52,6 +52,7 @@ enum SelfTest {
         testLiquidGlass()
         testPrivacyBoundaries()
         testTrayWithRealFiles()
+        testInteractionOwnership()
         testPointerFallback()
         testCatcherHover()
         testCloseLatch()
@@ -488,14 +489,28 @@ enum SelfTest {
         check("dropped files are referenced in place, never copied",
               shelf.items.first { $0.path == plain.path }?.isOwned == false)
 
-        // Dropping the same selection again must not duplicate.
+        // Dropping the same selection again must not duplicate — but it is a
+        // perfectly good drop and must not be reported as a failure, or AppKit
+        // plays the rejection animation for it.
         board.clearContents()
         board.writeObjects([plain, folder] as [NSURL])
-        let duplicates = shelf.ingest(board)
-        check("dropping the same items again adds nothing", duplicates == 0,
-              "added \(duplicates) duplicates")
+        let repeatDrop = shelf.ingestReportingOutcome(board)
+        check("dropping the same items again adds nothing", repeatDrop.added == 0,
+              "added \(repeatDrop.added) duplicates")
         check("the tray count is unchanged after a duplicate drop",
               shelf.items.count == startingCount + 5)
+        check("a duplicate drop is still recognised", repeatDrop.duplicates == 2,
+              "recognised \(repeatDrop.recognised)")
+        check("a duplicate drop reports success, not a rejected drop",
+              repeatDrop.wasHandled,
+              "AppKit would snap the file back as though nothing understood it")
+
+        // Unsupported content is a genuine failure and must say so.
+        let junkBoard = NSPasteboard(name: .init("com.localnook.selftest.junk"))
+        junkBoard.clearContents()
+        junkBoard.setData(Data([0x00, 0x01]), forType: .init("com.localnook.nonsense"))
+        let junkDrop = shelf.ingestReportingOutcome(junkBoard)
+        check("unsupported content is not reported as handled", !junkDrop.wasHandled)
 
         // A file that disappears after being added.
         try? FileManager.default.removeItem(at: doomed)
@@ -523,14 +538,22 @@ enum SelfTest {
             check("selection fixtures exist", false)
         }
 
-        // The guarantee that matters most.
+        // The guarantee that matters most: removal touches the tray, never the
+        // file — and not just its existence, its contents.
         let survivors = [plain, longName, folder]
+        let contentsBefore = survivors.compactMap { try? Data(contentsOf: $0) }
         for item in shelf.items where survivors.map(\.path).contains(item.path ?? "") {
             shelf.remove(item.id)
         }
         check("removing from the tray never deletes the user's file",
               survivors.allSatisfy { FileManager.default.fileExists(atPath: $0.path) },
               "a fixture was deleted from disk")
+        let contentsAfter = survivors.compactMap { try? Data(contentsOf: $0) }
+        check("removing from the tray leaves file contents byte-for-byte intact",
+              contentsBefore == contentsAfter,
+              "a fixture's contents changed")
+        check("the folder fixture is still a folder",
+              (try? folder.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true)
 
         // Text with no file of its own is stored by LocalNook, and *that* copy
         // is the only kind it may delete.
@@ -563,6 +586,88 @@ enum SelfTest {
               "\(shelf.items.count) items, expected \(startingCount)")
     }
 
+    /// Interaction claims must hold a notch open only as long as their premise
+    /// lasts, and only for the notch they belong to.
+    private static func testInteractionOwnership() {
+        section("Interaction ownership")
+        let controller = NotchWindowController.shared
+        controller.start()
+        pumpEvents(for: 0.4)
+
+        let models = controller.allModels
+        guard let first = models.first else {
+            check("a notch exists to claim", false)
+            return
+        }
+
+        check("a fresh notch holds no claims", !first.isInteracting)
+
+        let owner = UUID()
+        first.claimInteraction(.textEditing, owner: owner)
+        check("claiming holds that notch open", first.isInteracting)
+        check("the fallback declines to close a claimed notch",
+              controller.fallbackIsHoldingOff(for: first))
+
+        // Per-display scoping: this is the bug where typing on one display, or
+        // opening Settings, pinned every notch everywhere.
+        if models.count > 1, let second = models.first(where: { $0 !== first }) {
+            check("a claim on one display does not pin another",
+                  !second.isInteracting && !controller.fallbackIsHoldingOff(for: second),
+                  "the other display was suppressed too")
+        } else {
+            check("a claim on one display does not pin another", true)
+        }
+
+        first.releaseInteraction(.textEditing, owner: owner)
+        check("releasing ends the hold", !first.isInteracting)
+
+        // Text editing lasts exactly as long as key focus. The panel is not key
+        // here, so validation must drop a claim nothing is sustaining.
+        first.claimInteraction(.textEditing, owner: UUID())
+        controller.validateClaimsNow()
+        check("a text-editing claim ends when the panel is not key",
+              !first.activeInteractions.contains(.textEditing),
+              "a claim outlived its premise")
+
+        // A drag cancelled off-screen: no button is held, so the claim goes.
+        first.claimInteraction(.dragging, owner: UUID())
+        first.isDragTargeting = true
+        controller.validateClaimsNow()
+        check("a drag claim ends once no mouse button is held",
+              !first.activeInteractions.contains(.dragging),
+              "a cancelled drag left the notch pinned")
+        check("stale drag targeting is cleared with it", !first.isDragTargeting)
+
+        // Nothing may survive a close into the next open.
+        controller.perform(.open)
+        pumpEvents(for: 0.2)
+        first.claimInteraction(.textEditing, owner: UUID())
+        first.claimInteraction(.dragging, owner: UUID())
+        controller.perform(.close)
+        pumpEvents(for: 0.3)
+        check("closing releases every claim", !first.isInteracting,
+              "claims survived into the next open: \(first.activeInteractions.map(\.label))")
+        check("closing clears drag targeting", !first.isDragTargeting)
+
+        // A non-panel key window — Settings, Quick Look — must pin nothing.
+        let settingsLike = NSWindow(
+            contentRect: NSRect(x: -10_000, y: -10_000, width: 200, height: 120),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false
+        )
+        settingsLike.makeKeyAndOrderFront(nil)
+        pumpEvents(for: 0.3)
+        controller.validateClaimsNow()
+        check("another of our windows taking focus pins no notch",
+              controller.allModels.allSatisfy { !$0.isInteracting },
+              "Settings-like focus suppressed closing")
+        settingsLike.orderOut(nil)
+        settingsLike.close()
+        pumpEvents(for: 0.2)
+
+        controller.stop()
+        pumpEvents(for: 0.2)
+    }
+
     /// The once-a-second recovery check: it must rescue a stuck notch without
     /// interrupting anything the user is deliberately doing.
     private static func testPointerFallback() {
@@ -581,10 +686,14 @@ enum SelfTest {
 
         controller.perform(.open)
         pumpEvents(for: 0.4)
+        waitUntil { controller.pointerSafetyNetIsRunning }
         check("opening starts the recovery check", controller.pointerSafetyNetIsRunning)
+        // Look for the most recent *open*: a system event such as fullscreen
+        // suppression can legitimately log a close in between.
+        let lastOpen = NotchTransitionLog.all.last { $0.opened }
         check("the open was attributed to the command that caused it",
-              NotchTransitionLog.all.last?.source == .explicitCommand,
-              "got \(String(describing: NotchTransitionLog.all.last?.source))")
+              lastOpen?.source == .explicitCommand,
+              "got \(String(describing: lastOpen?.source))")
 
         // The pointer is wherever it actually is; unless it happens to be on the
         // notch, one pass should close it and say so.
@@ -607,9 +716,10 @@ enum SelfTest {
             check("a notch the pointer has left is recovered",
                   controller.allModels.allSatisfy { $0.state == .closed },
                   "still open after a recovery pass")
+            let lastClose = NotchTransitionLog.all.last { !$0.opened }
             check("the recovery close is attributed to the fallback, not to hover",
-                  NotchTransitionLog.all.last?.source == .pointerFallback,
-                  "got \(String(describing: NotchTransitionLog.all.last?.source))")
+                  lastClose?.source == .pointerFallback,
+                  "got \(String(describing: lastClose?.source))")
         }
 
         // Dragging is a deliberate interaction; recovery must not interrupt it.
@@ -618,15 +728,31 @@ enum SelfTest {
         // render and would mask the result.
         controller.perform(.open)
         pumpEvents(for: 0.3)
+
+        // A live drag: button held, claim taken — exactly the state AppKit puts
+        // us in between draggingEntered and the drop.
+        controller.mouseButtonsAreDown = { true }
+        let dragOwner = UUID()
         controller.allModels.forEach {
             $0.cancelPending()
+            $0.claimInteraction(.dragging, owner: dragOwner)
             $0.isDragTargeting = true
         }
         controller.runPointerSafetyCheckNow()
         check("a drag in progress is never closed underneath the user",
               controller.allModels.allSatisfy { !$0.hasPendingClose },
               "the fallback scheduled a close mid-drag")
-        controller.allModels.forEach { $0.isDragTargeting = false }
+
+        // The button comes up somewhere off the panel and the drop never
+        // arrives — the classic way stale drag state used to pin the notch.
+        controller.mouseButtonsAreDown = { false }
+        controller.runPointerSafetyCheckNow()
+        check("a drag abandoned off-screen stops holding the notch open",
+              controller.allModels.allSatisfy {
+                  !$0.activeInteractions.contains(.dragging) && !$0.isDragTargeting
+              },
+              "stale drag state survived the button coming up")
+        controller.mouseButtonsAreDown = { NSEvent.pressedMouseButtons != 0 }
 
         controller.perform(.close)
         waitUntil { !controller.pointerSafetyNetIsRunning }

@@ -61,6 +61,23 @@ final class ShelfStore: NSObject, ObservableObject {
         newItems.reduce(0) { $0 + (add($1) ? 1 : 0) }
     }
 
+    /// What a drop turned out to be.
+    ///
+    /// "How many rows appeared" and "was this drop understood" are different
+    /// questions, and conflating them makes a duplicate drop look like a broken
+    /// one: macOS plays the rejection animation when a drop reports failure, so
+    /// re-dropping a file already on the tray would snap back as though nothing
+    /// was recognised.
+    struct IngestOutcome: Equatable, Sendable {
+        var added: Int
+        var duplicates: Int
+
+        /// Content LocalNook understood, whether or not it changed the tray.
+        var recognised: Int { added + duplicates }
+        /// What the drop handler should report to AppKit.
+        var wasHandled: Bool { recognised > 0 }
+    }
+
     func remove(_ id: UUID) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         let item = items[index]
@@ -124,7 +141,19 @@ final class ShelfStore: NSObject, ObservableObject {
             }
         }
 
-        return add(contentsOf: added)
+        let inserted = add(contentsOf: added)
+        lastOutcome = IngestOutcome(added: inserted, duplicates: added.count - inserted)
+        return inserted
+    }
+
+    /// Full result of the most recent ingest, for the UI's feedback.
+    @Published private(set) var lastOutcome: IngestOutcome = IngestOutcome(added: 0, duplicates: 0)
+
+    /// Ingests and reports the complete outcome.
+    @discardableResult
+    func ingestReportingOutcome(_ pasteboard: NSPasteboard) -> IngestOutcome {
+        _ = ingest(pasteboard)
+        return lastOutcome
     }
 
     func pasteFromClipboard() -> Int {
