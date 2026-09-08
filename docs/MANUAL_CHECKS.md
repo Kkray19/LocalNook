@@ -138,6 +138,16 @@ What the script guarantees, in order:
 
 ---
 
+## The hands-on checklist lives in docs/ACCEPTANCE.md
+
+A concise, ordered checklist with expected results and disposable fixtures. It
+covers hover, Notes and Escape, Settings not pinning the nook, overflow, Finder
+drag in and out, removal leaving originals alone, Mirror stopping capture, and —
+when a second display is attached — external hover, cross-display dragging,
+independent ownership, and disconnect/reconnect.
+
+Nothing in it is marked passed without an observed result.
+
 ## Hover on an external display — still unverified
 
 This is the one check in the reliability pass that could not be run at all, and

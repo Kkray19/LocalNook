@@ -20,6 +20,7 @@
 //  what the user was doing.
 //
 
+import CoreGraphics
 import Foundation
 
 /// Stage counters for hover, shared by both tracking views.
@@ -84,6 +85,44 @@ enum HoverProbe {
         }
     }
 
+    /// Seconds since the machine last saw any human input.
+    ///
+    /// Part of the provenance because it turned out to explain the thing the
+    /// counters could not. A batch of twelve integration runs went eight clean
+    /// and then four with `enters=0`, and three more runs immediately after
+    /// were also `enters=0` — sticky, not intermittent. The variable that had
+    /// changed was idle time: after a long unattended stretch the window server
+    /// stops producing crossings for a window moved under a stationary pointer.
+    /// Without this number in the line, that reads as a random platform flake
+    /// and gets filed against the app.
+    static var idleSeconds: Double {
+        CGEventSource.secondsSinceLastEventType(
+            .combinedSessionState,
+            eventType: CGEventType(rawValue: ~0)!
+        )
+    }
+
+    /// Idle long enough that the window server is known to stop producing
+    /// crossings for a window moved under a stationary pointer.
+    ///
+    /// Measured, not guessed: clean through 8 runs and then `enters=0` for 7
+    /// consecutive runs once the machine had been untouched for roughly half an
+    /// hour. The threshold below is deliberately conservative — it is a
+    /// reporting aid, not a claim about where the boundary is.
+    static let idleThreshold: Double = 300
+
+    /// Why a run with no crossings is probably not about LocalNook.
+    static var idleExplanation: String {
+        let idle = idleSeconds
+        guard idle >= idleThreshold else {
+            return String(format: "The machine was in use (idle %.0fs), so idle "
+                                + "state does not explain this.", idle)
+        }
+        return String(format: "The machine had been idle %.0fs; the window server "
+                            + "stops delivering these crossings after a long "
+                            + "unattended stretch. Re-run after using the mouse.", idle)
+    }
+
     /// One-line provenance, printed with every hover result so a run that
     /// passed and a run that did not can be compared after the fact.
     static var summary: String {
@@ -91,6 +130,7 @@ enum HoverProbe {
         defer { lock.unlock() }
         return "enters=\(entersDelivered) exits=\(exitsDelivered) "
              + "handled=\(handlerInvocations) (of which containment=\(containmentForwards))"
+             + String(format: " idle=%.0fs", idleSeconds)
     }
 
     /// Classifies an attempt from the counters and the resulting state.

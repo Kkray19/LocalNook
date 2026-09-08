@@ -258,7 +258,8 @@ enum SelfTest {
         case .noPlatformEvent:
             unmet("[integration] hovering the notch opens it",
                   "AppKit delivered no mouseEntered across \(attempts + 1) window moves; "
-                  + "the pointer was verified inside the strip each time")
+                  + "the pointer was verified inside the strip each time. "
+                  + HoverProbe.idleExplanation)
         case let .eventDropped(enters):
             check("[integration] hovering the notch opens it", false,
                   "AppKit delivered \(enters) crossing(s); LocalNook's handler ran 0 times")
@@ -1063,7 +1064,8 @@ enum SelfTest {
             unmet("[integration] hovering the catcher opens the notch", detail)
         case .noPlatformEvent:
             unmet("[integration] hovering the catcher opens the notch",
-                  "AppKit delivered no crossing for a window moved under a still pointer")
+                  "AppKit delivered no crossing for a window moved under a still pointer. "
+                  + HoverProbe.idleExplanation)
         case let .eventDropped(enters):
             check("[integration] hovering the catcher opens the notch", false,
                   "AppKit delivered \(enters) crossing(s) and LocalNook forwarded none")

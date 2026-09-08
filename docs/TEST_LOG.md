@@ -395,6 +395,7 @@ Not every change invalidates every result. This says which.
 
 | If you change… | Repeat |
 |---|---|
+| **The number of attached displays** | The whole deterministic suite. Two checks passed for a year on one display and failed intermittently the moment a second was attached, because they took `allModels.first` — an arbitrary dictionary entry — while `perform(.open)` routes to the pointer's display. Display count is a test input, not background. |
 | **Anything at all** | The deterministic suite against the rebuilt binary, and record its new SHA-256. Every result below is about one hash. |
 | `NotchHitPanel`, `HoverTracker`, `HoverProbe`, or `NotchViewModel`'s open/close scheduling | The full integration batch. These are the only files the live crossing path runs through, and the probe's own accuracy depends on them. |
 | `NotchWindowController` lifecycle (`start`, `stop`, `rebuildPanels`, `teardownPanels`, the pointer safety net) | `testControllerTeardown` and `testMissedCrossingRecovery` — and re-check that `residue` still enumerates everything the new code holds. A leak the struct does not name cannot be caught. |

@@ -44,29 +44,94 @@ has ever shown LocalNook receiving a crossing and dropping it (`eventDropped`)
 or mishandling it (`wrongState`) — the two outcomes that *would* be defects, and
 both of which fail the build.
 
+**It is not intermittent. It is sticky, and it tracks machine idle time.**
+
+This was mis-characterised for the whole of its life as "roughly 1 run in 12".
+A batch of 12 integration runs against one frozen binary made the pattern
+obvious:
+
+| Runs | Result | Probe |
+|---|---|---|
+| 1–8 | clean | `enters=1 handled=1 opened-by: trackingArea` |
+| 9–12 | UNVERIFIED | `enters=0 handled=0 opened-by: nothing` |
+
+Three further runs immediately afterwards were also `enters=0`, and three more
+after that: **seven consecutive**, not one in twelve. The variable that had
+changed between run 8 and run 9 was not the binary, the displays, or the pointer
+position — all constant. It was idle time. The machine had been untouched for
+around half an hour, and after a long unattended stretch the window server stops
+producing crossings for a window moved under a stationary pointer.
+
+`HoverProbe` now prints `idle=NNNNs` in every provenance line, and the UNVERIFIED
+message says so outright, so this cannot be re-filed against the app by the next
+person to see it:
+
+```
+probe: enters=0 exits=0 handled=0 (of which containment=0) idle=2098s opened-by: nothing
+? [integration] hovering the notch opens it — UNVERIFIED: … The machine had been
+  idle 2098s; the window server stops delivering these crossings after a long
+  unattended stretch. Re-run after using the mouse.
+```
+
 **Measurements, each against one frozen binary:**
 
-| Binary | Displays | Integration runs | Result |
+| Binary | Displays | Runs | Result |
 |---|---|---|---|
-| `9df4dce2…` | 1 | 12 | 12 clean, `enters=1 handled=1` every run |
-| `9df4dce2…` | 2 | 6 | 6 clean, `enters=1 handled=1` every run |
+| `9df4dce2…` | 1 | 12 | 12 clean |
+| `9df4dce2…` | 2 | 6 | 6 clean |
+| `9c0ab374…` | 2 | 12 | 8 clean, then 4 `enters=0` at high idle |
 
-**This does not mean it is fixed.** Eighteen clean runs lower the estimate; they
-cannot establish the absence of an intermittent, and the retry loop in
-`testHoverPath` (up to four attempts) means a single missed crossing is absorbed
-rather than reported. The entry stays OPEN.
+**Why this still stays OPEN.** The idle correlation is strong but only tested in
+one direction: it has been observed going from clean to `enters=0` as idle time
+grew, never from `enters=0` back to clean, because returning to a low-idle state
+requires real pointer input and this session cannot produce it. Until that
+second direction is observed, "idle causes it" is a well-supported explanation
+rather than a demonstrated one.
 
-**What would establish resolution:** either an instrumented count showing zero
-`noPlatformEvent` outcomes across a run of attempts with the retry loop disabled,
-or — more to the point — hands-on confirmation that hover works with a real
-pointer on both displays, which is what the acceptance checklist asks for. The
-second is the one that matters, because it tests the gesture users actually
-make rather than the substitute the harness is forced to use.
+**What would establish resolution — a falsifiable prediction.** Use the mouse
+for a moment, then immediately run:
+
+```bash
+/Applications/LocalNook.app/Contents/MacOS/LocalNook --self-test --integration
+```
+
+If the idle explanation is right, this comes back clean with `enters=1
+handled=1` and a low `idle=` figure. If it comes back `enters=0` with a low
+`idle=` figure, the explanation is wrong and the whole entry needs reopening on
+different terms. Step 13 of docs/ACCEPTANCE.md asks for exactly this.
+
+Separately, hands-on confirmation that hover works with a real pointer on both
+displays (steps 1 and 9) is what actually matters, because it tests the gesture
+users make rather than the substitute the harness is forced to use.
 
 **Not in scope for a code change.** No speculative fix should be attempted
 against item 3: an earlier attempt to re-check containment on window moves made
 real hover measurably worse (1 clean run in 10, against ~14 in 15) and was
 reverted. See the reverted-fix note under RESOLVED.
+
+### 0-2disp. Two checks took an arbitrary notch and failed once a second display appeared
+
+**Found by:** reconnecting the external display. Two deterministic checks that
+had been clean for hundreds of runs started failing intermittently — the
+fallback hold-off about 2 runs in 3, the claim-release check about 1 in 3.
+
+**Cause:** the same defect in both, and it was in the tests. They used
+`controller.allModels.first` — an arbitrary dictionary entry — while
+`controller.perform(.open)` routes to whichever display the pointer is on. With
+one display those were always the same model. With two they often were not, so
+the hold-off check parked the injected pointer on one screen's notch while a
+different screen's notch was the open one, and then read the entirely correct
+per-display close as a failure to hold off. The claim-release check simply
+never opened the notch it was asserting about.
+
+**Worth stating plainly:** this looked exactly like a product defect —
+"the fallback closed a notch the pointer was resting on" is a serious-sounding
+failure — and it was not one. Nothing in the app changed. Both checks now act
+on a model they have identified rather than one they hope is the right one.
+
+**Lesson recorded in docs/TEST_LOG.md:** the number of attached displays is a
+test input, not background. Changing it means re-running the deterministic
+suite.
 
 ### Multi-display scoping is verified against a seeded notch, not two monitors
 
