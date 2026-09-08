@@ -90,3 +90,48 @@ pointer away from the notch for several seconds.
 2. Unplug the external display and plug it back in. → Exactly one notch per
    display, no leftovers. (`CGWindowListCopyWindowInfo` should show four
    LocalNook windows with both displays attached.)
+
+---
+
+## Failure-safe install
+
+`scripts/install.sh` replaces the old `cp -R … /Applications`. Its failure paths
+are covered by `scripts/test-install.py`, which runs entirely in temporary
+directories it creates and deletes — it never targets, stops, or reads the real
+installation.
+
+What the script guarantees, in order:
+
+1. **Validate before touching anything.** Bundle exists, `Info.plist` lints,
+   signature verifies, the binary runs, and the deterministic suite passes.
+   A candidate that fails any of these leaves the existing app untouched — the
+   run changes nothing.
+2. **Stop only the right process.** Matched on the target's executable *path*,
+   not the process name, so a build-tree copy or a second checkout of the same
+   app is left running. `TERM` first, `KILL` only if it will not exit, and a
+   refusal to continue if it still will not.
+3. **Stage beside the target.** Copied to a sibling of the target, hash-checked
+   against the candidate and signature-verified there, so the target path is
+   never a partial copy.
+4. **Keep the previous copy.** The existing installation is *moved* aside, never
+   deleted, and stays on disk until the replacement has been verified in place.
+5. **Verify what landed.** Executable present, hash matches the candidate,
+   signature verifies, binary runs.
+6. **Restore on any failure.** The previous copy goes back and is relaunched if
+   it had been running. If even that fails, the script prints the exact path the
+   intact copy is sitting at rather than exiting quietly.
+7. **Only then discard the backup.**
+
+```bash
+./scripts/install.sh                       # dist/LocalNook.app → /Applications
+./scripts/install.sh --target /tmp/staging # somewhere disposable
+./scripts/install.sh --no-launch
+```
+
+### What still needs a human
+
+- Confirming the app relaunched into the menu bar and the notch is present after
+  an install. The script reports the pid it launched and the path it launched
+  from; that it is *visible* is not something it can check.
+- Recovery from a target the user does not own or cannot write (a managed
+  `/Applications`). The refusal path is covered; the remedy is not scripted.

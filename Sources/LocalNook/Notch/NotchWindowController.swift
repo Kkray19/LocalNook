@@ -238,6 +238,21 @@ final class NotchWindowController: NSObject {
         /// A stopped controller must hold none of it.
         var isEmpty: Bool { self == Residue() }
 
+        /// Work that is in flight rather than held.
+        ///
+        /// A panel shrinking back after a live activity ends is normal and
+        /// finishes on its own. Comparing it between start/stop cycles measures
+        /// when the sample was taken, not whether anything leaked.
+        var hasWorkInFlight: Bool { shrinkTasks > 0 || pointerSafetyNet }
+
+        /// The parts that must not grow across repeated start/stop cycles.
+        var settled: Residue {
+            var copy = self
+            copy.shrinkTasks = 0
+            copy.pointerSafetyNet = false
+            return copy
+        }
+
         var description: String {
             var parts: [String] = []
             if panels > 0 { parts.append("panels=\(panels)") }

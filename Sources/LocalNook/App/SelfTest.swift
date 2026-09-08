@@ -1164,7 +1164,14 @@ enum SelfTest {
                   controller.residue.isEmpty, "held \(controller.residue)")
             controller.start()
             pumpEvents(for: 0.35)
-            residues.append(controller.residue)
+            // Sample once in-flight work has finished rather than after a fixed
+            // delay: a panel shrinking back after a live activity is normal and
+            // self-limiting, and comparing it would measure when the sample was
+            // taken instead of whether anything leaked.
+            let settled = waitUntil({ !controller.residue.hasWorkInFlight }, timeout: 2.0)
+            check("scheduled work settles instead of piling up", settled,
+                  "still in flight: \(controller.residue)")
+            residues.append(controller.residue.settled)
         }
         check("repeated start/stop does not accumulate windows or observers",
               residues.allSatisfy { $0 == residues[0] },

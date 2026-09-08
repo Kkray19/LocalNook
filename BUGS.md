@@ -9,10 +9,44 @@ reproduced rather than taken on trust.
 
 ### A window moving under a stationary pointer can miss a hover crossing
 
-Roughly 1 run in 15 of `--self-test`. See the reverted-fix note under RESOLVED
-for what was tried and why it was backed out. Normal hover — the pointer moving
-onto a stationary panel — is unaffected; this is specific to the panel moving
-underneath a still pointer, which happens when a display is attached.
+**Status:** attributed, and no longer able to leave the panel stuck. Still
+present as a limitation of the *stimulus*, not of the product.
+
+**What was measured.** `HoverProbe` now counts crossings AppKit delivered,
+crossings LocalNook forwarded, and the resulting state, so the failure resolves
+to one of four causes rather than a guess. On every observed failure the count
+was `enters=0` — AppKit produced no tracking event at all. LocalNook has not
+been observed dropping a crossing it was given (`eventDropped`) or mishandling
+one (`wrongState`); those are the two outcomes that would be defects, and both
+are hard failures, never UNVERIFIED.
+
+**What this does not excuse.** A missing platform event is a reason the test
+could not produce its stimulus. It is not a reason for the panel to stay open.
+That postcondition is asserted separately by `testMissedCrossingRecovery` in the
+deterministic half: the real controller-owned notch is opened, the pointer is
+injected somewhere else, and it must close and be attributed to
+`.pointerFallback`. That check runs on every run and gates the release.
+
+**Scope.** Normal hover — the pointer moving onto a stationary panel — is
+unaffected. This is specific to a *window* moving under a still pointer, which
+is the only way a test can simulate hover without Accessibility, and which in
+normal use happens only when a display is attached or a live activity resizes
+the panel. See the reverted-fix note under RESOLVED for what was tried against
+the underlying behaviour and why it was backed out.
+
+### Multi-display scoping is verified against a seeded notch, not two monitors
+
+The rule that an interaction pins only its own nook is exercised on a
+single-display Mac by seeding a second notch into the controller's registry
+(`installSyntheticNotch`), so the real `closeIfPointerHasLeft` and claim
+validator run over two models. This replaced a check that asserted `true` when
+only one display was attached — a reported pass for something that never ran.
+
+It is a fair test of the rule and a weaker test of the hardware path: display
+attach/remove still goes through the injected `connectedScreens` seam rather
+than a physical hot-plug. The last verification with a second monitor physically
+attached is recorded in docs/TEST_LOG.md; the checks in this session were run
+with **one display connected**.
 
 ### Finder drag-and-drop has not been performed end to end
 
@@ -32,7 +66,59 @@ The handling code is covered; the interaction is not.
 
 ## RESOLVED
 
-### 0-. `stop()` left the recovery check running
+### 0. Retiring a notch cancelled its work but never released its claims
+
+**Found by:** the new `testControllerTeardown`, first run — `a removed display's
+claims are released — claims survived: ["textEditing"]`.
+
+**Cause:** `rebuildPanels()` retired a panel for a display that had gone away and
+called `models[id]?.cancelPending()`, which cancels timers but leaves interaction
+claims held. A claim is only released by whoever took it, and after retirement
+nobody will.
+
+**Why it matters beyond tests:** unplug a display while typing in Notes and the
+retired model keeps a `.textEditing` claim forever. It is dropped from the
+registry, but any view still holding it — and any code that later consults it —
+sees a notch that reports itself as permanently interacting, which is precisely
+the state the recovery fallback refuses to close.
+
+**Fix:** `NotchViewModel.retire()` cancels pending work, releases every claim,
+clears drag targeting and returns to `.closed`. Both teardown paths
+(`rebuildPanels`'s retire loop and `teardownPanels`) use it.
+
+### 0a. Two checks passed because they had not run
+
+**Found by:** reading the suite for `check(..., true)` with no computed condition.
+
+1. "a claim on one display does not pin another" asserted `true` whenever fewer
+   than two displays were attached — i.e. always, on a one-display Mac.
+2. "the fallback holds off while the pointer is on the notch" asserted `true`
+   whenever the tester's pointer happened not to be on the notch.
+
+**Fix:** the first seeds a second notch into the controller's registry so the
+real per-model rule is exercised; the second injects the pointer so both
+branches run on every machine. Neither reports a pass for work not done.
+
+### 0b. The install script reported success after failing
+
+**Found by:** `scripts/test-install.py`, on the first draft of `install.sh` —
+"the app lands at the target" failed while "succeeds" passed.
+
+**Cause:** two bugs at once. `trap 'rm -rf "$STAGED"' EXIT` made the trap's last
+command the script's exit status, so a `set -e` abort exited 0. And
+`step "Staging into $TARGET_DIR…"` let bash absorb the multibyte ellipsis into
+the identifier, so `set -u` aborted with `TARGET_DIR…: unbound variable` —
+locale-dependent, which is why it did not reproduce in a hand-run.
+
+**Why it matters beyond tests:** an installer that exits 0 without installing is
+the worst possible failure mode. It is exactly how a previous session left the
+app uninstalled while reporting a completed release.
+
+**Fix:** both traps preserve the status (`trap 'status=$?; …; exit $status'`),
+every `$VAR` adjacent to non-ASCII text is braced, and the cleanup paths refuse
+to `rm -rf` an empty variable.
+
+### 0c. `stop()` left the recovery check running
 
 **Found by:** a frozen 15-run of build 21 showing *scattered* failures across
 unrelated sections — `perform(.open)` not opening, claims surviving a close,

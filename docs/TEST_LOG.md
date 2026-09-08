@@ -5,13 +5,53 @@ Tools (it ships with full Xcode only).
 
 ## 1. Automated: `LocalNook --self-test`
 
-Runs in-process against the real singletons and the real view hierarchy. It is
-wired into `scripts/build-release.sh` and **blocks packaging on failure**.
+Runs in-process against the real singletons and the real view hierarchy.
+
+The suite is in two halves, because they have genuinely different reliability
+characteristics and mixing them hides that.
+
+| | `--deterministic` | `--integration` |
+|---|---|---|
+| What it drives | The controller through injected seams: pointer position, mouse-button state, connected displays, and scheduling | The live window server, asked to deliver a real tracking event |
+| Must pass | Every run, on any machine | Not guaranteed — see below |
+| Release | **Gates packaging** | Reported, never a gate |
 
 ```
-$ dist/LocalNook.app/Contents/MacOS/LocalNook --self-test
-64 passed, 0 failed
+$ dist/LocalNook.app/Contents/MacOS/LocalNook --self-test --deterministic
+deterministic: 258 passed, 0 failed
 ```
+
+Running with no flag runs both and reports them on separate lines.
+
+### UNVERIFIED is not a pass
+
+A check whose precondition could not be met prints as `? … — UNVERIFIED` and is
+counted in its own column. It is never folded into the pass count, and the
+summary says so explicitly. A required integration check that could not run
+remains unverified; it is not evidence that the behaviour works.
+
+Note what this rule does **not** license. A missing platform event excuses the
+*stimulus* a test could not produce; it never excuses leaving the panel in a
+state the user cannot escape. That postcondition — an open notch with the
+pointer elsewhere always closes — is asserted separately, deterministically,
+against the real controller-owned notch with the pointer injected, so it runs
+on every single run rather than only when the flaky stimulus happens to work.
+
+### Hover failures are attributed, not guessed at
+
+`HoverProbe` counts three stages: crossings AppKit delivered, crossings
+LocalNook forwarded, and the resulting state. "Hover did not open the notch"
+therefore resolves to one of four causes:
+
+| Outcome | Meaning | Ours? |
+|---|---|---|
+| `preconditionUnmet` | The panel never got under the pointer — the window server clamped the frame | No |
+| `noPlatformEvent` | AppKit produced no crossing at all | No |
+| `eventDropped` | A crossing arrived and was not forwarded | **Yes** |
+| `wrongState` | It was forwarded and the state came out wrong | **Yes** |
+
+Every hover result prints `probe: enters=N exits=N handled=N` alongside it, so
+a run that passed and a run that did not can be compared after the fact.
 
 Covered:
 
