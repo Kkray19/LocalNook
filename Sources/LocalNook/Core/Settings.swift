@@ -194,6 +194,10 @@ final class Settings: ObservableObject {
     @Pref("mirror.deviceID", String?.none) var mirrorDeviceID: String?
     @Pref("mirror.flipHorizontally", true) var mirrorFlipHorizontally: Bool
 
+    // MARK: Shortcuts
+
+    @Pref("shortcuts.pinned", [String]()) var pinnedShortcutNames: [String]
+
     // MARK: Sessions (Claude Code / Codex monitoring)
 
     @Pref("sessions.watchClaudeCode", true) var watchClaudeCode: Bool

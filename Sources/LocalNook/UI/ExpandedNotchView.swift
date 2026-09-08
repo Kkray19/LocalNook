@@ -106,15 +106,15 @@ struct ExpandedNotchView: View {
     private var detail: some View {
         switch effectiveWidget {
         case .media: MediaWidgetView()
-        case .shelf: PlaceholderWidget(kind: .shelf)
-        case .calendar: PlaceholderWidget(kind: .calendar)
-        case .mirror: PlaceholderWidget(kind: .mirror)
-        case .timers: PlaceholderWidget(kind: .timers)
-        case .notes: PlaceholderWidget(kind: .notes)
-        case .todo: PlaceholderWidget(kind: .todo)
-        case .shortcuts: PlaceholderWidget(kind: .shortcuts)
-        case .sessions: PlaceholderWidget(kind: .sessions)
-        case .stats: PlaceholderWidget(kind: .stats)
+        case .shelf: ShelfWidgetView(model: model)
+        case .calendar: CalendarWidgetView()
+        case .mirror: MirrorWidgetView()
+        case .timers: TimerWidgetView()
+        case .notes: NotesWidgetView()
+        case .todo: TodoWidgetView()
+        case .shortcuts: ShortcutsWidgetView()
+        case .sessions: SessionsWidgetView()
+        case .stats: StatsWidgetView()
         }
     }
 

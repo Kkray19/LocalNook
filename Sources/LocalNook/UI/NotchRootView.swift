@@ -6,7 +6,9 @@
 //  Licensed under the GNU General Public License v3.0 or later. See LICENSE.
 //
 
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Root of the panel's SwiftUI hierarchy.
 ///
@@ -35,11 +37,24 @@ struct NotchRootView: View {
         isOpen ? NotchGeometry.openSize.height : model.effectiveClosedHeight
     }
 
+    /// Drop target size. When closed this deliberately stays close to the notch
+    /// itself — the panel is far wider than the visible notch, and a drop zone
+    /// spanning the whole panel would hijack drags passing near the screen top.
+    private var dropTargetSize: CGSize {
+        if isOpen { return NotchGeometry.openSize }
+        return CGSize(
+            width: model.closedSize.width + 90,
+            height: max(model.effectiveClosedHeight, 6) + 26
+        )
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             // Full-panel transparent catcher so SwiftUI hover/drop events fire
             // anywhere in the panel, not just over the drawn shape.
             Color.clear
+
+            dropTarget
 
             notchBody
                 .frame(
@@ -60,6 +75,72 @@ struct NotchRootView: View {
                 model.scheduleClose()
             }
         }
+    }
+
+    /// Invisible catcher that expands the notch when a drag arrives over it.
+    private var dropTarget: some View {
+        Color.clear
+            .frame(width: dropTargetSize.width, height: dropTargetSize.height)
+            .contentShape(Rectangle())
+            .onDrop(
+                of: [.fileURL, .url, .image, .text, .plainText],
+                isTargeted: Binding(
+                    get: { model.isDragTargeting },
+                    set: { handleDragTargeting($0) }
+                )
+            ) { providers in
+                receive(providers)
+            }
+    }
+
+    /// Auto-expands onto the shelf while something is being dragged over the
+    /// notch, and lets it collapse again once the drag leaves.
+    private func handleDragTargeting(_ targeting: Bool) {
+        guard settings.shelfAutoExpandOnDrag else { return }
+        model.isDragTargeting = targeting
+        if targeting {
+            model.selectedWidget = .shelf
+            model.open()
+        } else if model.state == .open {
+            model.scheduleClose()
+        }
+    }
+
+    private func receive(_ providers: [NSItemProvider]) -> Bool {
+        model.isDragTargeting = false
+        model.selectedWidget = .shelf
+        model.open()
+
+        var handled = false
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                handled = true
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url, url.isFileURL else { return }
+                    Task { @MainActor in ShelfStore.shared.add(.fromFile(url)) }
+                }
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
+                handled = true
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in
+                        ShelfStore.shared.add(url.isFileURL ? .fromFile(url) : .fromURL(url))
+                    }
+                }
+            } else if provider.canLoadObject(ofClass: NSString.self) {
+                handled = true
+                _ = provider.loadObject(ofClass: NSString.self) { text, _ in
+                    guard let text = text as? String else { return }
+                    Task { @MainActor in
+                        let board = NSPasteboard(name: .init("com.localnook.drop"))
+                        board.clearContents()
+                        board.setString(text, forType: .string)
+                        _ = ShelfStore.shared.ingest(board)
+                    }
+                }
+            }
+        }
+        return handled
     }
 
     private var notchBody: some View {

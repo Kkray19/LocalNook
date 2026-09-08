@@ -27,12 +27,11 @@ enum PreviewRenderer {
             at: outputDirectory, withIntermediateDirectories: true
         )
 
-        let scenes: [(name: String, open: Bool, widget: WidgetKind)] = [
-            ("closed", false, .media),
-            ("open-media", true, .media),
-            ("open-calendar", true, .calendar),
-            ("open-shelf", true, .shelf),
+        // Cover every widget so each one can be reviewed at its real size.
+        var scenes: [(name: String, open: Bool, widget: WidgetKind)] = [
+            ("closed", false, .media)
         ]
+        scenes += WidgetKind.allCases.map { ("open-\($0.rawValue)", true, $0) }
 
         for scene in scenes {
             let model = NotchViewModel(screenID: NSScreen.main?.stableID)

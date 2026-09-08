@@ -127,6 +127,10 @@ final class Permissions: ObservableObject {
                 break  // async, filled in below
             }
         }
+        guard AppInfo.isRunningFromBundle else {
+            states[.notifications] = .unknown
+            return
+        }
         Task { [weak self] in
             let settings = await UNUserNotificationCenter.current().notificationSettings()
             let state: PermissionState = switch settings.authorizationStatus {
@@ -150,8 +154,9 @@ final class Permissions: ObservableObject {
 
     private static func mapEvent(_ status: EKAuthorizationStatus) -> PermissionState {
         switch status {
-        case .fullAccess, .authorized: .granted
-        case .writeOnly: .granted
+        case .fullAccess: .granted
+        // Write-only cannot read events, so the Calendar widget stays unusable.
+        case .writeOnly: .denied
         case .denied, .restricted: .denied
         case .notDetermined: .notDetermined
         @unknown default: .unknown

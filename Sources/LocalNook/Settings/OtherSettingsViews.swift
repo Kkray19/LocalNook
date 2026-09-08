@@ -144,6 +144,18 @@ struct AboutSettingsView: View {
 }
 
 enum AppInfo {
+    /// Whether the process is running from a real `.app` bundle.
+    ///
+    /// Several system APIs — `UNUserNotificationCenter.current()` most sharply —
+    /// raise an uncaught Objective-C exception when there is no bundle proxy,
+    /// which happens when the bare executable is run straight from the build
+    /// directory. Guarding on this keeps `swift run` and the preview renderer
+    /// from taking the whole process down.
+    static var isRunningFromBundle: Bool {
+        Bundle.main.bundleIdentifier != nil
+            && Bundle.main.bundleURL.pathExtension == "app"
+    }
+
     static var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
     }
