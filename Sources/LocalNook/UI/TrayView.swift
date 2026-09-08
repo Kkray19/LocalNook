@@ -94,9 +94,49 @@ struct TrayView: View {
         .padding(.horizontal, 20)
     }
 
+    /// Width the tiles need, so the view can tell whether any are off-screen.
+    private var contentWidth: CGFloat {
+        let count = CGFloat(shelf.items.count)
+        return count * TrayTile.width
+            + max(0, count - 1) * Self.tileSpacing
+            + Self.scrollPadding * 2
+    }
+
+    private static let tileSpacing: CGFloat = 4
+    private static let scrollPadding: CGFloat = 10
+
     private var items: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 4) {
+        GeometryReader { geometry in
+            let hasMore = contentWidth > geometry.size.width + 1
+            itemsRow
+                .overlay(alignment: .trailing) {
+                    // Thirteen items, seven visible, and nothing at all said the
+                    // other six existed: no partial tile peeking, no scrollbar
+                    // until you already knew to scroll, and only a small "13
+                    // items" counter in the opposite corner. A row that hides
+                    // half its contents silently is the same defect as a widget
+                    // reachable from nowhere, in a smaller costume.
+                    //
+                    // A chevron rather than the usual gradient fade, because the
+                    // panel is solid black under one material and translucent
+                    // under Liquid Glass — a fade to a fixed colour would be
+                    // wrong under the other.
+                    if hasMore {
+                        Image(systemName: "chevron.compact.right")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.tertiaryText)
+                            .padding(.trailing, 3)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(NotchMotion.quick, value: hasMore)
+        }
+    }
+
+    private var itemsRow: some View {
+        ScrollView(.horizontal, showsIndicators: true) {
+            HStack(alignment: .top, spacing: Self.tileSpacing) {
                 ForEach(shelf.items) { item in
                     TrayTile(item: item, isSelected: shelf.selection.contains(item.id))
                         .onTapGesture {
@@ -136,7 +176,7 @@ struct TrayView: View {
                         }
                 }
             }
-            .padding(10)
+            .padding(Self.scrollPadding)
         }
     }
 
@@ -198,6 +238,10 @@ private struct TrayAction: View {
 }
 
 private struct TrayTile: View {
+    /// Label frame plus its horizontal padding. Shared with TrayView so the
+    /// "is anything off-screen" test cannot drift from the actual tile size.
+    static let width: CGFloat = 90 + 3 * 2
+
     let item: ShelfItem
     let isSelected: Bool
 
