@@ -81,6 +81,7 @@ enum SelfTest {
             testLiquidGlass()
             testPrivacyBoundaries()
             testTrayWithRealFiles()
+            testEveryWidgetIsReachable()
             testInteractionOwnership()
             testControllerTeardown()
             testMissedCrossingRecovery()
@@ -1164,6 +1165,83 @@ enum SelfTest {
         panel.orderOut(nil)
         panel.close()
         settings.openDelay = originalDelay
+    }
+
+    /// Every enabled widget must be reachable from somewhere.
+    ///
+    /// The invariant that was actually broken in shipping code: `ToolsView`
+    /// excluded everything *assigned* to the Dashboard, while the Dashboard
+    /// only shows what *fits*. Assign more than fits and the remainder lived in
+    /// neither place — and the overflow control, whose whole job is to reach
+    /// them, navigated to the page that had just excluded them.
+    ///
+    /// Checked across the full width range rather than at one width, because
+    /// the failure only appears once the assigned set stops fitting.
+    private static func testEveryWidgetIsReachable() {
+        section("Widget reachability")
+        let settings = Settings.shared
+        let originalDashboard = settings.dashboardWidgetIDs
+        let originalEnabled = settings.enabledWidgetIDs
+        defer {
+            settings.dashboardWidgetIDs = originalDashboard
+            settings.enabledWidgetIDs = originalEnabled
+        }
+
+        settings.enabledWidgetIDs = WidgetKind.allCases.map(\.rawValue)
+        // Everything that may sit on the Dashboard, assigned to it — the
+        // configuration a user reaches by switching them on in Settings.
+        settings.dashboardWidgetIDs = WidgetKind.allCases
+            .filter(\.suitsDashboard).map(\.rawValue)
+
+        let assigned = settings.dashboardWidgets
+        check("more widgets are assigned to the dashboard than a narrow panel fits",
+              assigned.count > 1, "only \(assigned.count) assigned")
+
+        var widthsChecked = 0
+        var firstFailure: String?
+        var sawOverflow = false
+        for width in stride(from: 320.0, through: 1400.0, by: 20.0) {
+            let plan = DashboardView.plan(assigned, into: width)
+            if !plan.overflow.isEmpty { sawOverflow = true }
+
+            // What Tools offers at this width, mirroring ToolsView.
+            let visible = Set(plan.visible.map(\.rawValue))
+            let inTools = settings.orderedWidgets.filter {
+                $0 != .shelf && !visible.contains($0.rawValue)
+            }
+
+            let reachable = Set(plan.visible.map(\.rawValue))
+                .union(inTools.map(\.rawValue))
+            let expected = Set(settings.orderedWidgets.filter { $0 != .shelf }.map(\.rawValue))
+            if reachable != expected, firstFailure == nil {
+                firstFailure = "at \(Int(width))pt, unreachable: "
+                    + expected.subtracting(reachable).sorted().joined(separator: ", ")
+            }
+            widthsChecked += 1
+        }
+
+        check("the overflow case is actually exercised", sawOverflow,
+              "no width produced an overflow, so the check proved nothing")
+        check("every enabled widget is reachable at all \(widthsChecked) widths",
+              firstFailure == nil, firstFailure ?? "")
+
+        // And the specific promise the overflow control makes: what it counts
+        // as hidden is exactly what Tools then offers.
+        let narrow = DashboardView.plan(assigned, into: 420)
+        if !narrow.overflow.isEmpty {
+            let visible = Set(narrow.visible.map(\.rawValue))
+            let inTools = Set(settings.orderedWidgets
+                .filter { $0 != .shelf && !visible.contains($0.rawValue) }
+                .map(\.rawValue))
+            let hidden = Set(narrow.overflow.map(\.rawValue))
+            check("everything the overflow badge counts is offered by Tools",
+                  hidden.isSubset(of: inTools),
+                  "counted but not offered: "
+                  + hidden.subtracting(inTools).sorted().joined(separator: ", "))
+        } else {
+            check("a narrow dashboard overflows so the badge can be checked", false,
+                  "420pt fitted everything")
+        }
     }
 
     /// Teardown, restart, and interaction ownership.

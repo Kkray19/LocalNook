@@ -16,33 +16,51 @@ struct ToolsView: View {
     @ObservedObject var model: NotchViewModel
     @EnvironmentObject var settings: Settings
 
-    /// Everything enabled, minus what is already visible on the Dashboard —
-    /// there is no point offering a second route to something on screen.
-    private var tools: [WidgetKind] {
-        let onDashboard = Set(settings.dashboardWidgets.map(\.rawValue))
+    /// Everything enabled, minus what is genuinely **visible** on the Dashboard.
+    ///
+    /// The distinction matters and getting it wrong made widgets unreachable.
+    /// This used to exclude everything *assigned* to the Dashboard, on the
+    /// reasoning that there is no point offering a second route to something
+    /// already on screen. But a widget assigned to the Dashboard is not
+    /// necessarily on it: when more are assigned than fit, the rest move into
+    /// the overflow control — whose action is to bring the user *here*. So the
+    /// three widgets the overflow badge counted were excluded from the one page
+    /// it sent people to, and were reachable from nowhere at all.
+    ///
+    /// Computed at this page's own width. Tools and Dashboard render in the
+    /// same container, so the same plan yields the same split; and if the two
+    /// ever disagree, the error falls the safe way — a narrower Tools shows
+    /// *more*, which is a redundant route rather than a missing one.
+    private func tools(inWidth width: CGFloat) -> [WidgetKind] {
+        let visibleOnDashboard = Set(
+            DashboardView.plan(settings.dashboardWidgets, into: width).visible.map(\.rawValue)
+        )
         return settings.orderedWidgets.filter {
-            $0 != .shelf && !onDashboard.contains($0.rawValue)
+            $0 != .shelf && !visibleOnDashboard.contains($0.rawValue)
         }
     }
 
     var body: some View {
-        if tools.isEmpty {
-            CompactMessage(
-                symbol: "wrench.and.screwdriver",
-                title: "Every widget is on the Dashboard",
-                detail: "Enable more in Settings ▸ Widgets."
-            )
-        } else {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 7) {
-                    ForEach(tools) { tool in
-                        ToolTile(tool: tool) {
-                            withAnimation(NotchMotion.content) { model.focusedTool = tool }
+        GeometryReader { geometry in
+            let tools = tools(inWidth: geometry.size.width)
+            if tools.isEmpty {
+                CompactMessage(
+                    symbol: "wrench.and.screwdriver",
+                    title: "Every widget is on the Dashboard",
+                    detail: "Enable more in Settings ▸ Widgets."
+                )
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 7) {
+                        ForEach(tools) { tool in
+                            ToolTile(tool: tool) {
+                                withAnimation(NotchMotion.content) { model.focusedTool = tool }
+                            }
                         }
                     }
+                    .padding(.horizontal, 2)
+                    .padding(.vertical, 3)
                 }
-                .padding(.horizontal, 2)
-                .padding(.vertical, 3)
             }
         }
     }
