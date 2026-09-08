@@ -487,7 +487,7 @@ final class NotchWindowController: NSObject {
         view.autoresizingMask = [.width, .height]
 
         view.onHoverChange = { [weak model] hovering in
-            guard let model else { return }
+            guard let model, !NotchWindowController.shared.ignoresLiveInput else { return }
             model.isHovering = hovering
             if hovering {
                 model.scheduleOpen()
@@ -661,6 +661,22 @@ final class NotchWindowController: NSObject {
     /// down, and without this seam a test can only exercise the *stale* case and
     /// would wrongly conclude that live drags get interrupted.
     var mouseButtonsAreDown: () -> Bool = { NSEvent.pressedMouseButtons != 0 }
+
+    /// Suppresses every *live* input path into the notch.
+    ///
+    /// The deterministic suite injects pointer position, button state, display
+    /// configuration and scheduling — but two paths were never injected and
+    /// stayed wired to the real machine: the global click monitor, and the
+    /// tracking areas on the real panels. So a click or a pointer movement by
+    /// somebody actually using the Mac closed notches mid-assertion, and checks
+    /// that had run clean for hundreds of unattended runs began failing the
+    /// moment a person was at the keyboard. The failures looked like product
+    /// defects — "an open notch schedules the recovery check", attributed to
+    /// `outsideClick` — and were nothing of the kind.
+    ///
+    /// "Deterministic" has to mean it, so the suite closes these two doors for
+    /// its duration rather than hoping nobody touches the machine.
+    var ignoresLiveInput = false
 
     /// Where the pointer is.
     ///
@@ -912,6 +928,7 @@ final class NotchWindowController: NSObject {
     }
 
     private func handleGlobalClick() {
+        guard !ignoresLiveInput else { return }
         let mouse = pointerLocation()
         for (id, model) in models {
             guard let screen = NSScreen.screen(withStableID: id) else { continue }

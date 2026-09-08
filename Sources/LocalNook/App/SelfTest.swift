@@ -64,6 +64,12 @@ enum SelfTest {
 
         if suite != .integration {
             print("== DETERMINISTIC ==")
+            // Close the two live-input doors for the whole deterministic half.
+            // Everything here injects what it needs; a real click or a real
+            // pointer movement is an uncontrolled variable, and leaving them
+            // open made these checks fail whenever somebody was actually using
+            // the Mac. Restored before the integration half, which needs them.
+            NotchWindowController.shared.ignoresLiveInput = true
             testEnvironment()
             testGeometry()
             testPreferences()
@@ -81,6 +87,7 @@ enum SelfTest {
             testLiquidGlass()
             testPrivacyBoundaries()
             testTrayWithRealFiles()
+            testClearingTheTrayNeedsConfirming()
             testEveryWidgetIsReachable()
             testInteractionOwnership()
             testControllerTeardown()
@@ -90,6 +97,8 @@ enum SelfTest {
             testScriptableControl()
             StabilizationTests.run()
         }
+
+        NotchWindowController.shared.ignoresLiveInput = false
 
         let deterministic = Tally(passed: passed, failed: failed, unverified: unverified)
 
@@ -1165,6 +1174,63 @@ enum SelfTest {
         panel.orderOut(nil)
         panel.close()
         settings.openDelay = originalDelay
+    }
+
+    /// Clearing the Tray must take two deliberate presses.
+    ///
+    /// Found in acceptance: one unguarded click on a trash icon — sitting
+    /// beside an ordinary "remove selected" button — emptied a thirteen-item
+    /// Tray with no confirmation and no undo. The user's own files survived,
+    /// because only LocalNook-created files are ever deleted, but the curated
+    /// list did not.
+    private static func testClearingTheTrayNeedsConfirming() {
+        section("Tray clearing")
+        let shelf = ShelfStore.shared
+        let saved = shelf.items
+        defer {
+            shelf.cancelClear()
+            shelf.restoreForTesting(saved)
+        }
+
+        let dir = AppInfo.testDirectory.appendingPathComponent("clear", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("keep-me.txt")
+        try? "original".write(to: file, atomically: true, encoding: .utf8)
+
+        shelf.restoreForTesting([
+            ShelfItem(id: UUID(), kind: .file, name: "keep-me.txt", path: file.path,
+                      payload: nil, addedAt: Date(), isOwned: false)
+        ])
+        check("a tray to clear", shelf.items.count == 1)
+
+        // 1. Confirming without asking first must do nothing at all.
+        check("clearing without arming is refused", shelf.confirmClear() == false)
+        check("and nothing was cleared", shelf.items.count == 1)
+
+        // 2. Arming alone must not clear.
+        shelf.requestClear()
+        check("asking to clear arms it", shelf.clearIsArmed)
+        check("arming alone clears nothing", shelf.items.count == 1)
+
+        // 3. Cancelling disarms, and a later confirm is refused again.
+        shelf.cancelClear()
+        check("cancelling disarms", !shelf.clearIsArmed)
+        check("a cancelled clear cannot be confirmed", shelf.confirmClear() == false)
+        check("still nothing cleared", shelf.items.count == 1)
+
+        // 4. Arm then confirm actually clears.
+        shelf.requestClear()
+        check("arm then confirm clears", shelf.confirmClear())
+        check("the tray is empty", shelf.items.isEmpty)
+        check("confirming disarms", !shelf.clearIsArmed)
+
+        // 5. The file the user owns is never touched by any of it.
+        check("clearing never deletes a file the user owns",
+              (try? String(contentsOf: file, encoding: .utf8)) == "original")
+
+        // 6. An empty tray cannot be armed, so the confirm state cannot linger.
+        shelf.requestClear()
+        check("an empty tray does not arm", !shelf.clearIsArmed)
     }
 
     /// Every enabled widget must be reachable from somewhere.

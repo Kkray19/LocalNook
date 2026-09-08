@@ -115,8 +115,23 @@ struct ShelfWidgetView: View {
                 }
             }
 
-            ShelfActionButton(symbol: "trash", help: "Clear the shelf") {
-                shelf.clearAll()
+            // Same two-press gate as the Tray toolbar — this is the same
+            // destructive action wearing the same icon on another surface.
+            if shelf.clearIsArmed {
+                Button { shelf.confirmClear() } label: {
+                    Text("Clear \(shelf.items.count)?")
+                        .font(Theme.caption)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.red.opacity(0.85)))
+                }
+                .buttonStyle(.plain)
+                .help("Clear the shelf — click again to confirm")
+            } else {
+                ShelfActionButton(symbol: "trash", help: "Clear the shelf…") {
+                    shelf.requestClear()
+                }
             }
         }
     }

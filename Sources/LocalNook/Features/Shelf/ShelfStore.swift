@@ -95,6 +95,60 @@ final class ShelfStore: NSObject, ObservableObject {
         selection.removeAll()
     }
 
+    /// Replaces the contents wholesale. Test-only: the clearing tests need a
+    /// known tray and must put the user's back exactly as they found it.
+    func restoreForTesting(_ newItems: [ShelfItem]) {
+        items = newItems
+        selection.removeAll()
+        save()
+    }
+
+    // MARK: Clearing
+
+    /// Whether a clear has been asked for and is waiting to be confirmed.
+    ///
+    /// Clearing the Tray drops every entry and deletes the files LocalNook
+    /// itself created. It used to happen on one unguarded click of a trash
+    /// icon sitting next to an ordinary "remove selected" button, and during
+    /// acceptance that click took thirteen items with it. It now takes two
+    /// presses, and the first one expires on its own so an armed button is
+    /// never left lying around.
+    @Published private(set) var clearIsArmed = false
+    private var clearArmTask: Task<Void, Never>?
+
+    /// How long an armed clear stays armed.
+    static let clearArmingWindow: Duration = .seconds(4)
+
+    func requestClear() {
+        guard !items.isEmpty else { return }
+        clearIsArmed = true
+        clearArmTask?.cancel()
+        clearArmTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.clearArmingWindow)
+            guard !Task.isCancelled else { return }
+            self?.clearIsArmed = false
+            self?.clearArmTask = nil
+        }
+    }
+
+    func cancelClear() {
+        clearArmTask?.cancel()
+        clearArmTask = nil
+        clearIsArmed = false
+    }
+
+    /// Clears only when a clear was asked for first. Returns whether it did.
+    ///
+    /// The gate lives here rather than in the view so it cannot be skipped by
+    /// a second call site added later.
+    @discardableResult
+    func confirmClear() -> Bool {
+        guard clearIsArmed else { return false }
+        cancelClear()
+        clearAll()
+        return true
+    }
+
     func clearAll() {
         for item in items where item.isOwned {
             if let url = deletableOwnedURL(item) { try? FileManager.default.removeItem(at: url) }

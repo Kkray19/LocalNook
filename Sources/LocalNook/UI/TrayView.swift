@@ -73,6 +73,10 @@ struct TrayView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(NotchMotion.quick, value: shelf.clearIsArmed)
+        // Leaving the Tray disarms it, so a half-pressed clear cannot survive
+        // into a later visit and fire on a single click.
+        .onDisappear { shelf.cancelClear() }
     }
 
     private var emptyState: some View {
@@ -210,7 +214,25 @@ struct TrayView: View {
                     shelf.removeSelected()
                 }
             }
-            TrayAction(symbol: "trash", help: "Clear the Tray") { shelf.clearAll() }
+            // Two presses, never one. The first arms and says what will
+            // happen; the second does it. See ShelfStore.requestClear.
+            if shelf.clearIsArmed {
+                Button {
+                    shelf.confirmClear()
+                } label: {
+                    Text("Clear \(shelf.items.count)?")
+                        .font(Theme.caption)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.red.opacity(0.85)))
+                }
+                .buttonStyle(.plain)
+                .help("Clear the Tray — click again to confirm")
+                .transition(.opacity)
+            } else {
+                TrayAction(symbol: "trash", help: "Clear the Tray…") { shelf.requestClear() }
+            }
         }
         .padding(.horizontal, 2)
     }

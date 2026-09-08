@@ -249,6 +249,7 @@ enum AppInfo {
 struct WidgetDetailSettingsView: View {
     @EnvironmentObject var settings: Settings
     @ObservedObject private var calendar = CalendarManager.shared
+    @LNState private var confirmingClearShelf = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -270,7 +271,26 @@ struct WidgetDetailSettingsView: View {
                     Text("\(ShelfStore.shared.items.count) item(s) on the shelf")
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button("Clear shelf", role: .destructive) { ShelfStore.shared.clearAll() }
+                    Button("Clear shelf…", role: .destructive) { confirmingClearShelf = true }
+                        .confirmationDialog(
+                            "Clear the shelf?",
+                            isPresented: $confirmingClearShelf,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Clear \(ShelfStore.shared.items.count) item(s)",
+                                   role: .destructive) {
+                                ShelfStore.shared.requestClear()
+                                ShelfStore.shared.confirmClear()
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            // Worth saying plainly: references to your own files
+                            // are only forgotten, but anything LocalNook created
+                            // for you — a dragged snippet of text, say — is
+                            // deleted from disk and cannot be recovered.
+                            Text("Your own files stay where they are. Notes and "
+                                 + "snippets LocalNook saved for you are deleted.")
+                        }
                 }
             }
 

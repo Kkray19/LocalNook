@@ -110,6 +110,9 @@ struct NotchRootView: View {
     /// top of the screen.
     private var hoverRegion: some View {
         HoverTracker { hovering in
+            // The other half of the live-input door the deterministic suite
+            // closes; see NotchWindowController.ignoresLiveInput.
+            guard !NotchWindowController.shared.ignoresLiveInput else { return }
             guard !model.isSuppressed else { return }
             model.isHovering = hovering
             if hovering {
