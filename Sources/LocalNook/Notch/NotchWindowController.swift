@@ -17,6 +17,8 @@ import SwiftUI
 /// Commands LocalNook accepts from outside the app.
 enum NotchCommand: Sendable {
     case toggle, open, close
+    /// Open the notch straight onto a page.
+    case show(NotchPage)
     /// Not scriptable — raised by the system lock/unlock notifications.
     case screenLocked, screenUnlocked
 }
@@ -33,6 +35,9 @@ nonisolated final class DistributedCommandBridge: NSObject, @unchecked Sendable 
         ("com.localnook.toggle", .toggle),
         ("com.localnook.open", .open),
         ("com.localnook.close", .close),
+        ("com.localnook.dashboard", .show(.dashboard)),
+        ("com.localnook.tray", .show(.tray)),
+        ("com.localnook.tools", .show(.tools)),
         ("com.apple.screenIsLocked", .screenLocked),
         ("com.apple.screenIsUnlocked", .screenUnlocked),
     ]
@@ -340,7 +345,7 @@ final class NotchWindowController: NSObject {
         }
         view.onDragEnter = { [weak model] in
             guard let model, Settings.shared.shelfAutoExpandOnDrag else { return }
-            model.selectedWidget = .shelf
+            model.page = .tray
             model.open()
         }
 
@@ -664,6 +669,10 @@ final class NotchWindowController: NSObject {
         case .toggle: model.toggle()
         case .open: model.open()
         case .close: model.close()
+        case let .show(page):
+            model.page = page
+            model.focusedTool = nil
+            model.open()
         case .screenLocked: setLocked(true)
         case .screenUnlocked: setLocked(false)
         }

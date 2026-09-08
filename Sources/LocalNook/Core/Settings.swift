@@ -170,8 +170,8 @@ final class Settings: ObservableObject {
     @Pref("notch.heightMode", NotchHeightMode.matchRealNotch) var notchHeightMode: NotchHeightMode
     @Pref("notch.customHeight", 32.0) var customNotchHeight: Double
     @Pref("notch.widthAdjustment", 0.0) var notchWidthAdjustment: Double
-    @Pref("notch.openWidth", 640.0) var openWidth: Double
-    @Pref("notch.openHeight", 190.0) var openHeight: Double
+    @Pref("notch.openWidth", 720.0) var openWidth: Double
+    @Pref("notch.openHeight", 168.0) var openHeight: Double
     @Pref("notch.contentPadding", 14.0) var contentPadding: Double
     @Pref("notch.cornerRadius", 22.0) var openCornerRadius: Double
     @Pref("notch.closedCornerRadius", 10.0) var closedCornerRadius: Double
@@ -212,6 +212,30 @@ final class Settings: ObservableObject {
         var ids = Set(enabledWidgetIDs)
         if enabled { ids.insert(kind.rawValue) } else { ids.remove(kind.rawValue) }
         enabledWidgetIDs = WidgetKind.allCases.map(\.rawValue).filter { ids.contains($0) }
+    }
+
+    /// Widgets shown side by side on the Dashboard, in order.
+    @Pref("widgets.dashboard", ["media", "mirror", "calendar"]) var dashboardWidgetIDs: [String]
+
+    /// Dashboard widgets that are both chosen *and* enabled.
+    ///
+    /// A widget switched off in Settings is dropped rather than replaced — a
+    /// silent fallback would put back something the user deliberately removed.
+    var dashboardWidgets: [WidgetKind] {
+        let enabled = Set(enabledWidgetIDs)
+        var seen = Set<String>()
+        return dashboardWidgetIDs.compactMap { id in
+            guard enabled.contains(id), seen.insert(id).inserted,
+                  let kind = WidgetKind(rawValue: id), kind.suitsDashboard
+            else { return nil }
+            return kind
+        }
+    }
+
+    func setDashboardWidget(_ kind: WidgetKind, on: Bool) {
+        var ids = dashboardWidgetIDs.filter { $0 != kind.rawValue }
+        if on { ids.append(kind.rawValue) }
+        dashboardWidgetIDs = ids
     }
 
     // MARK: Live activities

@@ -45,6 +45,17 @@ final class CalendarManager: ObservableObject {
         authorization == .denied || authorization == .restricted || authorization == .writeOnly
     }
 
+    /// Refreshes events **only** if consent already exists.
+    ///
+    /// Deliberately never prompts. The Calendar section sits on the Dashboard,
+    /// which opens on hover — triggering a system permission dialog because the
+    /// pointer brushed the notch would be indefensible. Consent is asked for by
+    /// an explicit button instead.
+    func refreshIfAuthorized() {
+        authorization = EKEventStore.authorizationStatus(for: .event)
+        if hasAccess { reload() }
+    }
+
     /// Called when the widget appears. Only prompts if the user has never been asked.
     func activate() {
         authorization = EKEventStore.authorizationStatus(for: .event)

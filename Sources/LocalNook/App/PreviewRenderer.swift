@@ -31,11 +31,32 @@ enum PreviewRenderer {
         var scenes: [(name: String, open: Bool, widget: WidgetKind)] = [
             ("closed", false, .media),
             ("closed-activity", false, .media),
+            ("dashboard-populated", true, .media),
+            ("tray-populated", true, .shelf),
+            ("tools", true, .timers),
         ]
         scenes += WidgetKind.allCases.map { ("open-\($0.rawValue)", true, $0) }
 
         for scene in scenes {
             let model = NotchViewModel(screenID: NSScreen.main?.stableID)
+
+            // Stage representative content so composed layouts can be judged,
+            // rather than reviewing a panel full of empty states.
+            if scene.name == "dashboard-populated" {
+                MediaManager.shared.previewInject(NowPlaying(
+                    sourceID: "music", sourceName: "Music", state: .playing,
+                    title: "Fourth of July", artist: "Sufjan Stevens",
+                    album: "Carrie & Lowell", duration: 292, position: 96,
+                    positionSampledAt: Date(), artworkKey: "preview"
+                ))
+                model.page = .dashboard
+            } else if scene.name == "tray-populated" {
+                model.page = .tray
+            } else if scene.name == "tools" {
+                model.page = .tools
+            } else {
+                MediaManager.shared.previewInject(nil)
+            }
             if scene.name == "closed-activity" {
                 LiveActivityCenter.shared.previewInject(LiveActivity(
                     id: "preview", symbol: "waveform", tint: .white,

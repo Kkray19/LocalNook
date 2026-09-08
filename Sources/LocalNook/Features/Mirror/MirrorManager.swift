@@ -82,6 +82,9 @@ final class MirrorManager: NSObject, ObservableObject {
     @Published private(set) var devices: [AVCaptureDevice] = []
     @Published private(set) var isRunning = false
     @Published private(set) var failureMessage: String?
+    /// True once the user has actually asked for the camera in this session.
+    /// Guards against any code path starting capture implicitly.
+    private(set) var userRequestedCamera = false
 
     private let box: any CaptureSessionDriver
     private let authorizationStatus: () -> AVAuthorizationStatus
@@ -157,9 +160,26 @@ final class MirrorManager: NSObject, ObservableObject {
 
     // MARK: Lifecycle
 
-    /// Called when the Mirror widget appears. Prompts only if never asked.
+    /// Explicit, user-initiated request to start the camera.
+    ///
+    /// The Dashboard's Mirror card calls this on press. Nothing else may start
+    /// capture: opening the notch or hovering it must never turn the camera on.
+    func requestStart(owner: UUID? = nil) {
+        userRequestedCamera = true
+        activate(owner: owner)
+    }
+
+    /// Registers a preview owner and, if the user has asked for the camera,
+    /// starts capture.
+    ///
+    /// The `userRequestedCamera` gate is the single choke point that guarantees
+    /// the camera cannot come on implicitly. The Mirror widget can appear for
+    /// reasons the user did not intend — the notch opening on hover, a panel
+    /// rebuilding after a display change, a preview being rendered — and none of
+    /// those may light the camera. Only `requestStart()` sets the gate.
     func activate(owner: UUID? = nil) {
         if let owner { previewOwners.insert(owner) }
+        guard userRequestedCamera else { return }
         captureDemand.activate()
         authorization = authorizationStatus()
         switch authorization {
@@ -171,6 +191,11 @@ final class MirrorManager: NSObject, ObservableObject {
         default:
             break
         }
+    }
+
+    /// Forgets the user's request, so the next appearance does not auto-start.
+    func forgetCameraRequest() {
+        userRequestedCamera = false
     }
 
     func requestAccess() {
@@ -201,7 +226,12 @@ final class MirrorManager: NSObject, ObservableObject {
     /// green privacy light never stays on longer than the preview is visible.
     func release(owner: UUID) {
         previewOwners.remove(owner)
-        if previewOwners.isEmpty { stop() }
+        if previewOwners.isEmpty {
+            stop()
+            // Closing the last preview also withdraws consent for this session,
+            // so simply revisiting the widget later does not restart capture.
+            userRequestedCamera = false
+        }
     }
 
     func stop() {

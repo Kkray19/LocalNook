@@ -14,133 +14,147 @@ import SwiftUI
 ///
 /// 1. The top `closedHeight` points sit behind the physical camera housing, so
 ///    nothing readable may be placed there. That strip carries only the two
-///    small shoulders either side of the notch.
-/// 2. The panel is wide and short (640×190 by default), so the widget picker is
-///    a horizontal strip rather than a vertical rail — a rail tall enough for
-///    ten widgets would not fit.
+///    shoulders either side of the notch — navigation on the left, actions on
+///    the right — and the reserved centre stays exactly the notch's width.
+/// 2. The panel is wide and short, so everyday information is composed as
+///    columns on one Dashboard rather than one widget at a time behind a strip
+///    of icons.
 struct ExpandedNotchView: View {
     @ObservedObject var model: NotchViewModel
     @EnvironmentObject var settings: Settings
 
-    private var widgets: [WidgetKind] { settings.orderedWidgets }
-
-    /// Height of the strip hidden behind the physical notch.
-    private var shoulderHeight: CGFloat { max(model.closedSize.height, 24) }
+    /// Height of the strip hidden behind the physical camera housing.
+    private var shoulderHeight: CGFloat { max(model.closedSize.height, 26) }
 
     var body: some View {
         VStack(spacing: 0) {
             shoulders
                 .frame(height: shoulderHeight)
-            tabStrip
-                .padding(.top, 2)
-            detail
+            page
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.top, 8)
+                .padding(.top, 4)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(Theme.primaryText)
     }
 
-    /// The usable area either side of the camera housing: a title on the left,
-    /// a close affordance on the right.
+    // MARK: Shoulders
+
+    /// The usable area either side of the camera housing.
     private var shoulders: some View {
         HStack(spacing: 0) {
-            Text(effectiveWidget.label)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.85))
-                .lineLimit(1)
+            navigation
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            // Dead zone behind the physical notch.
-            Spacer(minLength: 0)
+            // Reserved for the camera housing — must stay centred and exactly
+            // the notch's width.
+            Color.clear
                 .frame(width: model.closedSize.width)
+                .allowsHitTesting(false)
 
-            HStack(spacing: 8) {
-                Spacer(minLength: 0)
+            actions
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
+    private var navigation: some View {
+        HStack(spacing: 3) {
+            ForEach(NotchPage.allCases) { item in
+                PageTab(
+                    page: item,
+                    isSelected: model.page == item,
+                    action: {
+                        withAnimation(NotchMotion.content) {
+                            model.page = item
+                            if item != .tools { model.focusedTool = nil }
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    private var actions: some View {
+        HStack(spacing: 10) {
+            if model.page == .tools, model.focusedTool != nil {
                 Button {
-                    NotificationCenter.default.post(name: .openSettingsRequested, object: nil)
+                    withAnimation(NotchMotion.content) { model.focusedTool = nil }
                 } label: {
-                    Image(systemName: "gearshape.fill")
+                    Image(systemName: "chevron.backward")
                         .font(.system(size: 10, weight: .semibold))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.white.opacity(0.55))
-                .help("LocalNook Settings")
-
-                Button { model.close() } label: {
-                    Image(systemName: "chevron.up")
-                        .font(.system(size: 10, weight: .bold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white.opacity(0.55))
-                .help("Collapse")
+                .foregroundStyle(Theme.secondaryText)
+                .help("Back to Tools")
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
+
+            Button {
+                NotificationCenter.default.post(name: .openSettingsRequested, object: nil)
+            } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.tertiaryText)
+            .help("LocalNook Settings")
+
+            Button { model.close() } label: {
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 10, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.tertiaryText)
+            .help("Collapse")
         }
     }
 
-    private var tabStrip: some View {
-        HStack(spacing: 3) {
-            ForEach(widgets) { widget in
-                let selected = effectiveWidget == widget
-                Button {
-                    withAnimation(NotchMotion.content) { model.selectedWidget = widget }
-                } label: {
-                    Image(systemName: widget.symbol)
-                        .font(.system(size: 11, weight: .medium))
-                        .frame(width: 30, height: 20)
-                        .background {
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(selected ? Color.white.opacity(0.18) : .clear)
-                        }
-                        .foregroundStyle(selected ? .white : .white.opacity(0.45))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(widget.label)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-    }
+    // MARK: Pages
 
     @ViewBuilder
-    private var detail: some View {
-        if widgets.isEmpty {
-            WidgetMessage(symbol: "square.grid.2x2", title: "No widgets enabled",
-                          detail: "Choose widgets in LocalNook Settings.")
-        } else { switch effectiveWidget {
-        case .media: MediaWidgetView()
-        case .shelf: ShelfWidgetView(model: model)
-        case .calendar: CalendarWidgetView()
-        case .mirror: MirrorWidgetView()
-        case .timers: TimerWidgetView()
-        case .notes: NotesWidgetView()
-        case .todo: TodoWidgetView()
-        case .shortcuts: ShortcutsWidgetView()
-        case .sessions: SessionsWidgetView()
-        case .stats: StatsWidgetView()
-        } }
-    }
-
-    /// Falls back to the first enabled widget if the selection was turned off.
-    private var effectiveWidget: WidgetKind {
-        widgets.contains(model.selectedWidget) ? model.selectedWidget : (widgets.first ?? .media)
+    private var page: some View {
+        switch model.page {
+        case .dashboard:
+            DashboardView(model: model)
+        case .tray:
+            TrayView(model: model)
+        case .tools:
+            if let tool = model.focusedTool {
+                FocusedToolView(tool: tool)
+            } else {
+                ToolsView(model: model)
+            }
+        }
     }
 }
 
-/// Shown for widgets that are not implemented yet, so the UI never renders an
-/// empty box with no explanation.
-struct PlaceholderWidget: View {
-    let kind: WidgetKind
+/// A navigation pill in the left shoulder.
+private struct PageTab: View {
+    let page: NotchPage
+    let isSelected: Bool
+    let action: () -> Void
+
+    @LNState private var isHovering = false
 
     var body: some View {
-        VStack(spacing: 6) {
-            Image(systemName: kind.symbol)
-                .font(.system(size: 20, weight: .light))
-                .foregroundStyle(.white.opacity(0.35))
-            Text("\(kind.label) is not built yet")
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.4))
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: page.symbol)
+                    .font(.system(size: 9.5, weight: .semibold))
+                Text(page.label)
+                    .font(.system(size: 11.5, weight: .semibold))
+            }
+            .foregroundStyle(isSelected ? Theme.primaryText : Theme.secondaryText)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background {
+                Capsule()
+                    .fill(isSelected ? Theme.surfaceActive
+                          : (isHovering ? Theme.surface : .clear))
+            }
+            .contentShape(Capsule())
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(NotchMotion.quick) { isHovering = hovering }
+        }
     }
 }

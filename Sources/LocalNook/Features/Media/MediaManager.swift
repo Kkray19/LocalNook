@@ -183,6 +183,13 @@ final class MediaManager: ObservableObject {
         }
     }
 
+    /// Injects a fixed track. Used only by `--render-preview` so populated
+    /// layouts can be reviewed without playing audio on the user's machine.
+    func previewInject(_ track: NowPlaying?) {
+        nowPlaying = track ?? .idle
+        artwork = nil
+    }
+
     // MARK: Transport
 
     private var activeProvider: (any MediaProvider)? {

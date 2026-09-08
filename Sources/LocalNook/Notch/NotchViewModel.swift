@@ -21,6 +21,11 @@ enum NotchState: Equatable {
 /// is exactly one.
 final class NotchViewModel: ObservableObject {
     @Published private(set) var state: NotchState = .closed
+    /// Which top-level page the expanded notch is showing.
+    @Published var page: NotchPage = .dashboard
+    /// Set when a tool has been opened from the Tools page.
+    @Published var focusedTool: WidgetKind?
+    /// Retained so drag-to-shelf can still target the Tray directly.
     @Published var selectedWidget: WidgetKind = .media
     @Published var isHovering: Bool = false
     /// True while a drag is over the notch, which forces the shelf open.

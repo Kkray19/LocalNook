@@ -158,7 +158,7 @@ struct NotchRootView: View {
         guard settings.shelfAutoExpandOnDrag else { return }
         model.isDragTargeting = targeting
         if targeting {
-            model.selectedWidget = .shelf
+            model.page = .tray
             model.open()
         } else if model.state == .open {
             model.scheduleClose()
@@ -167,7 +167,7 @@ struct NotchRootView: View {
 
     private func receive(_ providers: [NSItemProvider]) -> Bool {
         model.isDragTargeting = false
-        model.selectedWidget = .shelf
+        model.page = .tray
         model.open()
 
         var handled = false

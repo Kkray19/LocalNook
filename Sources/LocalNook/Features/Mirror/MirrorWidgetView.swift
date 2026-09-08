@@ -30,7 +30,7 @@ struct MirrorWidgetView: View {
                     title: "Use your camera as a mirror",
                     detail: "The preview is shown only. Nothing is recorded, saved or sent anywhere.",
                     actionTitle: "Allow access"
-                ) { mirror.requestAccess() }
+                ) { mirror.requestStart(owner: previewOwner) }
             } else if let failure = mirror.failureMessage {
                 WidgetMessage(symbol: "exclamationmark.triangle", title: "Camera unavailable", detail: failure)
             } else {

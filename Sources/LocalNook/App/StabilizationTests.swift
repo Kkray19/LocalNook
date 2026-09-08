@@ -74,7 +74,11 @@ enum StabilizationTests {
         check("closed panel relinquishes expanded transparent canvas", controller.panelFrames.allSatisfy { $0.width < 500 && $0.height < 60 }, "")
         controller.stop()
         let size = NotchGeometry.windowSize(for: NSScreen.main)
-        check("default panel removes unnecessary side gutters", size.width < 800, "")
+        // Stated as intent rather than a fixed number, so it keeps meaning if
+        // the dashboard's content width changes.
+        check("default panel removes unnecessary side gutters",
+              size.width <= NotchGeometry.openSize.width + 100,
+              "panel \(Int(size.width))pt for \(Int(NotchGeometry.openSize.width))pt of content")
         check("fullscreen on another equal-size monitor does not suppress this one",
               !FullscreenDetector.covers(CGRect(x: 1512, y: 0, width: 1512, height: 982),
                                         screen: CGRect(x: 0, y: 0, width: 1512, height: 982)), "")
@@ -86,7 +90,13 @@ enum StabilizationTests {
 
         let fake = FakeCaptureDriver()
         let mirror = MirrorManager(box: fake, authorizationStatus: { .authorized })
+        // Appearing is not consent. The Mirror widget can appear because the
+        // notch opened on hover or a panel rebuilt after a display change, and
+        // none of those may light the camera.
         mirror.activate()
+        check("merely appearing does not start the camera", fake.configureCount == 0,
+              "capture began without the user asking")
+        mirror.requestStart()
         check("camera startup requested through driver", fake.configureCount == 1, "")
         mirror.stop()
         fake.completeStartup()
@@ -95,7 +105,7 @@ enum StabilizationTests {
         let sharedDriver = FakeCaptureDriver()
         let sharedMirror = MirrorManager(box: sharedDriver, authorizationStatus: { .authorized })
         let ownerA = UUID(), ownerB = UUID()
-        sharedMirror.activate(owner: ownerA); sharedMirror.activate(owner: ownerB)
+        sharedMirror.requestStart(owner: ownerA); sharedMirror.activate(owner: ownerB)
         sharedMirror.release(owner: ownerA)
         check("closing one mirror leaves the other preview active", sharedDriver.stopCount == 0, "")
         sharedMirror.release(owner: ownerB)
