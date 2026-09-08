@@ -73,8 +73,8 @@ struct NotchRootView: View {
     private var dropTargetSize: CGSize {
         if isOpen { return NotchGeometry.openSize }
         return CGSize(
-            width: model.closedSize.width + 90,
-            height: max(model.effectiveClosedHeight, 6) + 26
+            width: bodyWidth,
+            height: model.effectiveClosedHeight
         )
     }
 

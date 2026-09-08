@@ -60,16 +60,16 @@ final class NotesStore: ObservableObject {
     private var saveTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
-    private var storeURL: URL {
-        AppInfo.supportDirectory.appendingPathComponent("notes.json")
-    }
+    private let file: JSONFileStore<Payload>
+    @Published private(set) var persistenceError: String?
 
     private struct Payload: Codable {
         var notes: [Note]
         var todos: [TodoItem]
     }
 
-    private init() {
+    init(storeURL: URL = AppInfo.supportDirectory.appendingPathComponent("notes.json")) {
+        file = JSONFileStore(url: storeURL)
         load()
         // Autosave: coalesce bursts of edits into one write.
         Publishers.CombineLatest($notes, $todos)
@@ -171,18 +171,16 @@ final class NotesStore: ObservableObject {
 
     func save() {
         let payload = Payload(notes: notes, todos: todos)
-        do {
-            let data = try JSONEncoder().encode(payload)
-            try data.write(to: storeURL, options: .atomic)
-        } catch {
-            NSLog("[LocalNook] Could not save notes: \(error.localizedDescription)")
-        }
+        saveTask?.cancel()
+        saveTask = nil
+        file.save(payload)
+        persistenceError = file.failureMessage
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: storeURL),
-              let payload = try? JSONDecoder().decode(Payload.self, from: data)
-        else { return }
+        let payload = file.load()
+        persistenceError = file.failureMessage
+        guard let payload else { return }
         notes = payload.notes
         todos = payload.todos
         selectedNoteID = notes.first?.id

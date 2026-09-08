@@ -24,6 +24,7 @@ final class FullscreenDetector: ObservableObject {
 
     private var timer: AnyCancellable?
     private var isRunning = false
+    private var spaceObserver: NSObjectProtocol?
 
     private init() {}
 
@@ -34,7 +35,7 @@ final class FullscreenDetector: ObservableObject {
         guard !isRunning, Settings.shared.hideInFullscreen else { return }
         isRunning = true
 
-        NSWorkspace.shared.notificationCenter.addObserver(
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
@@ -48,6 +49,8 @@ final class FullscreenDetector: ObservableObject {
     }
 
     func stop() {
+        if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver) }
+        spaceObserver = nil
         timer?.cancel()
         timer = nil
         isRunning = false
@@ -56,6 +59,11 @@ final class FullscreenDetector: ObservableObject {
 
     func syncWithSettings() {
         Settings.shared.hideInFullscreen ? start() : stop()
+    }
+
+    static func covers(_ window: CGRect, screen: CGRect) -> Bool {
+        abs(window.minX - screen.minX) < 2 && abs(window.minY - screen.minY) < 2
+            && abs(window.width - screen.width) < 2 && abs(window.height - screen.height) < 2
     }
 
     private func refresh() {
@@ -85,7 +93,10 @@ final class FullscreenDetector: ObservableObject {
 
                 // A genuinely full-screen window matches the display within a
                 // point or two; a merely maximised one leaves the menu bar.
-                if abs(width - frame.width) < 2, abs(height - frame.height) < 2 {
+                let mainTop = NSScreen.screens.first?.frame.maxY ?? 0
+                let expected = CGRect(x: frame.minX, y: mainTop - frame.maxY, width: frame.width, height: frame.height)
+                let actual = CGRect(x: bounds["X"] ?? .infinity, y: bounds["Y"] ?? .infinity, width: width, height: height)
+                if Self.covers(actual, screen: expected) {
                     covered.insert(id)
                     break
                 }

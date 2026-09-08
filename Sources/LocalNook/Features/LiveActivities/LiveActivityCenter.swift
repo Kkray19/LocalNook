@@ -51,6 +51,12 @@ final class LiveActivityCenter: ObservableObject {
     private init() {}
 
     func start() {
+        guard cancellables.isEmpty else { return }
+        settings.objectWillChange.receive(on: RunLoop.main)
+            .sink { [weak self] in
+                self?.transient = nil
+                self?.recompute()
+            }.store(in: &cancellables)
         subscribeToSystemEvents()
         observeContinuousSources()
     }
@@ -114,7 +120,7 @@ final class LiveActivityCenter: ObservableObject {
         observe(center, .agentSessionWentIdle, as: AgentSession.self) { [weak self] session in
             self?.show(LiveActivity(
                 id: "session.idle", symbol: session.agent.symbol, tint: .orange,
-                leading: session.agent.label, trailing: "waiting",
+                leading: session.agent.label, trailing: "went quiet",
                 style: .transient, progress: nil, priority: 70
             ), enabled: self?.settings.activitySessions ?? false)
         }
@@ -147,7 +153,7 @@ final class LiveActivityCenter: ObservableObject {
     }
 
     private func show(_ activity: LiveActivity, enabled: Bool) {
-        guard enabled else { return }
+        guard enabled, transient != activity else { return }
         // A more urgent banner replaces a less urgent one already on screen.
         if let existing = transient, existing.priority > activity.priority { return }
         transient = activity
@@ -169,16 +175,19 @@ final class LiveActivityCenter: ObservableObject {
     private func observeContinuousSources() {
         MediaManager.shared.$nowPlaying
             .removeDuplicates()
+            .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.recompute() }
             .store(in: &cancellables)
 
         TimerManager.shared.$displayed
             .map { _ in () }
+            .receive(on: RunLoop.main)
             .sink { [weak self] in self?.recompute() }
             .store(in: &cancellables)
 
         SessionMonitor.shared.$sessions
             .removeDuplicates()
+            .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.recompute() }
             .store(in: &cancellables)
     }
@@ -210,7 +219,7 @@ final class LiveActivityCenter: ObservableObject {
             return LiveActivity(
                 id: "sessions.active", symbol: "brain.head.profile", tint: .green,
                 leading: active.count == 1 ? active[0].projectName : "\(active.count) agents",
-                trailing: "working",
+                trailing: "active recently",
                 style: .persistent, progress: nil, priority: 30
             )
         }

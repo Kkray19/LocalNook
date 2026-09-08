@@ -36,6 +36,7 @@ struct MediaWidgetView: View {
                 player
             }
         }
+        .onAppear { media.activate() }
         .onReceive(ticker) { now in
             // Only redraw while something is actually moving.
             if media.nowPlaying.state == .playing { tick = now }
@@ -68,7 +69,7 @@ struct MediaWidgetView: View {
     private var player: some View {
         let track = media.nowPlaying
         return HStack(spacing: 12) {
-            artwork(for: track)
+            if settings.mediaShowArtwork { artwork(for: track) }
 
             VStack(alignment: .leading, spacing: 0) {
                 Text(track.title)

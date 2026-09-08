@@ -42,7 +42,7 @@ final class CalendarManager: ObservableObject {
     }
 
     var isDenied: Bool {
-        authorization == .denied || authorization == .restricted
+        authorization == .denied || authorization == .restricted || authorization == .writeOnly
     }
 
     /// Called when the widget appears. Only prompts if the user has never been asked.
@@ -95,6 +95,7 @@ final class CalendarManager: ObservableObject {
     // MARK: Loading
 
     func reload() {
+        authorization = EKEventStore.authorizationStatus(for: .event)
         guard hasAccess else {
             events = []
             return
@@ -104,6 +105,7 @@ final class CalendarManager: ObservableObject {
         guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return }
 
         let calendars = selectedCalendars()
+        if calendars?.isEmpty == true { events = []; return }
         let predicate = store.predicateForEvents(
             withStart: start, end: end, calendars: calendars
         )
@@ -116,9 +118,12 @@ final class CalendarManager: ObservableObject {
         let settings = Settings.shared
         guard !settings.calendarShowAll else { return nil }
         let ids = Set(settings.enabledCalendarIDs)
-        guard !ids.isEmpty else { return nil }
-        let matching = store.calendars(for: .event).filter { ids.contains($0.calendarIdentifier) }
-        return matching.isEmpty ? nil : matching
+        let matching = store.calendars(for: .event).filter { Self.includesCalendar($0.calendarIdentifier, selectedIDs: ids) }
+        return matching
+    }
+
+    static func includesCalendar(_ id: String, selectedIDs: Set<String>) -> Bool {
+        selectedIDs.contains(id)
     }
 
     var availableCalendars: [EKCalendar] {

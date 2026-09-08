@@ -36,7 +36,7 @@ enum PermissionKind: String, CaseIterable, Identifiable {
 
     var usedFor: String {
         switch self {
-        case .accessibility: "Reading media keys for the volume and brightness HUD."
+        case .accessibility: "Not required for hover or the implemented volume HUD. Never requested by LocalNook."
         case .camera: "The Mirror widget. Video is previewed only, never recorded or written to disk."
         case .calendar: "Showing your upcoming events."
         case .notifications: "Alerting you when a timer finishes."

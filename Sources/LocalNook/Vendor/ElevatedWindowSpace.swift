@@ -9,6 +9,8 @@
 //  License, v. 2.0. If a copy of the MPL was not distributed with this file,
 //  You can obtain one at http://mozilla.org/MPL/2.0/
 //
+//  Copyright (c) 2018, Aditya Vaidyam and Contributors
+//  Upstream modification by Alexander, 2024-10-27.
 //  Derived from the CGSSpace wrapper in Parrot (https://github.com/avaidyam/Parrot)
 //  by way of boring.notch (https://github.com/TheBoredTeam/boring.notch).
 //  See THIRD_PARTY_LICENSES.md.

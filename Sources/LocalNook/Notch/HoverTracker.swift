@@ -47,6 +47,12 @@ struct HoverTracker: NSViewRepresentable {
     /// Diagnostic trail, read by `--self-test`. Empty in normal operation.
     nonisolated(unsafe) static var diagnostics: [String] = []
 
+    static func record(_ message: @autoclosure () -> String) {
+        guard AppInfo.isSelfTest else { return }
+        if diagnostics.count >= 200 { diagnostics.removeFirst() }
+        diagnostics.append(message())
+    }
+
     final class TrackingView: NSView {
         var onChange: ((Bool) -> Void)?
         private var trackingArea: NSTrackingArea?
@@ -68,7 +74,7 @@ struct HoverTracker: NSViewRepresentable {
             addTrackingArea(area)
             trackingArea = area
             let inScreen = window.map { w in "\(w.convertToScreen(convert(bounds, to: nil)))" } ?? "no window"
-            HoverTracker.diagnostics.append("area bounds=\(bounds) screen=\(inScreen)")
+            HoverTracker.record("area bounds=\(bounds) screen=\(inScreen)")
 
             // The pointer can already be inside when the area is rebuilt, e.g.
             // after the notch resizes under a stationary cursor.
@@ -87,14 +93,14 @@ struct HoverTracker: NSViewRepresentable {
             // which happens on every frame of the open animation as the notch
             // grows. Only a genuine transition should reach `onChange`.
             guard !isInside else { return }
-            HoverTracker.diagnostics.append("mouseEntered")
+            HoverTracker.record("mouseEntered")
             isInside = true
             onChange?(true)
         }
 
         override func mouseExited(with event: NSEvent) {
             guard isInside else { return }
-            HoverTracker.diagnostics.append("mouseExited")
+            HoverTracker.record("mouseExited")
             isInside = false
             onChange?(false)
         }

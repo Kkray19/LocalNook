@@ -104,7 +104,10 @@ struct ExpandedNotchView: View {
 
     @ViewBuilder
     private var detail: some View {
-        switch effectiveWidget {
+        if widgets.isEmpty {
+            WidgetMessage(symbol: "square.grid.2x2", title: "No widgets enabled",
+                          detail: "Choose widgets in LocalNook Settings.")
+        } else { switch effectiveWidget {
         case .media: MediaWidgetView()
         case .shelf: ShelfWidgetView(model: model)
         case .calendar: CalendarWidgetView()
@@ -115,7 +118,7 @@ struct ExpandedNotchView: View {
         case .shortcuts: ShortcutsWidgetView()
         case .sessions: SessionsWidgetView()
         case .stats: StatsWidgetView()
-        }
+        } }
     }
 
     /// Falls back to the first enabled widget if the selection was turned off.

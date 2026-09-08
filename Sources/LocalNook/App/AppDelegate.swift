@@ -52,6 +52,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        NotesStore.shared.save()
+        MirrorManager.shared.stop()
+        SessionMonitor.shared.stop()
         NotchWindowController.shared.stop()
         cancellables.removeAll()
     }

@@ -80,7 +80,7 @@ final class Pref<Value: PrefValue> {
     private var cached: Value?
     private let store: UserDefaults
 
-    init(_ key: String, _ defaultValue: Value, store: UserDefaults = .standard) {
+    init(_ key: String, _ defaultValue: Value, store: UserDefaults = AppInfo.defaults) {
         self.key = key
         self.defaultValue = defaultValue
         self.store = store

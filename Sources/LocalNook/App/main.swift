@@ -21,6 +21,11 @@
 import AppKit
 import Foundation
 
+if CommandLine.arguments.contains("--version") {
+    print("LocalNook \(AppInfo.version)\nCommit: \(AppInfo.commit)\nBuilt: \(AppInfo.builtAt)")
+    exit(0)
+}
+
 // Development aid: render the notch UI offscreen to PNGs and exit.
 // See PreviewRenderer.swift. Never reached in normal use.
 if let flagIndex = CommandLine.arguments.firstIndex(of: "--render-preview") {

@@ -76,6 +76,7 @@ nonisolated final class MediaScriptBridge: @unchecked Sendable {
             script = existing
         } else {
             let created = NSAppleScript(source: source)
+            if compiled.count >= 32 { compiled.removeAll(keepingCapacity: true) }
             compiled[source] = created
             script = created
         }
@@ -95,6 +96,14 @@ nonisolated final class MediaScriptBridge: @unchecked Sendable {
         }
 
         Self.recordAutomation(.granted)
+        if descriptor.numberOfItems == 6 {
+            // Apple Events keep numeric descriptors independent of locale.
+            let fields = (1...6).map { index in
+                index >= 5 ? String(descriptor.atIndex(index)?.doubleValue ?? 0)
+                    : (descriptor.atIndex(index)?.stringValue ?? "")
+            }
+            return ScriptResult(lines: fields, errorNumber: nil)
+        }
         let text = descriptor.stringValue ?? ""
         return ScriptResult(
             lines: text.components(separatedBy: "\n"),

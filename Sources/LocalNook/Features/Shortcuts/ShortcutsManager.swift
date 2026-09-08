@@ -134,33 +134,48 @@ enum ProcessRunner {
                 process.executableURL = URL(fileURLWithPath: executable)
                 process.arguments = arguments
 
-                let outPipe = Pipe()
-                let errPipe = Pipe()
-                process.standardOutput = outPipe
-                process.standardError = errPipe
-                // Never inherit a terminal; nothing here should prompt.
-                process.standardInput = FileHandle.nullDevice
-
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                 do {
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    defer { try? FileManager.default.removeItem(at: directory) }
+                    let outURL = directory.appendingPathComponent("stdout")
+                    let errURL = directory.appendingPathComponent("stderr")
+                    FileManager.default.createFile(atPath: outURL.path, contents: nil)
+                    FileManager.default.createFile(atPath: errURL.path, contents: nil)
+                    let output = try FileHandle(forWritingTo: outURL)
+                    let errors = try FileHandle(forWritingTo: errURL)
+                    defer { try? output.close(); try? errors.close() }
+                    process.standardOutput = output
+                    process.standardError = errors
+                    process.standardInput = FileHandle.nullDevice
+                    let finished = DispatchSemaphore(value: 0)
+                    process.terminationHandler = { _ in finished.signal() }
                     try process.run()
-                } catch {
+                    let parts = timeout.components
+                    let seconds = max(0, Double(parts.seconds) + Double(parts.attoseconds) / 1e18)
+                    let timedOut = finished.wait(timeout: .now() + seconds) == .timedOut
+                    if timedOut {
+                        process.terminate()
+                        if finished.wait(timeout: .now() + 1) == .timedOut {
+                            kill(process.processIdentifier, SIGKILL)
+                            process.waitUntilExit()
+                        }
+                    }
+                    func read(_ url: URL) throws -> String {
+                        let handle = try FileHandle(forReadingFrom: url)
+                        defer { try? handle.close() }
+                        return String(decoding: try handle.read(upToCount: 1_048_576) ?? Data(), as: UTF8.self)
+                    }
                     continuation.resume(returning: Result(
-                        exitCode: -1, standardOutput: "",
-                        standardError: error.localizedDescription
+                        exitCode: timedOut ? -2 : process.terminationStatus,
+                        standardOutput: try read(outURL),
+                        standardError: timedOut ? "Shortcut timed out." : try read(errURL)
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
                     ))
-                    return
+                } catch {
+                    continuation.resume(returning: Result(exitCode: -1, standardOutput: "",
+                                                          standardError: "Could not run the command."))
                 }
-
-                let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-
-                continuation.resume(returning: Result(
-                    exitCode: process.terminationStatus,
-                    standardOutput: String(decoding: outData, as: UTF8.self),
-                    standardError: String(decoding: errData, as: UTF8.self)
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                ))
             }
         }
     }

@@ -16,6 +16,7 @@ struct ShelfWidgetView: View {
 
     var body: some View {
         VStack(spacing: 6) {
+            if let error = shelf.persistenceError { Text(error).font(.caption2).foregroundStyle(.orange) }
             if shelf.isEmpty {
                 empty
             } else {

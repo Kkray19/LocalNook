@@ -59,6 +59,7 @@ final class HUDController: ObservableObject {
     private var dismissTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
     private var lastVolume: Double = -1
+    private var observedDevice: AudioDeviceID?
 
     private init() {}
 
@@ -68,6 +69,11 @@ final class HUDController: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] in self?.syncListeners() }
             .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: .audioOutputChanged)
+            .sink { [weak self] _ in
+                self?.removeVolumeListener()
+                self?.syncListeners()
+            }.store(in: &cancellables)
         syncListeners()
     }
 
@@ -107,12 +113,13 @@ final class HUDController: ObservableObject {
         }
         if AudioObjectAddPropertyListenerBlock(device, &address, .main, block) == noErr {
             volumeListener = block
+            observedDevice = device
             lastVolume = currentVolume() ?? -1
         }
     }
 
     private func removeVolumeListener() {
-        guard let volumeListener, let device = defaultOutputDevice else {
+        guard let volumeListener, let device = observedDevice else {
             self.volumeListener = nil
             return
         }
@@ -123,6 +130,7 @@ final class HUDController: ObservableObject {
         )
         AudioObjectRemovePropertyListenerBlock(device, &address, .main, volumeListener)
         self.volumeListener = nil
+        observedDevice = nil
     }
 
     /// Reads the device's main output volume.

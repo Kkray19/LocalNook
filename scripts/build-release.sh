@@ -11,7 +11,6 @@
 #   ./scripts/build-release.sh          # build .app and .dmg
 #   ./scripts/build-release.sh --no-dmg # build .app only
 #   ./scripts/build-release.sh --debug  # debug configuration, faster
-#   ./scripts/build-release.sh --no-test # skip the self-test gate
 #
 set -euo pipefail
 
@@ -24,47 +23,57 @@ VERSION="$(cat VERSION 2>/dev/null || echo "0.1.0")"
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 CONFIG="release"
 MAKE_DMG=1
-RUN_TESTS=1
 
 for arg in "$@"; do
   case "$arg" in
     --no-dmg) MAKE_DMG=0 ;;
     --debug)  CONFIG="debug" ;;
-    --no-test) RUN_TESTS=0 ;;
     -h|--help) sed -n '3,20p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
 
 DIST="$ROOT/dist"
-APP="$DIST/$APP_NAME.app"
+mkdir -p "$DIST"
+LOCK="$ROOT/.release-lock"
+mkdir "$LOCK" 2>/dev/null || { echo "Another release build holds $LOCK" >&2; exit 1; }
+WORK="$(mktemp -d "$DIST/.release.XXXXXX")"
+cleanup() { rm -rf "$WORK" "$LOCK"; }
+trap cleanup EXIT
+# Stale outputs must never look like the result of a failed invocation.
+rm -rf "$DIST/$APP_NAME.app" "$DIST/$APP_NAME.dmg"
+APP="$WORK/$APP_NAME.app"
+COMMIT="$(git rev-parse HEAD)"
+BUILD_TIMESTAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+BUILD_ID="$(uuidgen)"
+MARKER="$WORK/started"
+touch "$MARKER"
 CONTENTS="$APP/Contents"
 
 step() { printf "\033[1;34m==>\033[0m %s\n" "$1"; }
 
 # ── 1. Compile ───────────────────────────────────────────────────────────────
+step "Testing release failure gates…"
+python3 "$ROOT/scripts/test-release.py"
 step "Building $APP_NAME ($CONFIG) for arm64…"
-# `set -o pipefail` is essential here: without it the grep filter swallows a
-# compile failure and the script happily packages a stale binary.
-set -o pipefail
-if ! swift build -c "$CONFIG" --arch arm64 2>&1 \
-     | grep -vE "ld: warning: (search path|Could not find or use auto-linked framework 'CoreAudioTypes'|Could not parse or use implicit file .*SwiftUICore)"; then
-  echo "BUILD FAILED — not packaging" >&2
-  exit 1
-fi
+swift package clean
+swift build -c "$CONFIG" --arch arm64
 
 BINARY="$(swift build -c "$CONFIG" --arch arm64 --show-bin-path)/$APP_NAME"
-[ -f "$BINARY" ] || { echo "build produced no binary at $BINARY" >&2; exit 1; }
+[ -x "$BINARY" ] && [ "$BINARY" -nt "$MARKER" ] || { echo "build produced no binary at $BINARY" >&2; exit 1; }
 
 # ── 2. Assemble the bundle ───────────────────────────────────────────────────
 step "Assembling $APP_NAME.app…"
 rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$BINARY" "$CONTENTS/MacOS/$APP_NAME"
+cmp "$BINARY" "$CONTENTS/MacOS/$APP_NAME"
+SOURCE_SHA="$(shasum -a 256 "$BINARY" | cut -d ' ' -f1)"
 
 # Licence documents travel with the app: the GPL requires that recipients can
 # get the licence text, and the About pane links to these.
 cp "$ROOT/LICENSE" "$CONTENTS/Resources/LICENSE"
+cp "$ROOT/MPL-2.0.txt" "$CONTENTS/Resources/MPL-2.0.txt"
 [ -f "$ROOT/THIRD_PARTY_LICENSES.md" ] && cp "$ROOT/THIRD_PARTY_LICENSES.md" "$CONTENTS/Resources/"
 
 cat > "$CONTENTS/Info.plist" <<PLIST
@@ -79,6 +88,10 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
+    <key>LocalNookCommit</key><string>$COMMIT</string>
+    <key>LocalNookBuiltAt</key><string>$BUILD_TIMESTAMP</string>
+    <key>LocalNookBuildID</key><string>$BUILD_ID</string>
+    <key>LocalNookSourceSHA256</key><string>$SOURCE_SHA</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>15.0</string>
     <!-- Accessory app: lives in the notch and menu bar, no Dock icon. -->
@@ -114,14 +127,10 @@ printf 'APPL????' > "$CONTENTS/PkgInfo"
 
 # ── 3. Icon ──────────────────────────────────────────────────────────────────
 step "Generating app icon…"
-ICONSET="$(mktemp -d)/AppIcon.iconset"
-if swift "$ROOT/scripts/make-icon.swift" "$ICONSET" >/dev/null 2>&1 \
-   && iconutil -c icns "$ICONSET" -o "$CONTENTS/Resources/AppIcon.icns" 2>/dev/null; then
-  echo "    icon generated"
-else
-  echo "    warning: icon generation failed; the app will use the generic icon" >&2
-fi
-rm -rf "$(dirname "$ICONSET")"
+ICONSET="$WORK/AppIcon.iconset"
+swift "$ROOT/scripts/make-icon.swift" "$ICONSET"
+iconutil -c icns "$ICONSET" -o "$CONTENTS/Resources/AppIcon.icns"
+rm -rf "$ICONSET"
 
 # ── 4. Sign ──────────────────────────────────────────────────────────────────
 # Ad-hoc signature. It is enough for the app to run and to hold TCC permissions
@@ -130,13 +139,13 @@ step "Signing (ad-hoc)…"
 codesign --force --deep --sign - \
          --options runtime \
          --identifier "$BUNDLE_ID" \
-         "$APP" 2>&1 | sed 's/^/    /' || true
+         "$APP" 2>&1 | sed 's/^/    /'
 codesign --verify --deep --strict "$APP" && echo "    signature verified"
 
 # ── 4b. Self-test ────────────────────────────────────────────────────────────
 # Gates the release on the built bundle actually working. Skippable for a
 # quick iteration, but never skipped by default.
-if [ "$RUN_TESTS" -eq 1 ]; then
+if true; then
   step "Running self-test…"
   if "$CONTENTS/MacOS/$APP_NAME" --self-test | sed 's/^/    /'; then
     echo "    self-test passed"
@@ -149,18 +158,24 @@ fi
 # ── 5. DMG ───────────────────────────────────────────────────────────────────
 if [ "$MAKE_DMG" -eq 1 ]; then
   step "Building $APP_NAME.dmg…"
-  DMG="$DIST/$APP_NAME.dmg"
-  STAGE="$(mktemp -d)/$APP_NAME"
+  DMG="$WORK/$APP_NAME.dmg"
+  STAGE="$WORK/dmg-stage"
   mkdir -p "$STAGE"
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications"
   cp "$ROOT/LICENSE" "$STAGE/LICENSE"
   rm -f "$DMG"
   hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO -quiet "$DMG"
-  rm -rf "$(dirname "$STAGE")"
+  rm -rf "$STAGE"
   echo "    $(du -h "$DMG" | cut -f1) → $DMG"
 fi
 
+# Only publish verified artifacts after every gate succeeds.
+"$CONTENTS/MacOS/$APP_NAME" --version
+[ "$MAKE_DMG" -eq 0 ] || hdiutil verify "$DMG"
+mv "$APP" "$DIST/$APP_NAME.app"
+APP="$DIST/$APP_NAME.app"
+[ "$MAKE_DMG" -eq 0 ] || mv "$DMG" "$DIST/$APP_NAME.dmg"
 step "Done."
 echo "    App: $APP"
 [ "$MAKE_DMG" -eq 1 ] && echo "    DMG: $DIST/$APP_NAME.dmg"

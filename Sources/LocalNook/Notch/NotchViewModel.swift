@@ -79,7 +79,7 @@ final class NotchViewModel: ObservableObject {
 
     func open() {
         cancelPending()
-        guard state != .open else { return }
+        guard !isSuppressed, state != .open else { return }
         withAnimation(NotchMotion.expand) { state = .open }
         if settings.hapticFeedback {
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
@@ -100,8 +100,8 @@ final class NotchViewModel: ObservableObject {
 
     /// Schedules an open after the user's configured hover delay.
     func scheduleOpen() {
-        guard settings.openTrigger.allowsHover, state == .closed else { return }
         closeTask?.cancel(); closeTask = nil
+        guard !isSuppressed, settings.openTrigger.allowsHover, state == .closed else { return }
         guard openTask == nil else { return }
         let delay = settings.openDelay
         openTask = Task { [weak self] in

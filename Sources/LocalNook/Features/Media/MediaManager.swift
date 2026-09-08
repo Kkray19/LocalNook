@@ -34,10 +34,18 @@ final class MediaManager: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var notchIsOpen = false
     private var lastArtworkKey = ""
+    private var isPolling = false
+    private var monitoringEnabled = false
 
     private init() {
         observeAppLifecycle()
         observeNotch()
+    }
+
+    /// Explicit use of the media widget enables Apple Events; launch never prompts.
+    func activate() {
+        guard !AppInfo.isSelfTest else { return }
+        monitoringEnabled = true
         reconsiderPolling()
     }
 
@@ -105,6 +113,7 @@ final class MediaManager: ObservableObject {
     }
 
     func reconsiderPolling() {
+        guard monitoringEnabled else { return }
         guard hasAnyRunningSource else {
             stopPolling()
             if !nowPlaying.isIdle { nowPlaying = .idle; artwork = nil }
@@ -146,14 +155,19 @@ final class MediaManager: ObservableObject {
     /// paused one, so having Music paused in the background does not mask
     /// Spotify actually playing.
     private func poll() async {
+        guard monitoringEnabled, !isPolling, !Task.isCancelled else { return }
+        isPolling = true
+        defer { isPolling = false }
         var best: NowPlaying?
         for provider in availableProviders {
-            guard let snapshot = await provider.fetch(), !snapshot.isIdle else { continue }
+            guard let snapshot = await provider.fetch(), provider.isAvailable, !snapshot.isIdle else { continue }
+            guard !Task.isCancelled else { return }
             if best == nil || (snapshot.state == .playing && best?.state != .playing) {
                 best = snapshot
             }
         }
 
+        guard !Task.isCancelled else { return }
         let resolved = best ?? .idle
         automationDenied = MediaScriptBridge.lastAutomationState == .denied
 
@@ -178,6 +192,7 @@ final class MediaManager: ObservableObject {
     func playPause() {
         guard let provider = activeProvider else { return }
         // Reflect the new state immediately; the next poll confirms it.
+        nowPlaying.position = nowPlaying.interpolatedPosition
         nowPlaying.state = nowPlaying.state == .playing ? .paused : .playing
         nowPlaying.positionSampledAt = Date()
         Task {

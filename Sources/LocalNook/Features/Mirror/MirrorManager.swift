@@ -18,7 +18,13 @@ import SwiftUI
 /// `AVCaptureSession` is not `Sendable` and its configuration calls block, so
 /// it lives entirely inside this nonisolated box: the main actor never touches
 /// the session directly, it only posts work to the box's queue.
-nonisolated final class CaptureSessionBox: @unchecked Sendable {
+nonisolated protocol CaptureSessionDriver: Sendable {
+    var session: AVCaptureSession { get }
+    func configure(deviceID: String, completion: @escaping @Sendable (String?, Bool) -> Void)
+    func stop(completion: @escaping @Sendable () -> Void)
+}
+
+nonisolated final class CaptureSessionBox: CaptureSessionDriver, @unchecked Sendable {
     let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "com.localnook.capture", qos: .userInitiated)
 
@@ -66,10 +72,7 @@ nonisolated final class CaptureSessionBox: @unchecked Sendable {
         }
     }
 
-    /// Identifier of the device currently feeding the session.
-    var currentDeviceID: String? {
-        (session.inputs.compactMap { $0 as? AVCaptureDeviceInput }.first)?.device.uniqueID
-    }
+
 }
 
 final class MirrorManager: NSObject, ObservableObject {
@@ -80,13 +83,20 @@ final class MirrorManager: NSObject, ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var failureMessage: String?
 
-    private let box = CaptureSessionBox()
+    private let box: any CaptureSessionDriver
+    private let authorizationStatus: () -> AVAuthorizationStatus
+    private(set) var captureDemand = CaptureDemand()
+    private var currentDeviceID: String?
+    private var previewOwners: Set<UUID> = []
     var session: AVCaptureSession { box.session }
     private var discovery: AVCaptureDevice.DiscoverySession?
     private var observation: NSKeyValueObservation?
 
-    private override init() {
-        authorization = AVCaptureDevice.authorizationStatus(for: .video)
+    init(box: any CaptureSessionDriver = CaptureSessionBox(),
+         authorizationStatus: @escaping () -> AVAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .video) }) {
+        self.box = box
+        self.authorizationStatus = authorizationStatus
+        authorization = authorizationStatus()
         super.init()
         observeDeviceChanges()
     }
@@ -130,7 +140,7 @@ final class MirrorManager: NSObject, ObservableObject {
     private func handleDeviceListChanged() {
         rebuildDeviceList()
         // If the camera in use vanished, fall back to whatever is left.
-        if let currentID = box.currentDeviceID,
+        if let currentID = currentDeviceID,
            !devices.contains(where: { $0.uniqueID == currentID }),
            isRunning {
             select(devices.first)
@@ -148,8 +158,10 @@ final class MirrorManager: NSObject, ObservableObject {
     // MARK: Lifecycle
 
     /// Called when the Mirror widget appears. Prompts only if never asked.
-    func activate() {
-        authorization = AVCaptureDevice.authorizationStatus(for: .video)
+    func activate(owner: UUID? = nil) {
+        if let owner { previewOwners.insert(owner) }
+        captureDemand.activate()
+        authorization = authorizationStatus()
         switch authorization {
         case .notDetermined:
             requestAccess()
@@ -165,9 +177,9 @@ final class MirrorManager: NSObject, ObservableObject {
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             Task { @MainActor in
                 guard let self else { return }
-                self.authorization = AVCaptureDevice.authorizationStatus(for: .video)
+                self.authorization = self.authorizationStatus()
                 Permissions.shared.refreshAll()
-                if granted {
+                if granted, self.captureDemand.isActive {
                     self.rebuildDeviceList()
                     self.start()
                 }
@@ -176,7 +188,7 @@ final class MirrorManager: NSObject, ObservableObject {
     }
 
     func start() {
-        guard hasAccess, !isRunning else { return }
+        guard captureDemand.isActive, hasAccess, !isRunning else { return }
         if devices.isEmpty { rebuildDeviceList() }
         guard let device = selectedDevice else {
             failureMessage = "No camera found."
@@ -187,24 +199,37 @@ final class MirrorManager: NSObject, ObservableObject {
 
     /// The camera must be released the moment the widget goes away, so the
     /// green privacy light never stays on longer than the preview is visible.
+    func release(owner: UUID) {
+        previewOwners.remove(owner)
+        if previewOwners.isEmpty { stop() }
+    }
+
     func stop() {
-        guard isRunning else { return }
+        previewOwners.removeAll()
+        captureDemand.deactivate()
         isRunning = false
+        currentDeviceID = nil
+        // Enqueue even while configure/startRunning is still in flight.
         box.stop {}
     }
 
     func select(_ device: AVCaptureDevice?) {
-        guard let device else { return }
+        guard captureDemand.isActive else { return }
+        guard let device else { stop(); failureMessage = "No camera found."; return }
         Settings.shared.mirrorDeviceID = device.uniqueID
         configure(with: device)
     }
 
     private func configure(with device: AVCaptureDevice) {
+        guard captureDemand.isActive else { return }
+        let generation = captureDemand.nextConfiguration()
+        currentDeviceID = device.uniqueID
         failureMessage = nil
         box.configure(deviceID: device.uniqueID) { [weak self] failure, running in
             MainActor.assumeIsolated {
-                self?.failureMessage = failure
-                self?.isRunning = running
+                guard let self, self.captureDemand.accepts(generation) else { return }
+                self.failureMessage = failure
+                self.isRunning = running
             }
         }
     }

@@ -78,6 +78,10 @@ final class NotchWindowController: NSObject {
     private var stateObservers = Set<AnyCancellable>()
     private var notificationBridge: DistributedCommandBridge?
     private var isScreenLocked = false
+    private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+    private var geometryTask: Task<Void, Never>?
+    private var started = false
+    private var shrinkTasks: [String: Task<Void, Never>] = [:]
     private var lastScreenSignature: String = ""
 
     /// Only used when `useElevatedSpace` is on; see ARCHITECTURE.md § Private APIs.
@@ -90,12 +94,29 @@ final class NotchWindowController: NSObject {
     // MARK: Lifecycle
 
     func start() {
+        guard !started else { return }
+        started = true
         rebuildPanels()
         installEventMonitors()
         observeSystemEvents()
+        LiveActivityCenter.shared.$current.receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.syncPanelExtents() }.store(in: &cancellables)
+        HUDController.shared.$state.receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.syncPanelExtents() }.store(in: &cancellables)
+        settings.objectWillChange.receive(on: RunLoop.main)
+            .sink { [weak self] in self?.rebuildPanels() }.store(in: &cancellables)
     }
 
     func stop() {
+        started = false
+        cancellables.removeAll()
+        geometryTask?.cancel()
+        geometryTask = nil
+        shrinkTasks.values.forEach { $0.cancel() }
+        shrinkTasks.removeAll()
+        for (center, token) in observers { center.removeObserver(token) }
+        observers.removeAll()
+        stateObservers.removeAll()
         notificationBridge?.unregister()
         notificationBridge = nil
         removeEventMonitors()
@@ -147,7 +168,7 @@ final class NotchWindowController: NSObject {
                 .receive(on: RunLoop.main)
                 .sink { [weak self] _ in
                     // Deferred so the model's own property has already updated.
-                    Task { @MainActor in self?.syncKeyStatus() }
+                    Task { @MainActor in self?.syncKeyStatus(); self?.syncPanelExtents() }
                 }
                 .store(in: &stateObservers)
         }
@@ -163,6 +184,7 @@ final class NotchWindowController: NSObject {
             panel.orderOut(nil)
             panel.close()
             panels.removeValue(forKey: id)
+            models[id]?.cancelPending()
             models.removeValue(forKey: id)
         }
 
@@ -196,18 +218,52 @@ final class NotchWindowController: NSObject {
         host.frame = NSRect(origin: .zero, size: size)
         host.autoresizingMask = [.width, .height]
         panel.contentView = host
-        panel.orderFrontRegardless()
+        if !isScreenLocked { panel.orderFrontRegardless() }
         return panel
     }
 
     private func position(_ panel: NotchPanel?, on screen: NSScreen) {
         guard let panel else { return }
-        let size = NotchGeometry.windowSize(for: screen)
+        let model = screen.stableID.flatMap { models[$0] }
+        let size = model.map { panelSize(for: $0, on: screen) } ?? NotchGeometry.windowSize(for: screen)
         if panel.frame.size != size {
             panel.setContentSize(size)
         }
         panel.setFrameOrigin(NotchGeometry.windowOrigin(on: screen, windowSize: size))
     }
+
+    private func panelSize(for model: NotchViewModel, on screen: NSScreen) -> CGSize {
+        if model.state == .open || shrinkTasks[screen.stableID ?? ""] != nil {
+            return NotchGeometry.windowSize(for: screen)
+        }
+        return NotchGeometry.collapsedWindowSize(closed: model.closedSize,
+            hasActivity: LiveActivityCenter.shared.current != nil || HUDController.shared.state != nil)
+    }
+
+    /// Resize only at transition boundaries, never once per animation frame.
+    /// The wide canvas survives the closing animation, then relinquishes menu-bar space.
+    private func syncPanelExtents() {
+        for (id, model) in models {
+            guard let screen = NSScreen.screen(withStableID: id) else { continue }
+            if model.state == .open {
+                shrinkTasks[id]?.cancel(); shrinkTasks[id] = nil
+                position(panels[id], on: screen)
+            } else if (panels[id]?.frame.height ?? 0) > model.closedSize.height + 3 {
+                guard shrinkTasks[id] == nil else { continue }
+                shrinkTasks[id] = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(550))
+                    guard !Task.isCancelled, let self else { return }
+                    self.shrinkTasks[id] = nil
+                    guard self.models[id]?.state == .closed else { return }
+                    self.position(self.panels[id], on: screen)
+                }
+            } else {
+                position(panels[id], on: screen)
+            }
+        }
+    }
+
+    var panelFrames: [CGRect] { panels.values.map(\.frame) }
 
     func repositionAll() {
         for (id, panel) in panels {
@@ -224,6 +280,7 @@ final class NotchWindowController: NSObject {
             panel.close()
         }
         panels.removeAll()
+        models.values.forEach { $0.cancelPending() }
         models.removeAll()
         elevatedSpace = nil
     }
@@ -327,17 +384,23 @@ final class NotchWindowController: NSObject {
             .joined(separator: "|")
     }
 
+    private func observe(_ center: NotificationCenter, forName name: Notification.Name,
+                         object: Any?, queue: OperationQueue?,
+                         using handler: @escaping @Sendable (Notification) -> Void) {
+        observers.append((center, center.addObserver(forName: name, object: object, queue: queue, using: handler)))
+    }
+
     private func observeSystemEvents() {
         let center = NotificationCenter.default
 
-        center.addObserver(
+        observe(center,
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.handleScreenParametersChanged() }
         }
 
-        center.addObserver(forName: .notchGeometryChanged, object: nil, queue: .main) {
+        observe(center, forName: .notchGeometryChanged, object: nil, queue: .main) {
             [weak self] _ in
             MainActor.assumeIsolated {
                 self?.rebuildPanels()
@@ -345,7 +408,7 @@ final class NotchWindowController: NSObject {
             }
         }
 
-        center.addObserver(forName: .escapePressedInNotch, object: nil, queue: .main) {
+        observe(center, forName: .escapePressedInNotch, object: nil, queue: .main) {
             [weak self] _ in
             MainActor.assumeIsolated { self?.allModels.forEach { $0.close() } }
         }
@@ -353,12 +416,12 @@ final class NotchWindowController: NSObject {
         // Wake and unlock both need a reposition: display geometry can change
         // while the machine is asleep.
         let workspace = NSWorkspace.shared.notificationCenter
-        workspace.addObserver(
+        observe(workspace,
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.handleWake() }
         }
-        workspace.addObserver(
+        observe(workspace,
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.repositionAll() }
@@ -392,7 +455,7 @@ final class NotchWindowController: NSObject {
         case .screenUnlocked: setLocked(false); return
         default: break
         }
-        guard let model = activeModel else { return }
+        guard !isScreenLocked, let model = activeModel else { return }
         switch command {
         case .toggle: model.toggle()
         case .open: model.open()
@@ -401,6 +464,7 @@ final class NotchWindowController: NSObject {
         case .screenUnlocked: setLocked(false)
         }
         syncKeyStatus()
+        syncPanelExtents()
     }
 
     private func handleScreenParametersChanged() {
@@ -411,18 +475,20 @@ final class NotchWindowController: NSObject {
             repositionAll()
             return
         }
-        Task { [weak self] in
+        geometryTask?.cancel()
+        geometryTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(350))
-            guard let self else { return }
+            guard !Task.isCancelled, let self, self.started else { return }
             self.rebuildPanels()
             self.repositionAll()
         }
     }
 
     private func handleWake() {
-        Task { [weak self] in
+        geometryTask?.cancel()
+        geometryTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
-            guard let self else { return }
+            guard !Task.isCancelled, let self, self.started else { return }
             self.allModels.forEach { $0.close() }
             self.rebuildPanels()
             self.repositionAll()

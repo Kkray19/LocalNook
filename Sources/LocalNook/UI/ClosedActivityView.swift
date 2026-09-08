@@ -17,7 +17,7 @@ struct ClosedActivityView: View {
     let notchWidth: CGFloat
 
     static let leadingWidth: CGFloat = 118
-    static let trailingWidth: CGFloat = 96
+    static let trailingWidth: CGFloat = 118
 
     static func totalBodyWidth(notchWidth: CGFloat) -> CGFloat {
         notchWidth + leadingWidth + trailingWidth
@@ -26,15 +26,15 @@ struct ClosedActivityView: View {
     var body: some View {
         HStack(spacing: 0) {
             leading
-                .frame(width: Self.leadingWidth, alignment: .leading)
                 .padding(.leading, 10)
+                .frame(width: Self.leadingWidth, alignment: .leading)
 
             // The camera housing.
             Color.clear.frame(width: notchWidth)
 
             trailing
+                .padding(.trailing, 10)
                 .frame(width: Self.trailingWidth, alignment: .trailing)
-                .padding(.trailing, 14)
         }
         .foregroundStyle(.white)
     }

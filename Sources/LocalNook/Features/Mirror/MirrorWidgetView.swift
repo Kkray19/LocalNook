@@ -13,6 +13,7 @@ import SwiftUI
 struct MirrorWidgetView: View {
     @ObservedObject private var mirror = MirrorManager.shared
     @EnvironmentObject var settings: Settings
+    @LNState private var previewOwner = UUID()
 
     var body: some View {
         Group {
@@ -36,9 +37,9 @@ struct MirrorWidgetView: View {
                 preview
             }
         }
-        .onAppear { mirror.activate() }
+        .onAppear { mirror.activate(owner: previewOwner) }
         // Releasing the camera on disappear keeps the green light honest.
-        .onDisappear { mirror.stop() }
+        .onDisappear { mirror.release(owner: previewOwner) }
     }
 
     private var preview: some View {

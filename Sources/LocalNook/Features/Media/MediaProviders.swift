@@ -33,8 +33,7 @@ struct MusicAppProvider: MediaProvider {
         on error
             return "stopped"
         end try
-        return st & linefeed & trackName & linefeed & trackArtist & linefeed & \
-            trackAlbum & linefeed & (trackDuration as text) & linefeed & (trackPosition as text)
+        return {st, trackName, trackArtist, trackAlbum, trackDuration, trackPosition}
     end tell
     """
 
@@ -109,8 +108,7 @@ struct SpotifyProvider: MediaProvider {
         on error
             return "stopped"
         end try
-        return st & linefeed & trackName & linefeed & trackArtist & linefeed & \
-            trackAlbum & linefeed & (trackDuration as text) & linefeed & (trackPosition as text)
+        return {st, trackName, trackArtist, trackAlbum, trackDuration, trackPosition}
     end tell
     """
 
@@ -149,7 +147,7 @@ struct SpotifyProvider: MediaProvider {
 ///
 /// `positionScale` converts the app's duration units into seconds (Spotify
 /// reports milliseconds, Music reports seconds).
-private func parseStandard(
+func parseStandard(
     _ result: ScriptResult,
     sourceID: String,
     sourceName: String,
@@ -177,8 +175,8 @@ private func parseStandard(
         title: lines[1],
         artist: lines[2],
         album: lines[3],
-        duration: max(0, duration),
-        position: max(0, position),
+        duration: duration.isFinite ? max(0, duration) : 0,
+        position: position.isFinite ? max(0, position) : 0,
         positionSampledAt: Date(),
         artworkKey: "\(sourceID)|\(lines[1])|\(lines[2])"
     )

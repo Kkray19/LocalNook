@@ -14,13 +14,17 @@ struct NotesWidgetView: View {
     @LNState private var editingID: UUID?
 
     var body: some View {
-        HStack(spacing: 10) {
+        VStack(spacing: 4) {
+            if let error = store.persistenceError { Text(error).font(.caption2).foregroundStyle(.orange) }
+            HStack(spacing: 10) {
             list
                 .frame(width: 170)
             Divider().overlay(Color.white.opacity(0.10))
             editor
                 .frame(maxWidth: .infinity)
         }
+    }
+
     }
 
     private var list: some View {
@@ -126,6 +130,7 @@ struct TodoWidgetView: View {
 
     var body: some View {
         VStack(spacing: 6) {
+            if let error = store.persistenceError { Text(error).font(.caption2).foregroundStyle(.orange) }
             HStack(spacing: 6) {
                 Image(systemName: "plus.circle")
                     .font(.system(size: 11))

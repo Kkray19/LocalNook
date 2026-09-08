@@ -110,12 +110,21 @@ enum NotchGeometry {
     static func windowSize(for screen: NSScreen?) -> CGSize {
         let settings = Settings.shared
         let open = openSize
-        let widest: CGFloat = open.width + CGFloat(settings.openCornerRadius) * 2 + sideGutter * 2
+        let closed = closedSize(for: screen)
+        let widest: CGFloat = max(open.width + CGFloat(settings.openCornerRadius) * 2,
+                                  closed.width + sideGutter * 2 + settings.closedCornerRadius * 2)
+            + shadowPadding * 2
         let available: CGFloat = screen.map(\.frame.width) ?? widest
         return CGSize(
             width: min(widest, available),
             height: open.height + shadowPadding
         )
+    }
+
+    static func collapsedWindowSize(closed: CGSize, hasActivity: Bool) -> CGSize {
+        let body = hasActivity ? ClosedActivityView.totalBodyWidth(notchWidth: closed.width) : closed.width
+        return CGSize(width: body + 2 * Settings.shared.closedCornerRadius,
+                      height: max(4, closed.height) + 3)
     }
 
     /// Frame origin that centres the panel on the top edge of `screen`.

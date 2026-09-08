@@ -66,7 +66,9 @@ final class TimerManager: ObservableObject {
     private var ticker: AnyCancellable?
     private var notificationsRequested = false
 
-    private init() {
+    private let now: () -> Date
+    init(now: @escaping () -> Date = Date.init) {
+        self.now = now
         // Show the full countdown straight away rather than 0:00 until first start.
         refreshDisplayed()
     }
@@ -105,14 +107,14 @@ final class TimerManager: ObservableObject {
     func start() {
         guard !isRunning else { return }
         if displayed <= 0, mode != .stopwatch { reset() }
-        startedAt = Date()
+        startedAt = now()
         isRunning = true
         startTicking()
     }
 
     func pause() {
         guard isRunning, let startedAt else { return }
-        accumulated += Date().timeIntervalSince(startedAt)
+        accumulated += max(0, now().timeIntervalSince(startedAt))
         self.startedAt = nil
         isRunning = false
         stopTicking()
@@ -161,10 +163,10 @@ final class TimerManager: ObservableObject {
     }
 
     private var elapsed: TimeInterval {
-        accumulated + (startedAt.map { Date().timeIntervalSince($0) } ?? 0)
+        accumulated + (startedAt.map { max(0, now().timeIntervalSince($0)) } ?? 0)
     }
 
-    private func refreshDisplayed() {
+    func refreshDisplayed() {
         switch mode {
         case .stopwatch:
             displayed = elapsed
@@ -221,6 +223,7 @@ final class TimerManager: ObservableObject {
     /// Notification permission is requested the first time a timer completes —
     /// never at launch.
     private func notify(title: String, body: String) {
+        guard !AppInfo.isSelfTest else { return }
         // Without a bundle there is no notification centre to talk to.
         guard AppInfo.isRunningFromBundle else {
             NSSound.beep()

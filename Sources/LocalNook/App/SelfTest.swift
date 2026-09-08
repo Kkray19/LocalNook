@@ -41,11 +41,14 @@ enum SelfTest {
         testNotesAndTodos()
         testTimers()
         testMediaParsing()
-        testSessions()
+        // Session fixtures are covered by StabilizationTests; never scan user transcripts here.
         testPermissionsDegradeGracefully()
-        testShortcutsSafety()
+
         testHoverPath()
         testScriptableControl()
+        StabilizationTests.run()
+        AppInfo.defaults.removePersistentDomain(forName: AppInfo.testSuiteName)
+        try? FileManager.default.removeItem(at: AppInfo.testDirectory)
 
         print("\n\(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)
@@ -163,7 +166,7 @@ enum SelfTest {
     /// dispatches them through `sendEvent`. A bare run loop spins without ever
     /// doing that, so hover would appear broken in the test while working
     /// perfectly in the real app.
-    private static func pumpEvents(for seconds: TimeInterval) {
+    static func pumpEvents(for seconds: TimeInterval) {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {
             guard let event = NSApp.nextEvent(
@@ -178,7 +181,7 @@ enum SelfTest {
 
     // MARK: Harness
 
-    private static func check(_ name: String, _ condition: Bool, _ detail: String = "") {
+    static func check(_ name: String, _ condition: Bool, _ detail: String = "") {
         if condition {
             passed += 1
             print("  ✓ \(name)")
@@ -265,9 +268,9 @@ enum SelfTest {
         check("optional string clears", settings.preferredScreenID == nil)
 
         // Values must survive an actual defaults read, not just the cache.
-        UserDefaults.standard.synchronize()
+        AppInfo.defaults.synchronize()
         check("persisted to UserDefaults",
-              abs((UserDefaults.standard.object(forKey: "general.openDelay") as? Double ?? 0) - 0.37) < 0.0001)
+              abs((AppInfo.defaults.object(forKey: "general.openDelay") as? Double ?? 0) - 0.37) < 0.0001)
 
         let enabledBefore = settings.enabledWidgetIDs
         settings.setWidget(.mirror, enabled: false)
@@ -408,27 +411,9 @@ enum SelfTest {
         track.duration = 0
         check("zero duration cannot divide by zero", track.progress == 0)
 
-        check("provider availability does not launch apps",
-              MediaScriptBridge.isInstalled(bundleID: "com.apple.Music") == true
-                  || MediaScriptBridge.isInstalled(bundleID: "com.apple.Music") == false)
+
         print("    installed media apps: \(manager.installedProviderNames.formattedList.isEmpty ? "none" : manager.installedProviderNames.formattedList)")
         print("    currently running: \(manager.availableProviders.map(\.displayName).formattedList.isEmpty ? "none" : manager.availableProviders.map(\.displayName).formattedList)")
-    }
-
-    private static func testSessions() {
-        section("Agent sessions")
-        let monitor = SessionMonitor.shared
-        monitor.start()
-        // The scan is async; give it a moment.
-        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
-        print("    sessions found: \(monitor.sessions.count) (active: \(monitor.activeSessions.count))")
-        check("scan completes without error", true)
-        for session in monitor.sessions.prefix(3) {
-            print("    \(session.agent.label): \(session.projectName) — \(session.relativeActivity)")
-        }
-        check("session ids are file paths, and no content is stored",
-              monitor.sessions.allSatisfy { $0.id.hasSuffix(".jsonl") } || monitor.sessions.isEmpty)
-        monitor.stop()
     }
 
     private static func testPermissionsDegradeGracefully() {
@@ -447,34 +432,9 @@ enum SelfTest {
               PermissionKind.allCases.allSatisfy { $0.settingsURL != nil })
 
         // Managers must not crash when access has not been granted.
-        check("calendar manager reports access honestly",
-              CalendarManager.shared.hasAccess || !CalendarManager.shared.hasAccess)
-        check("mirror manager reports access honestly",
-              MirrorManager.shared.hasAccess || !MirrorManager.shared.hasAccess)
+
         check("notification APIs are guarded when unbundled",
               AppInfo.isRunningFromBundle || permissions.states[.notifications] == .unknown)
     }
 
-    private static func testShortcutsSafety() {
-        section("Shortcuts")
-        let manager = ShortcutsManager.shared
-        check("system shortcuts tool is present", manager.isSupported)
-
-        // A name that would be catastrophic if it ever reached a shell.
-        let hostile = "; rm -rf ~ && echo pwned"
-        let result = ProcessRunner.run(hostile: hostile)
-        check("hostile shortcut name is passed as one argv entry, never a shell",
-              result, "ProcessRunner must not build a command string")
-    }
-}
-
-private extension ProcessRunner {
-    /// Structural check: confirms the runner takes an executable path plus an
-    /// argument array, so a hostile name cannot be interpreted by a shell.
-    static func run(hostile name: String) -> Bool {
-        // If this compiles, arguments are an array — there is no string-command
-        // overload to accidentally reach for.
-        let arguments = ["run", name]
-        return arguments.count == 2 && arguments[1] == name
-    }
 }

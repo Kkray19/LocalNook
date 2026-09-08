@@ -41,9 +41,10 @@ struct NowPlaying: Equatable, Sendable {
     /// Position advanced to *now*, so the scrubber moves smoothly between the
     /// once-a-second polls instead of stepping.
     var interpolatedPosition: Double {
-        guard state == .playing else { return position }
-        let elapsed = Date().timeIntervalSince(positionSampledAt)
-        return min(duration > 0 ? duration : .greatestFiniteMagnitude, position + elapsed)
+        let base = position.isFinite ? max(0, position) : 0
+        let elapsed = state == .playing ? max(0, Date().timeIntervalSince(positionSampledAt)) : 0
+        let upper = duration.isFinite && duration > 0 ? duration : Double.greatestFiniteMagnitude
+        return min(upper, base + elapsed)
     }
 
     var progress: Double {

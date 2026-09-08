@@ -40,7 +40,7 @@ struct SessionsWidgetView: View {
             Circle()
                 .fill(active > 0 ? Color.green : Color.white.opacity(0.25))
                 .frame(width: 6, height: 6)
-            Text(active > 0 ? "\(active) working" : "All quiet")
+            Text(active > 0 ? "\(active) recently active" : "All quiet")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.8))
             Spacer()
@@ -92,6 +92,6 @@ private struct SessionRow: View {
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
         .background(RoundedRectangle(cornerRadius: 5).fill(.white.opacity(0.045)))
-        .help(session.isActive ? "Working" : session.isIdle ? "Idle — may be waiting on you" : "Finished")
+        .help(session.isActive ? "Recently modified" : session.isIdle ? "Quiet — status inferred from timestamp" : "No recent writes")
     }
 }

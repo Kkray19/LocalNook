@@ -104,8 +104,8 @@ struct HUDSettingsView: View {
                 footer: "Off by default. LocalNook reads volume and brightness through public APIs and shows its own indicator near the notch. It does not suppress the built-in macOS HUD, so you may briefly see both."
             ) {
                 Toggle("Volume", isOn: settings.binding(\.hudVolume))
-                Toggle("Display brightness", isOn: settings.binding(\.hudBrightness))
-                Toggle("Keyboard brightness", isOn: settings.binding(\.hudKeyboardBrightness))
+                Text("Display and keyboard brightness HUDs are not implemented.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -118,6 +118,8 @@ struct AboutSettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsSection(title: "LocalNook") {
                 Text("Version \(AppInfo.version) (\(AppInfo.build))")
+                Text("Commit: \(AppInfo.commit)").font(.caption).textSelection(.enabled)
+                Text("Built: \(AppInfo.builtAt)").font(.caption)
                 Text("A local-first notch utility for macOS.")
                     .foregroundStyle(.secondary)
             }
@@ -146,6 +148,13 @@ struct AboutSettingsView: View {
 }
 
 enum AppInfo {
+    static let isSelfTest = CommandLine.arguments.contains("--self-test")
+    static let testDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("LocalNook-tests-\(UUID().uuidString)", isDirectory: true)
+    static let testSuiteName = "com.localnook.tests.\(UUID().uuidString)"
+    static let defaults: UserDefaults = isSelfTest
+        ? UserDefaults(suiteName: testSuiteName)! : .standard
+
     /// Whether the process is running from a real `.app` bundle.
     ///
     /// Several system APIs — `UNUserNotificationCenter.current()` most sharply —
@@ -162,6 +171,9 @@ enum AppInfo {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
     }
 
+    static var commit: String { Bundle.main.object(forInfoDictionaryKey: "LocalNookCommit") as? String ?? "unpackaged" }
+    static var builtAt: String { Bundle.main.object(forInfoDictionaryKey: "LocalNookBuiltAt") as? String ?? "unpackaged" }
+
     static var build: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
     }
@@ -175,7 +187,7 @@ enum AppInfo {
 
     /// Where LocalNook keeps its own files (shelf items, notes, to-dos).
     static var supportDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let base = isSelfTest ? testDirectory : FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let dir = base.appendingPathComponent("LocalNook", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir

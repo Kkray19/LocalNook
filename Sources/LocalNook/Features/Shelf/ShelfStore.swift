@@ -7,6 +7,7 @@
 //
 
 import AppKit
+import OSLog
 import Combine
 import Foundation
 import QuickLookUI
@@ -19,9 +20,8 @@ final class ShelfStore: NSObject, ObservableObject {
     @Published private(set) var items: [ShelfItem] = []
     @Published var selection: Set<UUID> = []
 
-    private var storeURL: URL {
-        AppInfo.supportDirectory.appendingPathComponent("shelf.json")
-    }
+    private let file: JSONFileStore<[ShelfItem]>
+    @Published private(set) var persistenceError: String?
 
     /// Files LocalNook itself created (dragged text, etc.) live here.
     private var ownedDirectory: URL {
@@ -30,7 +30,8 @@ final class ShelfStore: NSObject, ObservableObject {
         return dir
     }
 
-    private override init() {
+    init(storeURL: URL = AppInfo.supportDirectory.appendingPathComponent("shelf.json")) {
+        file = JSONFileStore(url: storeURL)
         super.init()
         load()
     }
@@ -54,7 +55,7 @@ final class ShelfStore: NSObject, ObservableObject {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         let item = items[index]
         // Only delete files LocalNook created. Never touch the user's own files.
-        if item.isOwned, let url = item.url {
+        if let url = deletableOwnedURL(item) {
             try? FileManager.default.removeItem(at: url)
         }
         items.remove(at: index)
@@ -69,7 +70,7 @@ final class ShelfStore: NSObject, ObservableObject {
 
     func clearAll() {
         for item in items where item.isOwned {
-            if let url = item.url { try? FileManager.default.removeItem(at: url) }
+            if let url = deletableOwnedURL(item) { try? FileManager.default.removeItem(at: url) }
         }
         items.removeAll()
         selection.removeAll()
@@ -130,7 +131,7 @@ final class ShelfStore: NSObject, ObservableObject {
         do {
             try text.write(to: url, atomically: true, encoding: .utf8)
         } catch {
-            NSLog("[LocalNook] Could not store dropped text: \(error.localizedDescription)")
+            Logger(subsystem: "com.localnook.app", category: "shelf").error("Could not store dropped text")
             return nil
         }
         return ShelfItem(
@@ -162,23 +163,28 @@ final class ShelfStore: NSObject, ObservableObject {
         items.filter { selection.contains($0.id) }.compactMap(\.url)
     }
 
+    // Do not trust the persisted ownership flag to authorize arbitrary deletion.
+    private func deletableOwnedURL(_ item: ShelfItem) -> URL? {
+        guard item.isOwned, let url = item.url, url.isFileURL else { return nil }
+        let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+        let directory = ownedDirectory.resolvingSymlinksInPath().standardizedFileURL
+        guard resolved.deletingLastPathComponent() == directory else { return nil }
+        return resolved
+    }
+
     // MARK: Persistence
 
     private func save() {
         guard Settings.shared.shelfPersist else { return }
-        do {
-            let data = try JSONEncoder().encode(items)
-            try data.write(to: storeURL, options: .atomic)
-        } catch {
-            NSLog("[LocalNook] Could not save shelf: \(error.localizedDescription)")
-        }
+        file.save(items)
+        persistenceError = file.failureMessage
     }
 
     private func load() {
-        guard Settings.shared.shelfPersist,
-              let data = try? Data(contentsOf: storeURL),
-              let decoded = try? JSONDecoder().decode([ShelfItem].self, from: data)
-        else { return }
+        guard Settings.shared.shelfPersist else { return }
+        let decoded = file.load()
+        persistenceError = file.failureMessage
+        guard let decoded else { return }
         // Drop entries whose file has since been moved or deleted, so the shelf
         // never shows rows that cannot be acted on.
         items = decoded.filter(\.stillExists)

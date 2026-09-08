@@ -45,7 +45,6 @@ final class NotchPanel: NSPanel {
         // Required for tracking areas to receive movement reliably in a
         // borderless, non-activating panel.
         acceptsMouseMovedEvents = true
-        ignoresMouseEvents = false
         // Deliberately NOT `.none`. That excludes the window from screen
         // capture entirely, so the notch would be missing from the user's own
         // screenshots and screen recordings — surprising for a UI element they

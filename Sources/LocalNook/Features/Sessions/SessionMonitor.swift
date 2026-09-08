@@ -93,8 +93,18 @@ final class SessionMonitor: ObservableObject {
     /// Sessions that were active last scan, so we can spot one going quiet.
     private var previouslyActive: Set<String> = []
     private var refreshTicker: AnyCancellable?
+    private var scanGeneration = 0
+    private var running = false
+    private var settingsSubscription: AnyCancellable?
 
-    private init() {}
+    private init() {
+        settingsSubscription = Settings.shared.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in
+                guard let self, self.running else { return }
+                self.rescan()
+            }
+    }
 
     var activeSessions: [AgentSession] { sessions.filter(\.isActive) }
     var hasActivity: Bool { !activeSessions.isEmpty }
@@ -110,6 +120,7 @@ final class SessionMonitor: ObservableObject {
 
     func start() {
         stop()
+        running = true
         for agent in enabledAgents {
             guard let root = agent.rootDirectory,
                   FileManager.default.fileExists(atPath: root.path) else { continue }
@@ -121,16 +132,18 @@ final class SessionMonitor: ObservableObject {
         }
         isWatching = !watchers.isEmpty
 
-        // A slow tick only refreshes the "3m ago" labels; it does no file I/O
-        // unless something actually changed on disk.
+        // Directory vnode events are not recursive. A 20-second metadata-only
+        // reconciliation catches nested writes, newly created roots and aging sessions.
         refreshTicker = Timer.publish(every: 20, on: .main, in: .common)
             .autoconnect()
-            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .sink { [weak self] _ in self?.rescan() }
 
         rescan()
     }
 
     func stop() {
+        running = false
+        scanGeneration += 1
         watchers.values.forEach { $0.stop() }
         watchers.removeAll()
         refreshTicker?.cancel()
@@ -153,10 +166,13 @@ final class SessionMonitor: ObservableObject {
     // MARK: Scanning
 
     func rescan() {
+        guard running else { return }
         let agents = enabledAgents
+        scanGeneration += 1
+        let generation = scanGeneration
         Task { [weak self] in
             let found = await Self.scan(agents: agents)
-            guard let self else { return }
+            guard let self, self.running, self.scanGeneration == generation else { return }
             let previous = self.previouslyActive
             self.sessions = found
 
@@ -177,7 +193,7 @@ final class SessionMonitor: ObservableObject {
     }
 
     /// Collects transcript metadata. Never opens a file.
-    private nonisolated static func scan(agents: [SessionAgent]) async -> [AgentSession] {
+    nonisolated static func scan(agents: [SessionAgent], roots: [SessionAgent: URL] = [:]) async -> [AgentSession] {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 var results: [AgentSession] = []
@@ -185,7 +201,7 @@ final class SessionMonitor: ObservableObject {
                 let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
 
                 for agent in agents {
-                    guard let root = agent.rootDirectory else { continue }
+                    guard let root = roots[agent] ?? agent.rootDirectory else { continue }
                     guard let enumerator = manager.enumerator(
                         at: root,
                         includingPropertiesForKeys: keys,
@@ -242,11 +258,8 @@ final class SessionMonitor: ObservableObject {
     }
 }
 
-/// Watches a directory tree for changes using kernel events.
-///
-/// A `DispatchSource` on the directory descriptor fires on writes anywhere
-/// inside it, which is exactly what an agent appending to a transcript does —
-/// no polling required.
+/// Watches immediate directory entries. Nested file writes are reconciled by
+/// SessionMonitor's low-frequency metadata scan; vnode events are not recursive.
 nonisolated final class DirectoryWatcher: @unchecked Sendable {
     private let url: URL
     private let onChange: @Sendable () -> Void
