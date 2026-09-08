@@ -302,6 +302,64 @@ items back out, hover on the external display, and the "notch stays open while
 typing" guard. These need synthesised pointer input, i.e. Accessibility, which
 LocalNook deliberately does not require.
 
+## Final candidate — 2026-09-08
+
+One binary, one batch, every run reported.
+
+| | |
+|---|---|
+| Shipped binary | `9df4dce2d9376a8ad7e5e311573ef49b3e693a730cb8e1cff578b57743aed6f2` |
+| Disk image | `d82f1c3afc1ef7e8247eba0196c20a508d99c0892cb5a901ae8d4ed3d631881d` |
+| Source commit | `d51252b22b641f93da87d956220ec1dd967aa2f9` (`CFBundleVersion` 34) |
+| **Displays connected** | **1** (built-in only; the G274QPF E2 is powered off) |
+| Batch | 10 deterministic + 12 integration, fixed in `verify-candidate.sh` before the first run |
+
+```
+deterministic: 10/10 clean   (261 passed, 0 failed, 0 unverified — every run)
+integration:   12/12 clean   (10 passed, 0 failed, 0 unverified — every run)
+VERDICT: every run clean.
+```
+
+Every integration run reported the same provenance:
+
+```
+probe: enters=1 exits=0 handled=1 (of which containment=0) opened-by: trackingArea
+```
+
+One crossing delivered, one forwarded, opened by the tracking area — twice per
+run, once for the panel and once for the catcher. `exits=0` is expected: the
+panel is moved away rather than the pointer, and the catcher hands an open notch
+to the panel rather than closing it.
+
+### What this does and does not establish
+
+- **Does:** this exact binary passed 22 consecutive runs with nothing unverified,
+  and the installed copy is byte-identical to it.
+- **Does not:** prove the intermittent missed crossing is gone. It did not recur
+  in 12 runs, but the earlier ~1-in-12 figure was measured on a different binary
+  and included an assertion that was itself wrong (see BUGS.md § the catcher
+  hand-over). Twelve clean runs lower the estimate; they do not retire the
+  entry, which stays OPEN.
+- **Does not:** cover hover with a real pointer on an external display. That
+  check could not be run at all and is recorded as unverified in
+  docs/MANUAL_CHECKS.md, not folded into the numbers above.
+
+### Installation
+
+```
+before:  5ed4846d…  pid 85075, started 14:46:09
+after:   9df4dce2…  pid 95069, started 16:25:09
+```
+
+Verified afterwards: the installed binary's hash equals the candidate's; the
+running process's own executable (via `lsof … txt`) hashes to the same value;
+the process is newer than the install; and no staging or backup directory was
+left in `/Applications`.
+
+This section is written after the run it describes, so it is necessarily a
+commit later than the candidate's own `LocalNookCommit`. The binary is
+identified by its hash, not by `HEAD`.
+
 ## What must be repeated if anything changes
 
 Not every change invalidates every result. This says which.

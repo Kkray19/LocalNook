@@ -36,6 +36,13 @@ RESOLVED). LocalNook has not been observed dropping a crossing it was given or
 mishandling one. Getting to a provenance line that did not contradict its own
 result took three fixes to the instrumentation, all recorded below.
 
+**Current rate.** The final candidate (`9df4dce2…`, 1 display connected) ran
+12/12 clean integration runs, every one reporting `enters=1 handled=1`. That
+lowers the estimate from the earlier ~1-in-12; it does not retire this entry.
+The earlier figure was measured on a different binary and included the incorrect
+catcher assertion, so the two numbers are not directly comparable, and 12 runs
+cannot establish the absence of an intermittent. It stays OPEN.
+
 **What this does not excuse.** A missing platform event is a reason the test
 could not produce its stimulus. It is not a reason for the panel to stay open.
 That postcondition is asserted separately by `testMissedCrossingRecovery` in the
