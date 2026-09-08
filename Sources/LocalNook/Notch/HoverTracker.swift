@@ -77,7 +77,7 @@ struct HoverTracker: NSViewRepresentable {
             moveObserver = NotificationCenter.default.addObserver(
                 forName: NSWindow.didMoveNotification, object: window, queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.recheckContainment() }
+                MainActor.assumeIsolated { self?.scheduleContainmentRecheck() }
             }
         }
 
@@ -86,11 +86,25 @@ struct HoverTracker: NSViewRepresentable {
             if let moveObserver { NotificationCenter.default.removeObserver(moveObserver) }
         }
 
-        /// Compares the pointer against our bounds and reports a change.
+        /// Rechecks now and again on the next run-loop pass.
+        ///
+        /// `didMoveNotification` can arrive before the window server has
+        /// committed the new frame, so an immediate check may still be measuring
+        /// against the old position. The second pass is not a timed retry — it
+        /// runs as soon as the current turn finishes, by which point the frame
+        /// has landed.
+        func scheduleContainmentRecheck() {
+            recheckContainment()
+            DispatchQueue.main.async { [weak self] in self?.recheckContainment() }
+        }
+
+        /// Compares the pointer against our bounds in screen space and reports a
+        /// change. Screen space avoids relying on the window's cached pointer
+        /// location, which lags a move.
         func recheckContainment() {
             guard let window else { return }
-            let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
-            let nowInside = bounds.contains(point)
+            let screenRect = window.convertToScreen(convert(bounds, to: nil))
+            let nowInside = screenRect.contains(NSEvent.mouseLocation)
             guard nowInside != isInside else { return }
             isInside = nowInside
             HoverTracker.diagnostics.append(nowInside ? "mouseEntered" : "mouseExited")

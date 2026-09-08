@@ -100,7 +100,7 @@ final class NotchHitView: NSView {
         moveObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didMoveNotification, object: window, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.recheckContainment() }
+            MainActor.assumeIsolated { self?.scheduleContainmentRecheck() }
         }
     }
 
@@ -109,10 +109,17 @@ final class NotchHitView: NSView {
         if let moveObserver { NotificationCenter.default.removeObserver(moveObserver) }
     }
 
+    /// Rechecks now and again on the next run-loop pass — `didMoveNotification`
+    /// can arrive before the window server has committed the new frame.
+    func scheduleContainmentRecheck() {
+        recheckContainment()
+        DispatchQueue.main.async { [weak self] in self?.recheckContainment() }
+    }
+
     func recheckContainment() {
         guard let window else { return }
-        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
-        let nowInside = bounds.contains(point)
+        let screenRect = window.convertToScreen(convert(bounds, to: nil))
+        let nowInside = screenRect.contains(NSEvent.mouseLocation)
         guard nowInside != isInside else { return }
         isInside = nowInside
         onHoverChange?(nowInside)
