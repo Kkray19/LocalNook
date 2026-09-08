@@ -22,6 +22,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotchWindowController.shared.start()
         configureStatusItem()
 
+        // Event-driven monitors. None of these poll while idle.
+        _ = BatteryMonitor.shared
+        _ = AudioDeviceMonitor.shared
+        LiveActivityCenter.shared.start()
+        SessionMonitor.shared.start()
+        HUDController.shared.start()
+        FullscreenDetector.shared.syncWithSettings()
+
         NotificationCenter.default.addObserver(
             forName: .openSettingsRequested, object: nil, queue: .main
         ) { _ in
@@ -31,7 +39,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The menu bar icon can be toggled from Settings at any time.
         settings.objectWillChange
             .receive(on: RunLoop.main)
-            .sink { [weak self] in self?.syncStatusItemVisibility() }
+            .sink { [weak self] in
+                self?.syncStatusItemVisibility()
+                FullscreenDetector.shared.syncWithSettings()
+            }
             .store(in: &cancellables)
 
         if !settings.hasCompletedFirstRun {

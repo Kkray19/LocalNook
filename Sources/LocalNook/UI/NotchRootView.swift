@@ -18,6 +18,8 @@ import UniformTypeIdentifiers
 struct NotchRootView: View {
     @ObservedObject var model: NotchViewModel
     @EnvironmentObject var settings: Settings
+    @ObservedObject private var activities = LiveActivityCenter.shared
+    @ObservedObject private var hud = HUDController.shared
 
     private var isOpen: Bool { model.state == .open }
 
@@ -29,8 +31,36 @@ struct NotchRootView: View {
         isOpen ? settings.openCornerRadius : settings.closedCornerRadius + 4
     }
 
+    /// The activity shown beside the collapsed notch, if any.
+    ///
+    /// A HUD change (volume, brightness) outranks a standing activity — the
+    /// user just pressed a key and expects immediate feedback.
+    private var closedActivity: LiveActivity? {
+        guard !isOpen, !model.isSuppressed, model.effectiveClosedHeight > 0 else { return nil }
+        if let hudState = hud.state { return Self.activity(for: hudState) }
+        return activities.current
+    }
+
+    private static func activity(for state: HUDState) -> LiveActivity {
+        LiveActivity(
+            id: "hud.\(state.kind)",
+            symbol: state.isMuted ? "speaker.slash.fill" : state.kind.symbol,
+            tint: .white,
+            leading: state.kind.label,
+            trailing: state.isMuted ? "Muted" : "\(Int((state.value * 100).rounded()))%",
+            style: .transient,
+            progress: state.isMuted ? 0 : state.value,
+            priority: 100
+        )
+    }
+
     private var bodyWidth: CGFloat {
-        isOpen ? NotchGeometry.openSize.width : model.closedSize.width
+        if isOpen { return NotchGeometry.openSize.width }
+        // Widen the collapsed notch to make room for a live activity.
+        if closedActivity != nil {
+            return ClosedActivityView.totalBodyWidth(notchWidth: model.closedSize.width)
+        }
+        return model.closedSize.width
     }
 
     private var bodyHeight: CGFloat {
@@ -63,6 +93,7 @@ struct NotchRootView: View {
                 )
                 .animation(NotchMotion.expand, value: isOpen)
                 .animation(NotchMotion.quick, value: model.closedSize)
+                .animation(NotchMotion.expand, value: closedActivity?.id)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .opacity(model.isSuppressed && !isOpen ? 0 : 1)
@@ -170,6 +201,14 @@ struct NotchRootView: View {
 
     @ViewBuilder
     private var content: some View {
+        if !isOpen, let activity = closedActivity {
+            ClosedActivityView(activity: activity, notchWidth: model.closedSize.width)
+                .frame(
+                    width: NotchShape.totalWidth(forBody: bodyWidth, topRadius: topRadius),
+                    height: bodyHeight
+                )
+                .transition(.opacity)
+        }
         if isOpen {
             ExpandedNotchView(model: model)
                 .padding(.horizontal, topRadius + settings.contentPadding)

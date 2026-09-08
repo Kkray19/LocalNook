@@ -49,7 +49,7 @@ nonisolated enum SessionAgent: String, CaseIterable, Identifiable {
 }
 
 /// One transcript file, described purely by its metadata.
-struct AgentSession: Identifiable, Equatable {
+struct AgentSession: Identifiable, Equatable, Sendable {
     let id: String
     let agent: SessionAgent
     let projectName: String

@@ -29,12 +29,22 @@ enum PreviewRenderer {
 
         // Cover every widget so each one can be reviewed at its real size.
         var scenes: [(name: String, open: Bool, widget: WidgetKind)] = [
-            ("closed", false, .media)
+            ("closed", false, .media),
+            ("closed-activity", false, .media),
         ]
         scenes += WidgetKind.allCases.map { ("open-\($0.rawValue)", true, $0) }
 
         for scene in scenes {
             let model = NotchViewModel(screenID: NSScreen.main?.stableID)
+            if scene.name == "closed-activity" {
+                LiveActivityCenter.shared.previewInject(LiveActivity(
+                    id: "preview", symbol: "waveform", tint: .white,
+                    leading: "Midnight City", trailing: "M83",
+                    style: .persistent, progress: 0.42, priority: 40
+                ))
+            } else {
+                LiveActivityCenter.shared.previewInject(nil)
+            }
             model.selectedWidget = scene.widget
             if scene.open { model.open() }
 

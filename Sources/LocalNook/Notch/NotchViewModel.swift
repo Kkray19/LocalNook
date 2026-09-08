@@ -46,6 +46,18 @@ final class NotchViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] in self?.refreshGeometry() }
             .store(in: &cancellables)
+
+        // Collapse out of the way when this display goes full screen.
+        FullscreenDetector.shared.$coveredScreenIDs
+            .map { covered in screenID.map(covered.contains) ?? false }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] suppressed in
+                guard let self else { return }
+                withAnimation(NotchMotion.content) { self.isSuppressed = suppressed }
+                if suppressed { self.close() }
+            }
+            .store(in: &cancellables)
     }
 
     var screen: NSScreen? {

@@ -14,7 +14,7 @@ import Foundation
 import IOKit.ps
 import SwiftUI
 
-struct BatteryState: Equatable {
+struct BatteryState: Equatable, Sendable {
     var percentage: Int
     var isCharging: Bool
     var isPluggedIn: Bool
