@@ -34,6 +34,14 @@ there from your drag.
 **Displays: 2 connected** (built-in + G274QPF E2). The app is showing 4 windows,
 one panel and one catcher per display.
 
+**A note on step 5.** The tray-label fix ships in this build. If you see
+`imag…e.png` rather than `image-fixture.png`, you are running an older copy —
+check with:
+
+```bash
+shasum -a 256 /Applications/LocalNook.app/Contents/MacOS/LocalNook
+```
+
 ---
 
 ## The checklist
@@ -201,16 +209,27 @@ walking away:
 `enters=1 … handled=1` with a **low** `idle=` figure.
 
 **Why it matters.** The long-standing "roughly 1 hover crossing in 12 goes
-missing" turned out not to be intermittent at all — it is sticky, and it tracks
-how long the machine has been untouched. A batch went 8 runs clean and then 7
-consecutive runs with `enters=0` once the Mac had been idle around half an hour.
-That explanation has only ever been observed in one direction, because getting
-back to a low-idle state needs a real hand on a real mouse.
+missing" was never intermittent. It was the **screen being locked** —
+`loginwindow` sits above everything and a background app receives no
+tracking-area crossings underneath it.
 
-So: if this comes back clean with a low `idle=`, the explanation holds and the
-issue is environmental. If it comes back `enters=0` with a low `idle=`, the
-explanation is **wrong** and the issue needs reopening on different terms.
-Either answer is useful; please paste whatever it prints.
+I got this wrong once before concluding it: idle time correlated beautifully
+across twenty-odd runs and was not the cause. Waking the display with
+`caffeinate -u` reset the idle counter to single digits and the crossings still
+did not arrive; enumerating the windows under the pointer found `loginwindow`
+covering the screen.
+
+The suite now detects this itself and says so rather than guessing:
+
+```
+? [integration] hovering the notch opens it — UNVERIFIED: the screen is locked;
+  loginwindow is above every window, so no crossing can reach the panel
+```
+
+So this step is the one measurement nobody has: an integration run on an
+**unlocked** screen. Clean is the expected answer. `enters=0` on an unlocked
+screen would be a genuine finding and worth stopping for. Please paste whatever
+it prints.
 
 ---
 

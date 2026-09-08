@@ -331,7 +331,7 @@ items back out, hover on the external display, and the "notch stays open while
 typing" guard. These need synthesised pointer input, i.e. Accessibility, which
 LocalNook deliberately does not require.
 
-## Final candidate — 2026-09-08
+## Superseded candidate — 2026-09-08 (1 display)
 
 One binary, one batch, every run reported.
 

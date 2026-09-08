@@ -85,16 +85,29 @@ enum HoverProbe {
         }
     }
 
-    /// Seconds since the machine last saw any human input.
+    /// Whether the login window is covering the screen.
     ///
-    /// Part of the provenance because it turned out to explain the thing the
-    /// counters could not. A batch of twelve integration runs went eight clean
-    /// and then four with `enters=0`, and three more runs immediately after
-    /// were also `enters=0` — sticky, not intermittent. The variable that had
-    /// changed was idle time: after a long unattended stretch the window server
-    /// stops producing crossings for a window moved under a stationary pointer.
-    /// Without this number in the line, that reads as a random platform flake
-    /// and gets filed against the app.
+    /// This is the variable that actually explains the missing crossings, and
+    /// finding it took discarding a wrong answer first. A batch went eight runs
+    /// clean and then twelve-plus with `enters=0` — sticky, not intermittent —
+    /// and idle time looked like the cause because it was the obvious thing
+    /// growing. It was not: waking the display with `caffeinate -u` reset the
+    /// idle counter to nine seconds and the crossings still did not arrive.
+    ///
+    /// The screen was locked. `loginwindow` sits above everything, and a
+    /// background app is not sent tracking-area crossings underneath it. That
+    /// makes a locked screen a **missing precondition** for any hover check —
+    /// the harness cannot deliver its input at all — rather than a platform
+    /// quirk to be excused, and it is reported as such.
+    static var screenIsLocked: Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else {
+            return false
+        }
+        return (session["CGSSessionScreenIsLocked"] as? Int) == 1
+    }
+
+    /// Seconds since the machine last saw human input. Kept in the provenance
+    /// line as context, no longer offered as an explanation.
     static var idleSeconds: Double {
         CGEventSource.secondsSinceLastEventType(
             .combinedSessionState,
@@ -102,25 +115,15 @@ enum HoverProbe {
         )
     }
 
-    /// Idle long enough that the window server is known to stop producing
-    /// crossings for a window moved under a stationary pointer.
-    ///
-    /// Measured, not guessed: clean through 8 runs and then `enters=0` for 7
-    /// consecutive runs once the machine had been untouched for roughly half an
-    /// hour. The threshold below is deliberately conservative — it is a
-    /// reporting aid, not a claim about where the boundary is.
-    static let idleThreshold: Double = 300
-
-    /// Why a run with no crossings is probably not about LocalNook.
-    static var idleExplanation: String {
-        let idle = idleSeconds
-        guard idle >= idleThreshold else {
-            return String(format: "The machine was in use (idle %.0fs), so idle "
-                                + "state does not explain this.", idle)
+    /// Why a run with no crossings may not be about LocalNook at all.
+    static var environmentExplanation: String {
+        if screenIsLocked {
+            return "The screen is LOCKED — loginwindow is covering everything, so a "
+                 + "background app is sent no crossings. The harness could not "
+                 + "deliver its input. Unlock and re-run."
         }
-        return String(format: "The machine had been idle %.0fs; the window server "
-                            + "stops delivering these crossings after a long "
-                            + "unattended stretch. Re-run after using the mouse.", idle)
+        return String(format: "The screen was unlocked and the machine had been idle "
+                            + "%.0fs, so neither explains this.", idleSeconds)
     }
 
     /// One-line provenance, printed with every hover result so a run that
@@ -131,6 +134,7 @@ enum HoverProbe {
         return "enters=\(entersDelivered) exits=\(exitsDelivered) "
              + "handled=\(handlerInvocations) (of which containment=\(containmentForwards))"
              + String(format: " idle=%.0fs", idleSeconds)
+             + (screenIsLocked ? " SCREEN-LOCKED" : "")
     }
 
     /// Classifies an attempt from the counters and the resulting state.

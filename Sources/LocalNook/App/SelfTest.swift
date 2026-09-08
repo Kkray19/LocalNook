@@ -94,8 +94,20 @@ enum SelfTest {
 
         if suite != .deterministic {
             print("\n== LIVE INTEGRATION (real window server) ==")
-            testHoverPath()
-            testCatcherHover()
+            // A locked screen is an unmet precondition, not a platform quirk to
+            // be attributed after the fact: with loginwindow covering
+            // everything the harness cannot deliver a crossing at all. The
+            // crossing-dependent checks say so; the rest still run, because
+            // open(), toggle() and the initial state do not need one.
+            //
+            // It also has to be checked *before* the assertions rather than
+            // after: "a pointer merely passing over the notch does not open it"
+            // is a negative, and a locked screen satisfies it vacuously. That
+            // would be a false pass, which is worse than an honest UNVERIFIED.
+            let locked = HoverProbe.screenIsLocked
+            if locked { print("\n  NOTE: the screen is LOCKED — no crossing can be delivered.") }
+            testHoverPath(screenLocked: locked)
+            testCatcherHover(screenLocked: locked)
         }
 
         AppInfo.defaults.removePersistentDomain(forName: AppInfo.testSuiteName)
@@ -168,7 +180,7 @@ enum SelfTest {
     /// pointer means this needs no Accessibility permission — which is the whole
     /// point, since `NSEvent.addGlobalMonitorForEvents` silently never fires
     /// without it and hover must not depend on that.
-    private static func testHoverPath() {
+    private static func testHoverPath(screenLocked: Bool = false) {
         section("Hover (end to end)")
         print("    AXIsProcessTrusted = \(AXIsProcessTrusted())")
 
@@ -246,20 +258,21 @@ enum SelfTest {
         // did not work". Each branch names a different culprit, and only two of
         // them are LocalNook's.
         let outcome = HoverProbe.classify(
-            placed: true,
-            placementDetail: "",
+            placed: !screenLocked,
+            placementDetail: "the screen is locked; loginwindow is above every "
+                           + "window, so no crossing can reach the panel",
             opened: opened
         )
         switch outcome {
         case .succeeded:
             check("[integration] hovering the notch opens it", true)
-        case .preconditionUnmet:
-            unmet("[integration] hovering the notch opens it", "placement check passed but was reported unmet")
+        case let .preconditionUnmet(detail):
+            unmet("[integration] hovering the notch opens it", detail)
         case .noPlatformEvent:
             unmet("[integration] hovering the notch opens it",
                   "AppKit delivered no mouseEntered across \(attempts + 1) window moves; "
                   + "the pointer was verified inside the strip each time. "
-                  + HoverProbe.idleExplanation)
+                  + HoverProbe.environmentExplanation)
         case let .eventDropped(enters):
             check("[integration] hovering the notch opens it", false,
                   "AppKit delivered \(enters) crossing(s); LocalNook's handler ran 0 times")
@@ -291,7 +304,10 @@ enum SelfTest {
         // this flaky stimulus happens to work.
         let entersAtOpen = HoverProbe.entersDelivered
         panel.setFrameOrigin(NSPoint(x: 4, y: 4))
-        if opened {
+        if screenLocked {
+            unmet("[integration] moving the pointer off it collapses again",
+                  "the screen is locked; unlock and re-run")
+        } else if opened {
             let closed = waitUntil({ model.state == .closed }, timeout: 2.0)
             reportExit("[integration] moving the pointer off it collapses again",
                        closed: closed, entersSeen: entersAtOpen, state: model.state)
@@ -1031,7 +1047,7 @@ enum SelfTest {
     /// so its tracking area never fires. If the catcher's hover broke, the notch
     /// would simply stop opening — and the older hover test would still pass,
     /// because it exercises the wrong window.
-    private static func testCatcherHover() {
+    private static func testCatcherHover(screenLocked: Bool = false) {
         section("Catcher hover (end to end)")
         let settings = Settings.shared
         let originalDelay = settings.openDelay
@@ -1054,8 +1070,11 @@ enum SelfTest {
         let crossed = placed && waitUntil({ model.state == .open }, timeout: 1.5)
 
         switch HoverProbe.classify(
-            placed: placed,
-            placementDetail: "window server clamped the frame; pointer at \(cursor)",
+            placed: placed && !screenLocked,
+            placementDetail: screenLocked
+                ? "the screen is locked; loginwindow is above every window, so no "
+                  + "crossing can reach the catcher"
+                : "window server clamped the frame; pointer at \(cursor)",
             opened: crossed
         ) {
         case .succeeded:
@@ -1065,7 +1084,7 @@ enum SelfTest {
         case .noPlatformEvent:
             unmet("[integration] hovering the catcher opens the notch",
                   "AppKit delivered no crossing for a window moved under a still pointer. "
-                  + HoverProbe.idleExplanation)
+                  + HoverProbe.environmentExplanation)
         case let .eventDropped(enters):
             check("[integration] hovering the catcher opens the notch", false,
                   "AppKit delivered \(enters) crossing(s) and LocalNook forwarded none")
@@ -1090,7 +1109,12 @@ enum SelfTest {
         // left the state alone. Closing on exit is testHoverPath's job; recovery
         // when no exit arrives at all is testMissedCrossingRecovery's.
         panel.setFrame(parked, display: true)
-        if crossed {
+        if screenLocked {
+            unmet("[integration] the catcher hands an open notch to the panel rather than closing it",
+                  "the screen is locked; unlock and re-run")
+            unmet("[integration] leaving the catcher clears the stay-shut latch",
+                  "the screen is locked; unlock and re-run")
+        } else if crossed {
             pumpEvents(for: 0.6)
             check("[integration] the catcher hands an open notch to the panel rather than closing it",
                   model.state == .open,
@@ -1126,9 +1150,16 @@ enum SelfTest {
         pumpEvents(for: 0.15)
         panel.setFrame(NSRect(x: 4, y: 4, width: size.width, height: size.height), display: true)
         pumpEvents(for: 1.2)
-        check("a pointer merely passing over the notch does not open it",
-              model.state == .closed,
-              "it opened after the pointer had already left")
+        // A negative assertion, so a locked screen satisfies it for the wrong
+        // reason. Reporting that as a pass would be worse than reporting nothing.
+        if screenLocked {
+            unmet("a pointer merely passing over the notch does not open it",
+                  "the screen is locked, so nothing could have opened it anyway")
+        } else {
+            check("a pointer merely passing over the notch does not open it",
+                  model.state == .closed,
+                  "it opened after the pointer had already left")
+        }
 
         panel.orderOut(nil)
         panel.close()

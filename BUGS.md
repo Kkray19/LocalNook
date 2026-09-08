@@ -7,131 +7,21 @@ reproduced rather than taken on trust.
 
 ## OPEN
 
-### Hover: what is actually still open
+### Hover on an unlocked screen is under-measured, not proven
 
-**Reclassified.** The single entry that used to sit here — "roughly 1 run in 12
-misses a hover crossing" — turned out to be three different things wearing one
-number. Separated, only one of them is still open, and it is not a product
-defect.
+Not a known defect — an evidence gap. Every `enters=0` observation has a
+sufficient explanation that is not about LocalNook (see "Hover: resolved into
+three separate things" under RESOLVED), and no run has ever produced
+`eventDropped` or `wrongState`, the two outcomes that would be defects and that
+both fail the build.
 
-#### 1. Invalid assertion — CLOSED, was never a product failure
+But the clean-run evidence and the failing-run evidence come from different
+machine states, so "hover works" rests on runs taken before the screen locked
+plus one live observation session on the built-in display. Hover with a real
+pointer on the **external** display has still never been observed at all.
 
-The reproducible failure (4 runs of 4) was the catcher being asked to close an
-open notch. It deliberately does not: once the notch is open the pointer has
-moved *into* the expanded panel, which owns hover from then on. The test was
-wrong. Corrected; see "the catcher was asked to close a notch it deliberately
-hands over" under RESOLVED.
-
-#### 2. Incomplete instrumentation — CLOSED, evidence was unreliable
-
-Three probe bugs meant earlier classifications cannot be trusted at all: the
-counters were reset *after* the stimulus, `HoverTracker` never recorded that it
-forwarded anything, and containment re-checks were counted as crossings. Every
-hover figure recorded before those fixes describes the instrument, not the app.
-This is why the old ~1-in-12 number is not comparable to anything measured
-since, in either direction.
-
-#### 3. The platform gap — OPEN, and it is the harness's problem
-
-**Reproducible symptom:** AppKit does not reliably deliver `mouseEntered` when a
-*window* is moved out from under, or under, a stationary pointer. When it
-happens the probe reads `enters=0`, and the check reports UNVERIFIED.
-
-**Why it is not a product defect.** A user moves the pointer onto a stationary
-panel. Moving the window instead is the only stimulus a test can produce without
-Accessibility, and it is the one the window server treats differently. No run
-has ever shown LocalNook receiving a crossing and dropping it (`eventDropped`)
-or mishandling it (`wrongState`) — the two outcomes that *would* be defects, and
-both of which fail the build.
-
-**It is not intermittent. It is sticky, and it tracks machine idle time.**
-
-This was mis-characterised for the whole of its life as "roughly 1 run in 12".
-A batch of 12 integration runs against one frozen binary made the pattern
-obvious:
-
-| Runs | Result | Probe |
-|---|---|---|
-| 1–8 | clean | `enters=1 handled=1 opened-by: trackingArea` |
-| 9–12 | UNVERIFIED | `enters=0 handled=0 opened-by: nothing` |
-
-Three further runs immediately afterwards were also `enters=0`, and three more
-after that: **seven consecutive**, not one in twelve. The variable that had
-changed between run 8 and run 9 was not the binary, the displays, or the pointer
-position — all constant. It was idle time. The machine had been untouched for
-around half an hour, and after a long unattended stretch the window server stops
-producing crossings for a window moved under a stationary pointer.
-
-`HoverProbe` now prints `idle=NNNNs` in every provenance line, and the UNVERIFIED
-message says so outright, so this cannot be re-filed against the app by the next
-person to see it:
-
-```
-probe: enters=0 exits=0 handled=0 (of which containment=0) idle=2098s opened-by: nothing
-? [integration] hovering the notch opens it — UNVERIFIED: … The machine had been
-  idle 2098s; the window server stops delivering these crossings after a long
-  unattended stretch. Re-run after using the mouse.
-```
-
-**Measurements, each against one frozen binary:**
-
-| Binary | Displays | Runs | Result |
-|---|---|---|---|
-| `9df4dce2…` | 1 | 12 | 12 clean |
-| `9df4dce2…` | 2 | 6 | 6 clean |
-| `9c0ab374…` | 2 | 12 | 8 clean, then 4 `enters=0` at high idle |
-
-**Why this still stays OPEN.** The idle correlation is strong but only tested in
-one direction: it has been observed going from clean to `enters=0` as idle time
-grew, never from `enters=0` back to clean, because returning to a low-idle state
-requires real pointer input and this session cannot produce it. Until that
-second direction is observed, "idle causes it" is a well-supported explanation
-rather than a demonstrated one.
-
-**What would establish resolution — a falsifiable prediction.** Use the mouse
-for a moment, then immediately run:
-
-```bash
-/Applications/LocalNook.app/Contents/MacOS/LocalNook --self-test --integration
-```
-
-If the idle explanation is right, this comes back clean with `enters=1
-handled=1` and a low `idle=` figure. If it comes back `enters=0` with a low
-`idle=` figure, the explanation is wrong and the whole entry needs reopening on
-different terms. Step 13 of docs/ACCEPTANCE.md asks for exactly this.
-
-Separately, hands-on confirmation that hover works with a real pointer on both
-displays (steps 1 and 9) is what actually matters, because it tests the gesture
-users make rather than the substitute the harness is forced to use.
-
-**Not in scope for a code change.** No speculative fix should be attempted
-against item 3: an earlier attempt to re-check containment on window moves made
-real hover measurably worse (1 clean run in 10, against ~14 in 15) and was
-reverted. See the reverted-fix note under RESOLVED.
-
-### 0-2disp. Two checks took an arbitrary notch and failed once a second display appeared
-
-**Found by:** reconnecting the external display. Two deterministic checks that
-had been clean for hundreds of runs started failing intermittently — the
-fallback hold-off about 2 runs in 3, the claim-release check about 1 in 3.
-
-**Cause:** the same defect in both, and it was in the tests. They used
-`controller.allModels.first` — an arbitrary dictionary entry — while
-`controller.perform(.open)` routes to whichever display the pointer is on. With
-one display those were always the same model. With two they often were not, so
-the hold-off check parked the injected pointer on one screen's notch while a
-different screen's notch was the open one, and then read the entirely correct
-per-display close as a failure to hold off. The claim-release check simply
-never opened the notch it was asserting about.
-
-**Worth stating plainly:** this looked exactly like a product defect —
-"the fallback closed a notch the pointer was resting on" is a serious-sounding
-failure — and it was not one. Nothing in the app changed. Both checks now act
-on a model they have identified rather than one they hope is the right one.
-
-**Lesson recorded in docs/TEST_LOG.md:** the number of attached displays is a
-test input, not background. Changing it means re-running the deterministic
-suite.
+**Closes when:** docs/ACCEPTANCE.md steps 1, 9 and 13 come back with observed
+results.
 
 ### Multi-display scoping is verified against a seeded notch, not two monitors
 
@@ -164,6 +54,96 @@ The handling code is covered; the interaction is not.
 ---
 
 ## RESOLVED
+
+### Hover: resolved into three separate things, none of them open
+
+**Reclassified, then closed.** The single entry that used to sit here —
+"roughly 1 run in 12 misses a hover crossing" — was three different things
+wearing one number, and none of the three is a product defect. What remains is
+not an open bug but an **under-measured case**: hover on an unlocked screen with
+a real pointer, which is what docs/ACCEPTANCE.md steps 1, 9 and 13 ask for.
+
+| Part | Verdict |
+|---|---|
+| An assertion the catcher was never meant to satisfy | closed — the test was wrong |
+| Instrumentation that misreported its own counters | closed — three bugs, fixed |
+| `enters=0` runs | closed — the screen was locked |
+
+#### 1. Invalid assertion — CLOSED, was never a product failure
+
+The reproducible failure (4 runs of 4) was the catcher being asked to close an
+open notch. It deliberately does not: once the notch is open the pointer has
+moved *into* the expanded panel, which owns hover from then on. The test was
+wrong. Corrected; see "the catcher was asked to close a notch it deliberately
+hands over" under RESOLVED.
+
+#### 2. Incomplete instrumentation — CLOSED, evidence was unreliable
+
+Three probe bugs meant earlier classifications cannot be trusted at all: the
+counters were reset *after* the stimulus, `HoverTracker` never recorded that it
+forwarded anything, and containment re-checks were counted as crossings. Every
+hover figure recorded before those fixes describes the instrument, not the app.
+This is why the old ~1-in-12 number is not comparable to anything measured
+since, in either direction.
+
+#### 3. A locked screen — CLOSED, and it was never a platform gap either
+
+**What it actually was.** With the screen locked, `loginwindow` covers every
+display above all other windows and a background app is sent no tracking-area
+crossings at all. The harness cannot deliver its input. That is a missing
+precondition, not a platform quirk and not a defect.
+
+**Two wrong answers were held first, and both are worth recording.**
+
+*Wrong answer one: "roughly 1 run in 12, intermittent."* It is not intermittent.
+A twelve-run batch went eight clean then four with `enters=0`; the next twelve
+were all `enters=0`. Sticky, not random. The rate was an artefact of averaging
+across a state change nobody had noticed.
+
+*Wrong answer two: "it tracks machine idle time."* Idle time was the obvious
+thing growing, and the correlation looked strong — clean below it, `enters=0`
+above it, across more than twenty runs. It was still wrong. The test that killed
+it: `caffeinate -u` wakes the display and resets the idle counter to single
+digits, and the crossings **still** did not arrive. A correlation observed in
+one direction across twenty runs was not evidence of a cause.
+
+**What settled it.** Enumerating the windows under the pointer, rather than
+reasoning about what might be true:
+
+```
+under pointer: Window Server  layer=2147483646  (0.0, 0.0, 1512.0, 982.0)
+under pointer: loginwindow    layer=2004        (0.0, 0.0, 1512.0, 982.0)
+```
+
+`CGSessionCopyCurrentDictionary()["CGSSessionScreenIsLocked"] == 1` confirmed it
+directly.
+
+**How it is reported now.** The suite checks the lock state *before* attempting
+the crossing-dependent assertions, because one of them is a negative — "a
+pointer merely passing over the notch does not open it" — which a locked screen
+satisfies for entirely the wrong reason. Reporting that as a pass would be worse
+than reporting nothing:
+
+```
+? [integration] hovering the notch opens it — UNVERIFIED: the screen is locked;
+  loginwindow is above every window, so no crossing can reach the panel
+? a pointer merely passing over the notch does not open it — UNVERIFIED: the
+  screen is locked, so nothing could have opened it anyway
+```
+
+The checks that do not need a crossing — `starts collapsed`, `open() opens`,
+`toggle() collapses` — still run and still pass.
+
+**What remains genuinely unknown.** Whether hover has *any* residual problem
+when the screen is unlocked. Every `enters=0` observation now has a sufficient
+explanation that is not about LocalNook, and no run has ever shown `eventDropped`
+or `wrongState` — the two outcomes that would be defects. But the clean-run
+evidence and the failing-run evidence come from different machine states, so the
+honest position is that the unlocked case is **under-measured**, not proven good.
+
+**What would establish it:** steps 1, 9 and 13 of docs/ACCEPTANCE.md — hover with
+a real pointer on both displays, and one integration run on an unlocked screen.
+
 
 ### 0. Retiring a notch cancelled its work but never released its claims
 
