@@ -39,7 +39,11 @@ final class NotchViewModel: ObservableObject {
     /// Set when the notch is closed deliberately while the pointer is still on
     /// it, so hover does not immediately re-open it. Cleared when the pointer
     /// leaves.
-    private var hoverReopenBlocked = false
+    /// Set when a deliberate close happens under a still pointer, so hover does
+    /// not bounce the notch straight back open. Readable so a test can assert
+    /// that leaving the notch clears it, rather than inferring that from a
+    /// subsequent reopen.
+    private(set) var hoverReopenBlocked = false
     private var openTask: Task<Void, Never>?
     private var closeTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()

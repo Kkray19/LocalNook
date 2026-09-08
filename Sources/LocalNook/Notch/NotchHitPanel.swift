@@ -108,6 +108,7 @@ final class NotchHitView: NSView {
             let nowInside = bounds.contains(point)
             if nowInside != isInside {
                 isInside = nowInside
+                HoverProbe.recordContainmentForward()
                 onHoverChange?(nowInside)
             }
         }

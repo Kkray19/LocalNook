@@ -83,6 +83,7 @@ struct HoverTracker: NSViewRepresentable {
                 let nowInside = bounds.contains(point)
                 if nowInside != isInside {
                     isInside = nowInside
+                    HoverProbe.recordContainmentForward()
                     onChange?(nowInside)
                 }
             }
@@ -96,6 +97,7 @@ struct HoverTracker: NSViewRepresentable {
             guard !isInside else { return }
             HoverTracker.record("mouseEntered")
             isInside = true
+            HoverProbe.recordHandlerCall()
             onChange?(true)
         }
 
@@ -104,6 +106,7 @@ struct HoverTracker: NSViewRepresentable {
             guard isInside else { return }
             HoverTracker.record("mouseExited")
             isInside = false
+            HoverProbe.recordHandlerCall()
             onChange?(false)
         }
 

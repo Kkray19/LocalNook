@@ -164,6 +164,12 @@ enum SelfTest {
         pumpEvents(for: 0.4)
         check("starts collapsed", model.state == .closed)
 
+        // Reset before the first placement. Resetting after it zeroed the very
+        // crossing that opened the notch, so a successful run reported
+        // enters=0 — a passing check with provenance that contradicted it.
+        HoverProbe.reset()
+        NotchTransitionLog.clear()
+
         // Slide the hover region under the cursor.
         let cursor = NSEvent.mouseLocation
         let hoverWidth = NotchShape.totalWidth(
@@ -193,7 +199,6 @@ enum SelfTest {
 
         // Retry the gesture, not the assertion — see provokeCrossing.
         let parkedFrame = NSRect(x: 4, y: 4, width: 320, height: 120)
-        HoverProbe.reset()
         var opened = waitUntil({ model.state == .open }, timeout: 1.0)
         var attempts = 0
         while !opened, attempts < 3 {
@@ -231,7 +236,12 @@ enum SelfTest {
             check("[integration] hovering the notch opens it", false,
                   "LocalNook handled \(calls) crossing(s) and the notch is still \(model.state)")
         }
-        print("    probe: \(HoverProbe.summary)")
+        // Stage counters say how far a crossing got; the transition source says
+        // which mechanism actually moved the notch. Printing only the counters
+        // produced a passing run whose provenance read handled=0 — true, and
+        // useless, because a different path had done the work.
+        print("    probe: \(HoverProbe.summary) "
+              + "opened-by: \(NotchTransitionLog.all.last { $0.opened }.map { "\($0.source)" } ?? "nothing")")
         if !opened {
             // Only noisy when something is actually wrong.
             print("    cursor: \(cursor)")
@@ -248,11 +258,12 @@ enum SelfTest {
         // unconditionally by testMissedCrossingRecovery in the deterministic
         // suite — a hard gate on every run rather than one that only fires when
         // this flaky stimulus happens to work.
+        let entersAtOpen = HoverProbe.entersDelivered
         panel.setFrameOrigin(NSPoint(x: 4, y: 4))
         if opened {
-            check("[integration] moving the pointer off it collapses again",
-                  waitUntil({ model.state == .closed }, timeout: 2.0),
-                  "still \(model.state); probe: \(HoverProbe.summary)")
+            let closed = waitUntil({ model.state == .closed }, timeout: 2.0)
+            reportExit("[integration] moving the pointer off it collapses again",
+                       closed: closed, entersSeen: entersAtOpen, state: model.state)
         } else {
             unmet("[integration] moving the pointer off it collapses again",
                   "the notch never opened, so there was no open state to collapse")
@@ -988,6 +999,7 @@ enum SelfTest {
         let cursor = NSEvent.mouseLocation
         let parked = NSRect(x: 4, y: 4, width: size.width, height: size.height)
         HoverProbe.reset()
+        NotchTransitionLog.clear()
         let placed = placePanel(panel, around: cursor, size: size)
         let crossed = placed && waitUntil({ model.state == .open }, timeout: 1.5)
 
@@ -1011,21 +1023,34 @@ enum SelfTest {
                   "LocalNook handled \(calls) crossing(s) but the notch is \(model.state)")
         }
 
-        print("    probe: \(HoverProbe.summary)")
+        print("    probe: \(HoverProbe.summary) "
+              + "opened-by: \(NotchTransitionLog.all.last { $0.opened }.map { "\($0.source)" } ?? "nothing")")
 
         // This model is not in the controller's registry, so the pointer
         // fallback does not cover it — asserting recovery here would be
         // asserting a promise the product does not make for a detached panel.
         // The real postcondition ("a notch open with the pointer elsewhere
         // always closes") is a hard gate in testMissedCrossingRecovery.
+        // The catcher deliberately does *not* close an open notch when the
+        // pointer leaves it: by then the pointer has moved into the expanded
+        // panel, which owns hover from that point on. Asserting a collapse here
+        // asserted behaviour the catcher does not have — and the probe caught
+        // it, reporting an exit that was delivered, forwarded, and correctly
+        // left the state alone. Closing on exit is testHoverPath's job; recovery
+        // when no exit arrives at all is testMissedCrossingRecovery's.
         panel.setFrame(parked, display: true)
         if crossed {
-            check("[integration] the catcher's notch collapses when the panel leaves",
-                  waitUntil({ model.state == .closed }, timeout: 2.0),
-                  "state is \(model.state)")
+            pumpEvents(for: 0.6)
+            check("[integration] the catcher hands an open notch to the panel rather than closing it",
+                  model.state == .open,
+                  "the catcher closed it itself; state \(model.state), probe \(HoverProbe.summary)")
+            check("[integration] leaving the catcher clears the stay-shut latch",
+                  !model.hoverReopenBlocked)
         } else {
-            unmet("[integration] the catcher's notch collapses when the panel leaves",
-                  "it never opened, so there was no open state to collapse")
+            unmet("[integration] the catcher hands an open notch to the panel rather than closing it",
+                  "it never opened, so there was no hand-over to observe")
+            unmet("[integration] leaving the catcher clears the stay-shut latch",
+                  "no crossing was delivered to leave")
         }
         model.close()
 
@@ -1632,6 +1657,37 @@ enum SelfTest {
             if waitUntil(didCross, timeout: 1.0) { return true }
         }
         return didCross()
+    }
+
+    /// Reports the leaving half of a live crossing, attributed the same way as
+    /// the arriving half.
+    ///
+    /// A detached test panel that AppKit never sends `mouseExited` to has
+    /// nothing left that could close it — no controller owns it, so no fallback
+    /// covers it. That is a gap in the stimulus, not a broken promise: the
+    /// product contract is that a *controller-owned* notch always recovers, and
+    /// testMissedCrossingRecovery asserts exactly that, deterministically, on
+    /// every run. LocalNook dropping or mishandling an exit it was given stays a
+    /// hard failure here.
+    private static func reportExit(
+        _ name: String, closed: Bool, entersSeen: Int, state: NotchState
+    ) {
+        switch HoverProbe.classifyExit(closed: closed, entersSeen: entersSeen) {
+        case .succeeded:
+            check(name, true)
+        case .noPlatformEvent:
+            unmet(name, "AppKit delivered no mouseExited for the window moving away "
+                      + "(probe: \(HoverProbe.summary)); recovery for an owned notch is "
+                      + "covered by testMissedCrossingRecovery")
+        case let .eventDropped(exits):
+            check(name, false,
+                  "AppKit delivered \(exits) exit(s) and LocalNook forwarded none")
+        case let .wrongState(calls):
+            check(name, false,
+                  "LocalNook handled \(calls) crossing(s) and the notch is still \(state)")
+        case let .preconditionUnmet(detail):
+            unmet(name, detail)
+        }
     }
 
     /// Records that a check could not be run, and why.

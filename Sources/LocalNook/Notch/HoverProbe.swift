@@ -29,6 +29,11 @@ enum HoverProbe {
     nonisolated(unsafe) private(set) static var exitsDelivered = 0
     /// Times LocalNook forwarded a crossing to a view model.
     nonisolated(unsafe) private(set) static var handlerInvocations = 0
+    /// Forwards that came from re-checking containment when a tracking area was
+    /// rebuilt, rather than from a delivered crossing. Counted separately: the
+    /// notch resizing under a still pointer is a different path from the pointer
+    /// arriving, and conflating them makes `handled` disagree with `enters`.
+    nonisolated(unsafe) private(set) static var containmentForwards = 0
 
     private static let lock = NSLock()
 
@@ -44,11 +49,18 @@ enum HoverProbe {
         lock.lock(); handlerInvocations += 1; lock.unlock()
     }
 
+    /// A forward triggered by a tracking-area rebuild finding the pointer
+    /// already inside, not by a crossing.
+    static func recordContainmentForward() {
+        lock.lock(); handlerInvocations += 1; containmentForwards += 1; lock.unlock()
+    }
+
     static func reset() {
         lock.lock()
         entersDelivered = 0
         exitsDelivered = 0
         handlerInvocations = 0
+        containmentForwards = 0
         lock.unlock()
     }
 
@@ -77,7 +89,8 @@ enum HoverProbe {
     static var summary: String {
         lock.lock()
         defer { lock.unlock() }
-        return "enters=\(entersDelivered) exits=\(exitsDelivered) handled=\(handlerInvocations)"
+        return "enters=\(entersDelivered) exits=\(exitsDelivered) "
+             + "handled=\(handlerInvocations) (of which containment=\(containmentForwards))"
     }
 
     /// Classifies an attempt from the counters and the resulting state.
@@ -86,6 +99,22 @@ enum HoverProbe {
         if opened { return .succeeded }
         if entersDelivered == 0 { return .noPlatformEvent }
         if handlerInvocations == 0 { return .eventDropped(enters: entersDelivered) }
+        return .wrongState(handlerCalls: handlerInvocations)
+    }
+
+    /// The same classification for the leaving half of a crossing.
+    ///
+    /// The exit is subject to the identical platform limitation as the entry —
+    /// AppKit is not obliged to deliver `mouseExited` when a *window* moves out
+    /// from under a still pointer — and is observed to be the more frequent
+    /// casualty of the two, since by then the panel is already moving. What a
+    /// detached test panel does when no exit arrives is not a product
+    /// postcondition: nothing owns it. The real contract, for a
+    /// controller-owned notch, is asserted deterministically elsewhere.
+    static func classifyExit(closed: Bool, entersSeen: Int) -> Outcome {
+        if closed { return .succeeded }
+        if exitsDelivered == 0 { return .noPlatformEvent }
+        if handlerInvocations <= entersSeen { return .eventDropped(enters: exitsDelivered) }
         return .wrongState(handlerCalls: handlerInvocations)
     }
 }
