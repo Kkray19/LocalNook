@@ -14,7 +14,35 @@ characteristics and mixing them hides that.
 |---|---|---|
 | What it drives | The controller through injected seams: pointer position, mouse-button state, connected displays, and scheduling | The live window server, asked to deliver a real tracking event |
 | Must pass | Every run, on any machine | Not guaranteed — see below |
-| Release | **Gates packaging** | Reported, never a gate |
+| Release | Gates packaging | **Gates packaging on defects** |
+
+### The release policy
+
+"Integration checks never gate" was the wrong rule: it meant a demonstrated
+product defect could ship because of which half of the suite happened to find
+it. "Everything gates" is equally wrong: it reddens the build when the window
+server declines to deliver an event, which teaches people to ignore the gate.
+
+So the outcome has three states, and the exit code carries the distinction:
+
+| Exit | Meaning | Release |
+|---|---|---|
+| `0` | Everything asserted and held | proceeds |
+| `1` | A check **failed** — a delivered event was mishandled, or a final state was wrong. A demonstrated product defect. | **blocked**, from either half |
+| `2` | Nothing failed, but a scenario could not be exercised: a missing environmental precondition, or input the harness could not deliver | proceeds, recorded as an explicit limitation |
+
+Two consequences worth stating plainly:
+
+- **A failure in the integration half blocks the release.** It is not advisory.
+  `scripts/test-release.py` proves this with the `integration_defect` scenario.
+- **An unverified scenario does not block, and does not disappear.** The build
+  prints `NOTE: this build has unverified scenarios … It is not fully verified`,
+  the names are listed at the end of the run, and `verify-candidate.sh` exits 2.
+  The `integration_unverified` scenario proves it still packages.
+
+In the deterministic half, exit `2` is itself treated as a failure: every check
+there injects its own preconditions, so "could not run" means a seam has been
+lost, not that the machine was busy.
 
 ```
 $ dist/LocalNook.app/Contents/MacOS/LocalNook --self-test --deterministic
@@ -263,11 +291,12 @@ was a check that reported a pass without running.
 Hover on the **built-in** display: seven open→close pairs recorded against the
 live app instance before any scripted command in that session. See BUGS.md.
 
-### Deliberately not gating
+### What the integration half gates on
 
 The live integration half moves a window under a stationary pointer, because
 that is the only way to simulate hover without Accessibility, and AppKit does
-not always deliver the crossing. It is reported, never used as a gate.
+not always deliver the crossing. It gates on defects and not on the environment
+— see "The release policy" above.
 
 What that does and does not cover:
 

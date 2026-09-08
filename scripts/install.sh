@@ -55,11 +55,16 @@ CANDIDATE_SHA="$(shasum -a 256 "$EXEC" | cut -d ' ' -f1)"
 echo "    candidate: $CANDIDATE_SHA"
 
 step "Running the deterministic suite against the candidate…"
-if "$EXEC" --self-test --deterministic >/dev/null 2>&1; then
-  echo "    deterministic suite passed"
-else
-  fail "the candidate fails its own deterministic suite — not installing it"
-fi
+set +e
+"$EXEC" --self-test --deterministic >/dev/null 2>&1
+SELFTEST_RC=$?
+set -e
+case "$SELFTEST_RC" in
+  0) echo "    deterministic suite passed" ;;
+  2) fail "a deterministic check could not run — that half injects its own
+     preconditions, so this means a broken seam, not a quiet machine" ;;
+  *) fail "the candidate fails its own deterministic suite — not installing it" ;;
+esac
 
 [ -d "$TARGET_DIR" ] || fail "no such install directory: $TARGET_DIR"
 [ -w "$TARGET_DIR" ] || fail "cannot write to $TARGET_DIR"

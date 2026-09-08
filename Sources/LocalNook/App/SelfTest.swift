@@ -26,6 +26,9 @@ enum SelfTest {
     /// Checks whose precondition could not be met. Never counted as passes: an
     /// integration check that could not run is unverified, not green.
     private nonisolated(unsafe) static var unverified = 0
+    /// Names of the checks that could not run, repeated at the end so a
+    /// limitation is not something a reader has to go hunting for in the log.
+    private nonisolated(unsafe) static var unverifiedNames: [String] = []
 
     /// Which half of the suite to run.
     ///
@@ -108,9 +111,36 @@ enum SelfTest {
         if unverified > 0 {
             print("")
             print("UNVERIFIED means a check could not be exercised, NOT that it passed.")
-            print("A required integration check that could not run remains unverified.")
+            print("A required check that could not run remains an explicit limitation.")
+            for name in unverifiedNames { print("  unverified: \(name)") }
         }
-        exit(failed == 0 ? 0 : 1)
+        exit(Int32(ExitCode.forResults(failed: failed, unverified: unverified).rawValue))
+    }
+
+    /// How a run's outcome reaches the release script.
+    ///
+    /// Three states, not two. Collapsing "a check could not run" into either
+    /// "passed" or "failed" is what produces the two bad policies: a gate that
+    /// reddens because nobody was at the keyboard, or a suite that waves through
+    /// a demonstrated defect because it lives in the half labelled advisory.
+    enum ExitCode: Int {
+        /// Everything asserted, everything held.
+        case clean = 0
+        /// At least one check failed. A failure is only ever recorded for a
+        /// demonstrated product defect — an event LocalNook was given and
+        /// mishandled, or a final state that is wrong. This blocks a release
+        /// whichever half of the suite produced it.
+        case defect = 1
+        /// Nothing failed, but a check could not be exercised: an environmental
+        /// precondition was missing, or the harness could not deliver its input.
+        /// Does not block a release; must be carried forward as a limitation.
+        case unverified = 2
+
+        static func forResults(failed: Int, unverified: Int) -> ExitCode {
+            if failed > 0 { return .defect }
+            if unverified > 0 { return .unverified }
+            return .clean
+        }
     }
 
     private struct Tally {
@@ -807,12 +837,19 @@ enum SelfTest {
         }
 
         // Nothing may survive a close into the next open.
-        controller.perform(.open)
+        //
+        // Driven on this model directly. `perform(.open)` routes to whichever
+        // display the pointer is on, which is not necessarily `first` — with a
+        // second display attached that raced, the notch under test never
+        // opened, and the check reported itself unverified about a third of the
+        // time. Same root cause as the fallback hold-off check above.
+        first.allowHoverToReopen()
+        first.open()
         waitUntil { first.state == .open }
         if first.state == .open {
             first.claimInteraction(.textEditing, owner: UUID())
             first.claimInteraction(.dragging, owner: UUID())
-            controller.perform(.close)
+            first.close()
             waitUntil { first.state == .closed }
             check("closing releases every claim", !first.isInteracting,
                   "claims survived into the next open: \(first.activeInteractions.map(\.label))")
@@ -874,21 +911,33 @@ enum SelfTest {
         let realPointer = controller.pointerLocation
         defer { controller.pointerLocation = realPointer }
 
-        // 1. Pointer resting on the notch: the fallback must leave it alone.
-        if let onNotch = controller.allModels.first.flatMap({ model -> NSPoint? in
-            guard let screen = model.screen else { return nil }
-            return NSPoint(x: screen.frame.midX,
-                           y: screen.frame.maxY - NotchGeometry.openSize.height / 2)
-        }) {
+        // 1. Pointer resting on the notch: the fallback must leave *that* notch
+        //    alone.
+        //
+        // The pointer has to be parked on the display whose notch is actually
+        // open. Taking `allModels.first` picked an arbitrary dictionary entry,
+        // so with two displays attached it parked the pointer on one screen's
+        // notch while the other screen's notch was the open one — and then read
+        // the entirely correct per-display close as a failure to hold off. It
+        // passed on a one-display Mac for the same reason it was wrong: there
+        // was only ever one model to pick.
+        let openModel = controller.allModels.first { $0.state == .open }
+        if let openModel, let screen = openModel.screen {
+            let onNotch = NSPoint(x: screen.frame.midX,
+                                  y: screen.frame.maxY - NotchGeometry.openSize.height / 2)
             controller.pointerLocation = { onNotch }
             controller.runPointerSafetyCheckNow()
             pumpEvents(for: 0.3)
             check("the fallback holds off while the pointer is on the notch",
-                  controller.allModels.contains { $0.state == .open },
-                  "it closed a notch the pointer was resting on")
+                  openModel.state == .open,
+                  "it closed the notch the pointer was resting on"
+                  + " (\(NSScreen.screens.count) display(s) attached)")
+        } else if openModel == nil {
+            check("the fallback holds off while the pointer is on the notch", false,
+                  "no notch was open to hold off on after perform(.open)")
         } else {
             unmet("the fallback holds off while the pointer is on the notch",
-                  "no notch has a screen to compute a pointer position on")
+                  "the open notch has no screen to compute a pointer position on")
         }
 
         // 2. Pointer clearly elsewhere: one pass must close it, and say why.
@@ -1697,6 +1746,7 @@ enum SelfTest {
     /// the mouse" teaches people to ignore the gate.
     private static func unmet(_ name: String, _ reason: String) {
         unverified += 1
+        unverifiedNames.append(name)
         print("  ? \(name)  — UNVERIFIED: \(reason)")
     }
 

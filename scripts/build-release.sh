@@ -150,23 +150,64 @@ codesign --verify --deep --strict "$APP" && echo "    signature verified"
 # Gates the release on the built bundle actually working. Skippable for a
 # quick iteration, but never skipped by default.
 if true; then
+  UNVERIFIED_AT_RELEASE=0
   step "Running the deterministic suite…"
   # The deterministic half gates the release: it injects pointer position,
   # button state, display configuration and scheduling, so a failure here is a
   # real defect rather than a machine that would not deliver an event.
-  if "$CONTENTS/MacOS/$APP_NAME" --self-test --deterministic | sed 's/^/    /'; then
-    echo "    deterministic suite passed"
-  else
-    echo "    DETERMINISTIC SUITE FAILED — not packaging" >&2
-    exit 1
-  fi
+  set +e
+  "$CONTENTS/MacOS/$APP_NAME" --self-test --deterministic | sed 's/^/    /'
+  DETERMINISTIC_RC=${PIPESTATUS[0]}
+  set -e
+  case "$DETERMINISTIC_RC" in
+    0) echo "    deterministic suite passed" ;;
+    2)
+      # Every deterministic check injects what it needs, so nothing here should
+      # ever be unable to run. If one is, the seam it depends on has been lost.
+      echo "    DETERMINISTIC CHECK COULD NOT RUN — this half injects its own" >&2
+      echo "    preconditions, so an unverified result means a broken seam." >&2
+      exit 1
+      ;;
+    *)
+      echo "    DETERMINISTIC SUITE FAILED — not packaging" >&2
+      exit 1
+      ;;
+  esac
 
-  # The live integration half is reported, never used as a gate: it depends on
-  # the window server delivering a crossing for a window moved under a still
-  # pointer, which it does not always do. Recording it separately keeps a
-  # release from being called fully verified on the gate alone.
-  step "Running live integration checks (reported, not gating)…"
-  "$CONTENTS/MacOS/$APP_NAME" --self-test --integration 2>&1 | sed 's/^/    /' || true
+  # The live integration half gates on defects and not on the environment.
+  #
+  # "Advisory by definition" is the wrong policy: it means a demonstrated
+  # product defect can ship because of which half of the suite happened to find
+  # it. "Always gating" is also wrong: it reddens the build because the window
+  # server declined to deliver a crossing for a window moved under a still
+  # pointer, which is the harness's limitation, not the app's.
+  #
+  # So the suite distinguishes the two and the exit code carries it:
+  #   0  everything asserted and held
+  #   1  a check failed — a delivered event mishandled, or a wrong final state.
+  #      A demonstrated defect. BLOCKS the release, from either half.
+  #   2  nothing failed, but something could not be exercised. Does not block;
+  #      carried forward as an explicit limitation.
+  step "Running live integration checks…"
+  set +e
+  "$CONTENTS/MacOS/$APP_NAME" --self-test --integration 2>&1 | sed 's/^/    /'
+  INTEGRATION_RC=${PIPESTATUS[0]}
+  set -e
+  case "$INTEGRATION_RC" in
+    0)
+      echo "    integration checks passed"
+      ;;
+    2)
+      echo "    integration checks passed, with unverified scenarios (see above)."
+      echo "    Not a release blocker; recorded as a limitation."
+      UNVERIFIED_AT_RELEASE=1
+      ;;
+    *)
+      echo "    INTEGRATION CHECK FAILED — a delivered event was mishandled or a" >&2
+      echo "    final state was wrong. That is a product defect. Not packaging." >&2
+      exit 1
+      ;;
+  esac
 fi
 
 # ── 5. DMG ───────────────────────────────────────────────────────────────────
@@ -184,6 +225,16 @@ if [ "$MAKE_DMG" -eq 1 ]; then
   echo "    $(du -h "$DMG" | cut -f1) → $DMG"
 fi
 
+# Staging bundles must not linger in LaunchServices.
+#
+# Each build stages the .app inside dist/.release.XXXXXX/, macOS registers it on
+# sight, and the directory is then deleted — leaving a registration pointing at
+# nothing. Thirty-seven of those had accumulated by the time anyone looked, and
+# while `open -a LocalNook` still resolved to /Applications, a launch route that
+# depends on which of forty registrations wins is not one to rely on.
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+[ -x "$LSREGISTER" ] && "$LSREGISTER" -u "$APP" 2>/dev/null || true
+
 # Only publish verified artifacts after every gate succeeds.
 "$CONTENTS/MacOS/$APP_NAME" --version
 [ "$MAKE_DMG" -eq 0 ] || hdiutil verify "$DMG"
@@ -191,6 +242,10 @@ mv "$APP" "$DIST/$APP_NAME.app"
 APP="$DIST/$APP_NAME.app"
 [ "$MAKE_DMG" -eq 0 ] || mv "$DMG" "$DIST/$APP_NAME.dmg"
 step "Done."
+if [ "${UNVERIFIED_AT_RELEASE:-0}" -eq 1 ]; then
+  printf "\033[1;33m    NOTE:\033[0m this build has unverified scenarios. See the integration\n"
+  printf "    output above and docs/MANUAL_CHECKS.md. It is not fully verified.\n"
+fi
 echo "    App: $APP"
 [ "$MAKE_DMG" -eq 1 ] && echo "    DMG: $DIST/$APP_NAME.dmg"
 echo

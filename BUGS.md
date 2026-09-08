@@ -7,55 +7,66 @@ reproduced rather than taken on trust.
 
 ## OPEN
 
-### A window moving under a stationary pointer can miss a hover crossing
+### Hover: what is actually still open
 
-**Status:** attributed, and no longer able to leave the panel stuck. Still
-present as a limitation of the *stimulus*, not of the product.
+**Reclassified.** The single entry that used to sit here — "roughly 1 run in 12
+misses a hover crossing" — turned out to be three different things wearing one
+number. Separated, only one of them is still open, and it is not a product
+defect.
 
-**What is measured.** `HoverProbe` counts crossings AppKit delivered, crossings
-LocalNook forwarded, forwards that came from a tracking-area rebuild rather than
-a crossing, and the transition source that actually moved the notch. Each hover
-result prints, for example:
+#### 1. Invalid assertion — CLOSED, was never a product failure
 
-```
-probe: enters=1 exits=0 handled=1 (of which containment=0) opened-by: trackingArea
-```
+The reproducible failure (4 runs of 4) was the catcher being asked to close an
+open notch. It deliberately does not: once the notch is open the pointer has
+moved *into* the expanded panel, which owns hover from then on. The test was
+wrong. Corrected; see "the catcher was asked to close a notch it deliberately
+hands over" under RESOLVED.
 
-so the failure resolves to one of four causes rather than a guess:
+#### 2. Incomplete instrumentation — CLOSED, evidence was unreliable
 
-| Outcome | Meaning | Reported as |
-|---|---|---|
-| `preconditionUnmet` | The window server clamped the frame; the panel never got under the pointer | UNVERIFIED |
-| `noPlatformEvent` | AppKit produced no crossing at all | UNVERIFIED |
-| `eventDropped` | A crossing arrived and was not forwarded | **failure** |
-| `wrongState` | It was forwarded and the state came out wrong | **failure** |
+Three probe bugs meant earlier classifications cannot be trusted at all: the
+counters were reset *after* the stimulus, `HoverTracker` never recorded that it
+forwarded anything, and containment re-checks were counted as crossings. Every
+hover figure recorded before those fixes describes the instrument, not the app.
+This is why the old ~1-in-12 number is not comparable to anything measured
+since, in either direction.
 
-Every failure observed in this pass classified as `noPlatformEvent` or as a
-defect in the test's own expectations (see the catcher hand-over entry under
-RESOLVED). LocalNook has not been observed dropping a crossing it was given or
-mishandling one. Getting to a provenance line that did not contradict its own
-result took three fixes to the instrumentation, all recorded below.
+#### 3. The platform gap — OPEN, and it is the harness's problem
 
-**Current rate.** The final candidate (`9df4dce2…`, 1 display connected) ran
-12/12 clean integration runs, every one reporting `enters=1 handled=1`. That
-lowers the estimate from the earlier ~1-in-12; it does not retire this entry.
-The earlier figure was measured on a different binary and included the incorrect
-catcher assertion, so the two numbers are not directly comparable, and 12 runs
-cannot establish the absence of an intermittent. It stays OPEN.
+**Reproducible symptom:** AppKit does not reliably deliver `mouseEntered` when a
+*window* is moved out from under, or under, a stationary pointer. When it
+happens the probe reads `enters=0`, and the check reports UNVERIFIED.
 
-**What this does not excuse.** A missing platform event is a reason the test
-could not produce its stimulus. It is not a reason for the panel to stay open.
-That postcondition is asserted separately by `testMissedCrossingRecovery` in the
-deterministic half: the real controller-owned notch is opened, the pointer is
-injected somewhere else, and it must close and be attributed to
-`.pointerFallback`. That check runs on every run and gates the release.
+**Why it is not a product defect.** A user moves the pointer onto a stationary
+panel. Moving the window instead is the only stimulus a test can produce without
+Accessibility, and it is the one the window server treats differently. No run
+has ever shown LocalNook receiving a crossing and dropping it (`eventDropped`)
+or mishandling it (`wrongState`) — the two outcomes that *would* be defects, and
+both of which fail the build.
 
-**Scope.** Normal hover — the pointer moving onto a stationary panel — is
-unaffected. This is specific to a *window* moving under a still pointer, which
-is the only way a test can simulate hover without Accessibility, and which in
-normal use happens only when a display is attached or a live activity resizes
-the panel. See the reverted-fix note under RESOLVED for what was tried against
-the underlying behaviour and why it was backed out.
+**Measurements, each against one frozen binary:**
+
+| Binary | Displays | Integration runs | Result |
+|---|---|---|---|
+| `9df4dce2…` | 1 | 12 | 12 clean, `enters=1 handled=1` every run |
+| `9df4dce2…` | 2 | 6 | 6 clean, `enters=1 handled=1` every run |
+
+**This does not mean it is fixed.** Eighteen clean runs lower the estimate; they
+cannot establish the absence of an intermittent, and the retry loop in
+`testHoverPath` (up to four attempts) means a single missed crossing is absorbed
+rather than reported. The entry stays OPEN.
+
+**What would establish resolution:** either an instrumented count showing zero
+`noPlatformEvent` outcomes across a run of attempts with the retry loop disabled,
+or — more to the point — hands-on confirmation that hover works with a real
+pointer on both displays, which is what the acceptance checklist asks for. The
+second is the one that matters, because it tests the gesture users actually
+make rather than the substitute the harness is forced to use.
+
+**Not in scope for a code change.** No speculative fix should be attempted
+against item 3: an earlier attempt to re-check containment on window moves made
+real hover measurably worse (1 clean run in 10, against ~14 in 15) and was
+reverted. See the reverted-fix note under RESOLVED.
 
 ### Multi-display scoping is verified against a seeded notch, not two monitors
 

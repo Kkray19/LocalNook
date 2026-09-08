@@ -220,13 +220,21 @@ private struct TrayTile: View {
             }
             .frame(width: 46, height: 44)
 
+            // 62pt wide with two lines allowed sounds generous and was not.
+            // The tray row has room for one line of text, not two, so the
+            // second line never materialised and every ordinary filename was
+            // middle-truncated on a single 62pt line: "image-fixture.png"
+            // rendered as "imag…e.png", which does not distinguish it from any
+            // other image. Measured at this font, real filenames run 63–90pt,
+            // and the row had roughly a third of its width unused — so the
+            // width is what was wrong, not the line count.
             Text(item.name)
                 .font(.system(size: 10))
                 .foregroundStyle(isSelected ? Theme.primaryText : Theme.secondaryText)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
                 .truncationMode(.middle)
-                .frame(width: 62)
+                .frame(width: 90)
         }
         .padding(.vertical, 5)
         .padding(.horizontal, 3)

@@ -34,41 +34,36 @@ echo "displays:   $DISPLAYS connected"
 echo "batch:      $DETERMINISTIC_RUNS deterministic + $INTEGRATION_RUNS integration (fixed before running)"
 echo
 
-det_pass=0; det_fail=0
+# Exit codes, not output grepping: 0 clean, 1 a demonstrated defect, 2 nothing
+# failed but something could not be exercised.
+det_pass=0; det_fail=0; det_unver=0
 echo "== DETERMINISTIC =="
 for i in $(seq 1 "$DETERMINISTIC_RUNS"); do
-  out="$("$EXEC" --self-test --deterministic 2>&1)"
+  out="$("$EXEC" --self-test --deterministic 2>&1)"; rc=$?
   line="$(echo "$out" | grep '^deterministic:' || echo "no summary line")"
-  if echo "$out" | grep -q '✗'; then
-    det_fail=$((det_fail + 1))
-    echo "  run $i: $line   FAILING"
-    echo "$out" | grep '✗' | sed 's/^/      /'
-  else
-    det_pass=$((det_pass + 1))
-    echo "  run $i: $line"
-  fi
-  echo "$out" | grep '?.*UNVERIFIED' | sed 's/^/      /'
+  case "$rc" in
+    0) det_pass=$((det_pass + 1)); echo "  run $i: $line" ;;
+    2) det_unver=$((det_unver + 1)); echo "  run $i: $line   UNVERIFIED"
+       echo "$out" | grep 'unverified:' | sed 's/^/      /' ;;
+    *) det_fail=$((det_fail + 1)); echo "  run $i: $line   DEFECT"
+       echo "$out" | grep '✗' | sed 's/^/      /' ;;
+  esac
 done
 
 int_pass=0; int_fail=0; int_unver=0
 echo
 echo "== LIVE INTEGRATION =="
 for i in $(seq 1 "$INTEGRATION_RUNS"); do
-  out="$("$EXEC" --self-test --integration 2>&1)"
+  out="$("$EXEC" --self-test --integration 2>&1)"; rc=$?
   line="$(echo "$out" | grep '^integration:' || echo "no summary line")"
-  probe="$(echo "$out" | grep 'probe:' | tr -d ' ' | tr '\n' ' ')"
-  if echo "$out" | grep -q '✗'; then
-    int_fail=$((int_fail + 1))
-    echo "  run $i: $line   FAILING   [$probe]"
-    echo "$out" | grep '✗' | sed 's/^/      /'
-  elif echo "$out" | grep -q 'UNVERIFIED'; then
-    int_unver=$((int_unver + 1))
-    echo "  run $i: $line   [$probe]"
-    echo "$out" | grep 'UNVERIFIED' | sed 's/^/      /'
-  else
-    int_pass=$((int_pass + 1))
-    echo "  run $i: $line   [$probe]"
-  fi
+  probe="$(echo "$out" | grep 'probe:' | sed 's/.*probe: //' | tr '\n' '|')"
+  case "$rc" in
+    0) int_pass=$((int_pass + 1)); echo "  run $i: $line   [$probe]" ;;
+    2) int_unver=$((int_unver + 1)); echo "  run $i: $line   UNVERIFIED   [$probe]"
+       echo "$out" | grep 'unverified:' | sed 's/^/      /' ;;
+    *) int_fail=$((int_fail + 1)); echo "  run $i: $line   DEFECT   [$probe]"
+       echo "$out" | grep '✗' | sed 's/^/      /' ;;
+  esac
 done
 
 NOW="$(shasum -a 256 "$EXEC" | cut -d ' ' -f1)"
@@ -81,15 +76,17 @@ if [ "$NOW" != "$SHA" ]; then
 fi
 
 echo "== SUMMARY for $SHA =="
-echo "  deterministic: $det_pass/$DETERMINISTIC_RUNS clean, $det_fail with failures"
-echo "  integration:   $int_pass/$INTEGRATION_RUNS clean, $int_unver with unverified checks, $int_fail with failures"
+echo "  displays connected: $DISPLAYS"
+echo "  deterministic: $det_pass/$DETERMINISTIC_RUNS clean, $det_unver unverified, $det_fail with defects"
+echo "  integration:   $int_pass/$INTEGRATION_RUNS clean, $int_unver unverified, $int_fail with defects"
 if [ "$det_fail" -gt 0 ] || [ "$int_fail" -gt 0 ]; then
-  echo "  VERDICT: not fully verified — a check failed."
+  echo "  VERDICT: a demonstrated defect. This candidate must not ship."
   exit 1
-elif [ "$int_unver" -gt 0 ]; then
-  echo "  VERDICT: deterministic suite verified; $int_unver integration run(s) left a check unverified."
-  exit 0
+elif [ "$det_unver" -gt 0 ] || [ "$int_unver" -gt 0 ]; then
+  echo "  VERDICT: no defects; some scenarios could not be exercised."
+  echo "           Those remain explicit limitations — this is not fully verified."
+  exit 2
 else
-  echo "  VERDICT: every run clean."
+  echo "  VERDICT: every run clean, nothing unverified."
   exit 0
 fi
