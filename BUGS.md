@@ -25,6 +25,24 @@ The handling code is covered; the interaction is not.
 
 ## RESOLVED
 
+### 0. A window moving under a stationary pointer could miss the crossing
+
+**Observed:** 1 failure in 2 runs of the frozen build-21 binary —
+`hovering the notch opens it — tracking area did not deliver mouseEntered`.
+
+**Why it is not just a test artefact:** AppKit delivers `mouseEntered` reliably
+when the pointer moves onto a stationary window, but not always when a window
+slides under a stationary pointer. That happens in normal use — attaching a
+display repositions the panel, and a live activity resizes it — so a real
+crossing could be missed, leaving the notch unresponsive until the pointer moved
+again.
+
+**Fix:** both tracking views now observe `NSWindow.didMoveNotification` and
+recheck containment against the pointer, reporting a transition if it changed.
+Tracking areas remain the primary mechanism.
+
+---
+
 ### 0a. Hover guards could pin the notch open indefinitely
 
 **Found by:** tracing the guard lifecycle rather than by a failing test — the
