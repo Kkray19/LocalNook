@@ -7,11 +7,38 @@ reproduced rather than taken on trust.
 
 ## OPEN
 
-_None currently known._
+### Finder drag-and-drop has not been performed end to end
+
+**What is verified:** `ShelfStore.ingest(_:)` is exercised against a real
+`NSPasteboard` carrying real file URLs — the same content Finder writes for a
+drag — covering multi-file drops, folders, duplicates, long names, deleted and
+renamed files, selection, text with no file of its own, and unsupported content.
+See the "Tray (real files)" section of `--self-test`.
+
+**What is not:** the drag *gesture* from Finder into the panel, and dragging an
+item back out. Both need synthesised pointer input, which requires Accessibility.
+The handling code is covered; the interaction is not.
+
+**Manual check:** see docs/MANUAL_CHECKS.md.
 
 ---
 
 ## RESOLVED
+
+### 0. `ingest` reported items it had not added
+
+**Observed:** the "Tray (real files)" fixture test caught a duplicate drop
+reporting `added 2` while the tray count was unchanged.
+
+**Why it mattered:** the return value decides whether a drop is reported as
+handled. A duplicate drop claimed success while nothing changed, so the UI would
+show a successful drop for a tray that had not moved.
+
+**Fix:** `add(_:)` returns whether the tray actually changed and
+`add(contentsOf:)` counts real additions, so `ingest` reports what happened
+rather than what was attempted.
+
+---
 
 ### 1. Notch could stay open after the pointer had left
 
@@ -41,8 +68,15 @@ ticks once a second, only while something is open, and uses a 24pt margin so it
 can never fight legitimate hover. Tracking areas remain the mechanism; this only
 catches the dropped event.
 
-**Verification:** 6 consecutive full runs at 177 assertions, 0 failures
-(previously 1 failure in 5 runs).
+**Verification:** 20 consecutive runs of a **frozen** binary at 216 assertions,
+0 failures (previously 1 failure in 5 runs). Frozen deliberately: an earlier
+16-run attempt straddled rebuilds — assertion counts climbed from 188 to 207
+across it — and was therefore worthless as single-build evidence.
+
+**Follow-up found while auditing it:** the recovery check was starting at launch
+rather than on first open, because the state observer fires on subscribe. An
+idle Mac was being polled once a second for nothing. It now starts only when
+something is open and is cancelled the moment the last notch closes.
 
 ---
 
@@ -58,3 +92,10 @@ panels carry different window ids and cannot account for them, and the ~2s
 open-then-close cadence is hover rather than a scripted command.
 
 Hover on the **external** display is still unobserved.
+
+**Provenance now recorded.** Window geometry alone cannot distinguish a physical
+hover from a scripted command or from the recovery fallback.
+`NotchTransitionLog` records the cause of every transition (`trackingArea`,
+`explicitCommand`, `pointerFallback`, `escape`, `outsideClick`, `drag`,
+`systemState`, `programmatic`) with the display and window it belongs to, and
+nothing else — no titles, paths or user content. `--transitions` prints it.

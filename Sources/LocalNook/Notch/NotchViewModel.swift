@@ -92,10 +92,16 @@ final class NotchViewModel: ObservableObject {
 
     // MARK: State transitions
 
-    func open() {
+    /// Window number of the panel drawing this notch, for transition logging.
+    var loggedWindowNumber: Int = 0
+
+    func open(source: NotchTransitionSource = .programmatic) {
         cancelPending()
         guard !isSuppressed, state != .open else { return }
         withAnimation(NotchMotion.expand) { state = .open }
+        NotchTransitionLog.record(
+            opened: true, source: source, displayID: screenID, windowNumber: loggedWindowNumber
+        )
         if settings.hapticFeedback {
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         }
@@ -107,22 +113,25 @@ final class NotchViewModel: ObservableObject {
         hoverReopenBlocked = false
     }
 
-    func close() {
+    func close(source: NotchTransitionSource = .programmatic) {
         cancelPending()
         guard state != .closed else { return }
         // If the pointer is still sitting on the notch, do not bounce straight
         // back open — wait until it leaves.
         hoverReopenBlocked = isHovering
         withAnimation(NotchMotion.expand) { state = .closed }
+        NotchTransitionLog.record(
+            opened: false, source: source, displayID: screenID, windowNumber: loggedWindowNumber
+        )
         NotificationCenter.default.post(name: .notchDidClose, object: self)
     }
 
-    func toggle() {
-        state == .open ? close() : open()
+    func toggle(source: NotchTransitionSource = .programmatic) {
+        state == .open ? close(source: source) : open(source: source)
     }
 
     /// Schedules an open after the user's configured hover delay.
-    func scheduleOpen() {
+    func scheduleOpen(source: NotchTransitionSource = .trackingArea) {
         closeTask?.cancel(); closeTask = nil
         guard !isSuppressed, settings.openTrigger.allowsHover, state == .closed,
               !hoverReopenBlocked else { return }
@@ -132,13 +141,13 @@ final class NotchViewModel: ObservableObject {
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
             self?.openTask = nil
-            self?.open()
+            self?.open(source: source)
         }
     }
 
     /// Schedules a close after the user's configured grace period, so moving the
     /// pointer briefly outside the panel does not slam it shut.
-    func scheduleClose() {
+    func scheduleClose(source: NotchTransitionSource = .trackingArea) {
         guard state == .open else {
             openTask?.cancel(); openTask = nil
             return
@@ -151,9 +160,13 @@ final class NotchViewModel: ObservableObject {
             guard !Task.isCancelled else { return }
             guard let self, !self.isDragTargeting else { return }
             self.closeTask = nil
-            self.close()
+            self.close(source: source)
         }
     }
+
+    /// True when a close is scheduled but has not fired. Lets tests assert what
+    /// the fallback decided without waiting on the close delay.
+    var hasPendingClose: Bool { closeTask != nil }
 
     func cancelPending() {
         openTask?.cancel(); openTask = nil

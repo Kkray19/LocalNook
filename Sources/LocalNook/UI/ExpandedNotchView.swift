@@ -56,11 +56,18 @@ struct ExpandedNotchView: View {
         }
     }
 
+    /// Below this the three labelled pills crowd the left shoulder, so the tabs
+    /// become icons with tooltips. Chosen deliberately: without it SwiftUI
+    /// truncates the labels itself, which looks like a bug rather than a
+    /// decision.
+    private var showsTabLabels: Bool { NotchGeometry.openSize.width >= 560 }
+
     private var navigation: some View {
         HStack(spacing: 3) {
             ForEach(NotchPage.allCases) { item in
                 PageTab(
                     page: item,
+                    showsLabel: showsTabLabels,
                     isSelected: model.page == item,
                     action: {
                         withAnimation(NotchMotion.content) {
@@ -129,6 +136,7 @@ struct ExpandedNotchView: View {
 /// A navigation pill in the left shoulder.
 private struct PageTab: View {
     let page: NotchPage
+    let showsLabel: Bool
     let isSelected: Bool
     let action: () -> Void
 
@@ -139,11 +147,14 @@ private struct PageTab: View {
             HStack(spacing: 5) {
                 Image(systemName: page.symbol)
                     .font(.system(size: 9.5, weight: .semibold))
-                Text(page.label)
-                    .font(.system(size: 11.5, weight: .semibold))
+                if showsLabel {
+                    Text(page.label)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .fixedSize()
+                }
             }
             .foregroundStyle(isSelected ? Theme.primaryText : Theme.secondaryText)
-            .padding(.horizontal, 9)
+            .padding(.horizontal, showsLabel ? 9 : 7)
             .padding(.vertical, 4)
             .background {
                 Capsule()
@@ -156,5 +167,6 @@ private struct PageTab: View {
         .onHover { hovering in
             withAnimation(NotchMotion.quick) { isHovering = hovering }
         }
+        .help(page.label)
     }
 }

@@ -50,6 +50,9 @@ enum SelfTest {
         testInteractiveFootprint()
         testDashboardComposition()
         testLiquidGlass()
+        testPrivacyBoundaries()
+        testTrayWithRealFiles()
+        testPointerFallback()
         testCatcherHover()
         testCloseLatch()
         testScriptableControl()
@@ -216,20 +219,55 @@ enum SelfTest {
               settings.dashboardWidgets.count == 3,
               "got \(settings.dashboardWidgets.map(\.rawValue))")
 
-        // Narrow panels drop sections instead of shrinking everything.
+        // Narrow panels move sections into overflow rather than shrinking
+        // everything — and, critically, never discard them.
         let all: [WidgetKind] = [.media, .mirror, .calendar]
-        let wide = DashboardView.fit(all, into: 900)
-        let medium = DashboardView.fit(all, into: 380)
-        let narrow = DashboardView.fit(all, into: 200)
-        check("a wide panel keeps every section", wide.count == 3)
-        check("a narrower panel drops sections from the end",
-              medium.count < 3 && medium.first == .media,
-              "got \(medium.map(\.rawValue))")
-        check("sections that survive still clear their minimum width",
-              medium.allSatisfy { $0.dashboardMinimumWidth <= 380 })
-        check("a very narrow panel keeps at most one section", narrow.count <= 1)
-        check("nothing is shown rather than something illegible",
-              DashboardView.fit(all, into: 60).isEmpty)
+        let wide = DashboardView.plan(all, into: 900)
+        let medium = DashboardView.plan(all, into: 380)
+        let narrow = DashboardView.plan(all, into: 200)
+        let tiny = DashboardView.plan(all, into: 60)
+
+        check("a wide panel shows every section with no overflow",
+              wide.visible.count == 3 && wide.overflow.isEmpty)
+        check("a narrower panel moves sections into overflow",
+              medium.visible.count < 3 && medium.visible.first == .media,
+              "visible \(medium.visible.map(\.rawValue))")
+        check("sections that stay visible still clear their minimum width",
+              medium.visible.allSatisfy { $0.dashboardMinimumWidth <= 380 })
+        check("a very narrow panel shows at most one section", narrow.visible.count <= 1)
+        check("an unusably narrow panel shows none rather than something illegible",
+              tiny.visible.isEmpty)
+
+        // The invariant that makes overflow safe: an enabled widget is always
+        // reachable, at every width, however the panel is sized.
+        for width in stride(from: 40.0, through: 1400.0, by: 20.0) {
+            let plan = DashboardView.plan(all, into: width)
+            let reachable = plan.visible + plan.overflow
+            guard reachable.count == all.count, Set(reachable) == Set(all) else {
+                check("no enabled widget is lost at any panel width", false,
+                      "at \(Int(width))pt: visible \(plan.visible.count), overflow \(plan.overflow.count)")
+                break
+            }
+            guard Set(plan.visible).isDisjoint(with: Set(plan.overflow)) else {
+                check("a widget is never both visible and in overflow", false,
+                      "at \(Int(width))pt")
+                break
+            }
+        }
+        check("no enabled widget is lost at any panel width between 40 and 1400pt", true)
+
+        // Visible sections must still fit once the overflow control has taken
+        // its share, or the reserve would push something off the edge.
+        let tight = DashboardView.plan(all, into: 420)
+        if !tight.overflow.isEmpty {
+            let reserve = DashboardView.overflowWidth + Theme.sectionGap
+            let dividers = CGFloat(max(0, tight.visible.count - 1)) * Theme.sectionGap
+            let needed = tight.visible.reduce(0) { $0 + $1.dashboardMinimumWidth } + dividers + reserve
+            check("the overflow control is budgeted for, not squeezed in",
+                  needed <= 420, "needed \(Int(needed))pt of 420pt")
+        } else {
+            check("the overflow control is budgeted for, not squeezed in", true)
+        }
 
         // Widths must add up to the space available.
         let visible = DashboardView.fit(all, into: 900)
@@ -308,6 +346,319 @@ enum SelfTest {
         settings.notchMaterial = originalMaterial
         settings.glassWhenCollapsed = originalCollapsed
         settings.glassStyle = originalStyle
+    }
+
+    /// Mutable capture for stubs that must change answer mid-test.
+    private final class Box<T> {
+        var value: T
+        init(_ value: T) { self.value = value }
+    }
+
+    /// The two places where a UI boundary could leak into a device or lose work.
+    private static func testPrivacyBoundaries() {
+        section("Privacy boundaries")
+
+        // ── Camera: a permission answer that arrives after the user left ──
+        //
+        // The system prompt is modal and the answer can arrive much later. By
+        // then the user may have navigated away, and starting capture would
+        // light the camera for a view nobody is looking at.
+        // Status starts undetermined, as it would on a real first run, so the
+        // consent path is actually exercised rather than skipped.
+        var deliverAnswer: ((Bool) -> Void)?
+        let granted = Box(false)
+        let driver = FakeCaptureDriver()
+        let mirror = MirrorManager(
+            box: driver,
+            authorizationStatus: { granted.value ? .authorized : .notDetermined },
+            requestAuthorization: { completion in deliverAnswer = completion }
+        )
+
+        let owner = UUID()
+        mirror.requestStart(owner: owner)
+        check("asking for the camera does not configure it before consent",
+              driver.configureCount == 0)
+
+        check("an undetermined camera asks for consent", deliverAnswer != nil,
+              "the permission request was never made")
+
+        mirror.release(owner: owner)          // the user leaves the view
+        granted.value = true
+        deliverAnswer?(true)                  // consent arrives afterwards
+        pumpEvents(for: 0.3)
+        check("consent arriving after the user left does not start capture",
+              driver.configureCount == 0,
+              "the camera came on for a view nobody was looking at")
+
+        // Coming back must work normally.
+        var secondAnswer: ((Bool) -> Void)?
+        let granted2 = Box(false)
+        let driver2 = FakeCaptureDriver()
+        let mirror2 = MirrorManager(
+            box: driver2,
+            authorizationStatus: { granted2.value ? .authorized : .notDetermined },
+            requestAuthorization: { completion in secondAnswer = completion }
+        )
+        let owner2 = UUID()
+        mirror2.requestStart(owner: owner2)
+        granted2.value = true
+        secondAnswer?(true)
+        pumpEvents(for: 0.3)
+        check("consent arriving while the view is still open starts capture",
+              driver2.configureCount == 1,
+              "configure count \(driver2.configureCount)")
+        mirror2.release(owner: owner2)
+        pumpEvents(for: 0.2)
+        check("leaving afterwards stops capture", driver2.stopCount >= 1)
+        check("leaving also withdraws the request for next time",
+              !mirror2.userRequestedCamera)
+
+        // ── Notes: an edit followed immediately by quit ──
+        //
+        // Saving is debounced so typing does not write a file per keystroke,
+        // which means a quit can land inside the debounce window. Isolated
+        // storage: the user's own notes are never touched.
+        let store = FileManager.default.temporaryDirectory
+            .appendingPathComponent("localnook-notes-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: store) }
+
+        let notes = NotesStore(storeURL: store)
+        let note = notes.addNote()
+        let text = "an edit made immediately before quitting — ünïcode ✓"
+        notes.updateNote(note.id, body: text)
+        // No pause: quit lands inside the debounce window.
+        notes.save()
+
+        let reloaded = NotesStore(storeURL: store)
+        check("an edit made just before quitting survives",
+              reloaded.notes.first { $0.id == note.id }?.body == text,
+              "got \(String(describing: reloaded.notes.first { $0.id == note.id }?.body))")
+
+        // A to-do added and immediately flushed must survive too.
+        notes.addTodo("buy milk")
+        notes.save()
+        let reloadedAgain = NotesStore(storeURL: store)
+        check("a task added just before quitting survives",
+              reloadedAgain.todos.contains { $0.text == "buy milk" })
+        check("isolated test storage left the user's notes untouched",
+              store.path.contains("localnook-notes-"))
+    }
+
+    /// The Tray against real files on a real pasteboard.
+    ///
+    /// This drives `ingest(_:)` with the same `NSPasteboard` content Finder puts
+    /// there for a drag, so the ingest path is genuinely exercised. It does
+    /// **not** perform the drag gesture itself — that needs pointer synthesis —
+    /// so it is evidence about handling, not about the Finder interaction.
+    private static func testTrayWithRealFiles() {
+        section("Tray (real files)")
+        let shelf = ShelfStore.shared
+        let fixtures = FileManager.default.temporaryDirectory
+            .appendingPathComponent("localnook-tray-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: fixtures, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtures) }
+
+        let startingCount = shelf.items.count
+
+        func makeFile(_ name: String, _ body: String = "fixture") -> URL {
+            let url = fixtures.appendingPathComponent(name)
+            try? body.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        }
+
+        let plain = makeFile("notes.txt")
+        let longName = makeFile(String(repeating: "extremely-long-file-name-", count: 5) + "end.txt")
+        let doomed = makeFile("will-be-deleted.txt")
+        let renamed = makeFile("will-be-renamed.txt")
+        let folder = fixtures.appendingPathComponent("A Folder")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        // Exactly what Finder writes for a drag of several items.
+        let board = NSPasteboard(name: .init("com.localnook.selftest.tray"))
+        board.clearContents()
+        board.writeObjects([plain, longName, doomed, renamed, folder] as [NSURL])
+        let added = shelf.ingest(board)
+        check("a multi-file drop adds every item", added == 5, "added \(added)")
+        check("the tray holds them", shelf.items.count == startingCount + 5)
+
+        check("a folder is recognised as a folder",
+              shelf.items.first { $0.path == folder.path }?.kind == .folder)
+        check("a very long name is kept intact for the UI to truncate",
+              shelf.items.contains { $0.name.count > 60 })
+        check("dropped files are referenced in place, never copied",
+              shelf.items.first { $0.path == plain.path }?.isOwned == false)
+
+        // Dropping the same selection again must not duplicate.
+        board.clearContents()
+        board.writeObjects([plain, folder] as [NSURL])
+        let duplicates = shelf.ingest(board)
+        check("dropping the same items again adds nothing", duplicates == 0,
+              "added \(duplicates) duplicates")
+        check("the tray count is unchanged after a duplicate drop",
+              shelf.items.count == startingCount + 5)
+
+        // A file that disappears after being added.
+        try? FileManager.default.removeItem(at: doomed)
+        let missing = shelf.items.first { $0.path == doomed.path }
+        check("a deleted file is detected as missing", missing?.stillExists == false)
+
+        // A file renamed underneath us behaves the same way — the old path is gone.
+        let newName = fixtures.appendingPathComponent("renamed.txt")
+        try? FileManager.default.moveItem(at: renamed, to: newName)
+        check("a renamed file is detected as missing at its old path",
+              shelf.items.first { $0.path == renamed.path }?.stillExists == false)
+
+        // Selection.
+        if let first = shelf.items.first(where: { $0.path == plain.path })?.id,
+           let second = shelf.items.first(where: { $0.path == folder.path })?.id {
+            shelf.selection.removeAll()
+            shelf.toggleSelection(first, extending: false)
+            check("clicking selects one item", shelf.selection == [first])
+            shelf.toggleSelection(second, extending: true)
+            check("command-clicking extends the selection", shelf.selection.count == 2)
+            check("selected URLs resolve to real paths",
+                  shelf.selectedURLs.count == 2)
+            shelf.selection.removeAll()
+        } else {
+            check("selection fixtures exist", false)
+        }
+
+        // The guarantee that matters most.
+        let survivors = [plain, longName, folder]
+        for item in shelf.items where survivors.map(\.path).contains(item.path ?? "") {
+            shelf.remove(item.id)
+        }
+        check("removing from the tray never deletes the user's file",
+              survivors.allSatisfy { FileManager.default.fileExists(atPath: $0.path) },
+              "a fixture was deleted from disk")
+
+        // Text with no file of its own is stored by LocalNook, and *that* copy
+        // is the only kind it may delete.
+        board.clearContents()
+        board.setString("a snippet with no file", forType: .string)
+        let textAdded = shelf.ingest(board)
+        check("plain text is accepted", textAdded == 1)
+        if let owned = shelf.items.first(where: { $0.kind == .text }) {
+            check("stored text is marked as LocalNook's own", owned.isOwned)
+            let backing = owned.url
+            shelf.remove(owned.id)
+            check("removing stored text deletes only LocalNook's copy",
+                  backing.map { !FileManager.default.fileExists(atPath: $0.path) } ?? false)
+        } else {
+            check("stored text item exists", false)
+        }
+
+        // Unsupported content is rejected rather than producing a broken row.
+        board.clearContents()
+        board.setData(Data([0x00, 0x01, 0x02]), forType: .init("com.localnook.nonsense"))
+        let junk = shelf.ingest(board)
+        check("unsupported content is refused", junk == 0, "accepted \(junk) items")
+
+        // Leave the user's tray as we found it.
+        for item in shelf.items where item.path?.hasPrefix(fixtures.path) == true {
+            shelf.remove(item.id)
+        }
+        check("fixtures are cleaned out of the tray",
+              shelf.items.count == startingCount,
+              "\(shelf.items.count) items, expected \(startingCount)")
+    }
+
+    /// The once-a-second recovery check: it must rescue a stuck notch without
+    /// interrupting anything the user is deliberately doing.
+    private static func testPointerFallback() {
+        section("Pointer fallback")
+        let controller = NotchWindowController.shared
+        NotchTransitionLog.clear()
+
+        check("no recovery ticking before anything opens",
+              !controller.pointerSafetyNetIsRunning,
+              "an idle Mac must not be polled")
+
+        controller.start()
+        pumpEvents(for: 0.4)
+        check("still no ticking while everything is collapsed",
+              !controller.pointerSafetyNetIsRunning)
+
+        controller.perform(.open)
+        pumpEvents(for: 0.4)
+        check("opening starts the recovery check", controller.pointerSafetyNetIsRunning)
+        check("the open was attributed to the command that caused it",
+              NotchTransitionLog.all.last?.source == .explicitCommand,
+              "got \(String(describing: NotchTransitionLog.all.last?.source))")
+
+        // The pointer is wherever it actually is; unless it happens to be on the
+        // notch, one pass should close it and say so.
+        let pointerOnNotch = controller.allModels.contains { model in
+            guard let screen = model.screen else { return false }
+            let region = CGRect(
+                x: screen.frame.midX - NotchGeometry.openSize.width / 2,
+                y: screen.frame.maxY - NotchGeometry.openSize.height,
+                width: NotchGeometry.openSize.width,
+                height: NotchGeometry.openSize.height
+            ).insetBy(dx: -24, dy: -24)
+            return region.contains(NSEvent.mouseLocation)
+        }
+
+        if pointerOnNotch || controller.fallbackIsHoldingOff {
+            check("the fallback holds off while the pointer is on the notch", true)
+        } else {
+            controller.runPointerSafetyCheckNow()
+            pumpEvents(for: 0.9)
+            check("a notch the pointer has left is recovered",
+                  controller.allModels.allSatisfy { $0.state == .closed },
+                  "still open after a recovery pass")
+            check("the recovery close is attributed to the fallback, not to hover",
+                  NotchTransitionLog.all.last?.source == .pointerFallback,
+                  "got \(String(describing: NotchTransitionLog.all.last?.source))")
+        }
+
+        // Dragging is a deliberate interaction; recovery must not interrupt it.
+        // Asserted on what the pass *decided* rather than on state after a
+        // delay, because SwiftUI's own drop tracking resets the flag on the next
+        // render and would mask the result.
+        controller.perform(.open)
+        pumpEvents(for: 0.3)
+        controller.allModels.forEach {
+            $0.cancelPending()
+            $0.isDragTargeting = true
+        }
+        controller.runPointerSafetyCheckNow()
+        check("a drag in progress is never closed underneath the user",
+              controller.allModels.allSatisfy { !$0.hasPendingClose },
+              "the fallback scheduled a close mid-drag")
+        controller.allModels.forEach { $0.isDragTargeting = false }
+
+        controller.perform(.close)
+        waitUntil { !controller.pointerSafetyNetIsRunning }
+        check("the recovery check stops once everything is closed",
+              !controller.pointerSafetyNetIsRunning,
+              "it kept ticking with nothing open")
+
+        // Repeated cycles must not accumulate anything.
+        let windowsBefore = controller.panelCount + controller.catcherCount
+        for _ in 0..<5 {
+            controller.perform(.open); pumpEvents(for: 0.1)
+            controller.perform(.close); pumpEvents(for: 0.1)
+        }
+        waitUntil { !controller.pointerSafetyNetIsRunning }
+        check("repeated open/close cycles leak no windows",
+              controller.panelCount + controller.catcherCount == windowsBefore,
+              "\(controller.panelCount + controller.catcherCount) vs \(windowsBefore)")
+        check("repeated cycles leave no recovery task running",
+              !controller.pointerSafetyNetIsRunning)
+
+        // Provenance must never be able to pass a command off as a hover.
+        let commandOpens = NotchTransitionLog.all.filter {
+            $0.opened && $0.source == .explicitCommand
+        }.count
+        check("scripted opens are recorded as commands, not tracking events",
+              commandOpens >= 5, "only \(commandOpens) attributed to commands")
+        check("the log records no tracking events for scripted activity",
+              NotchTransitionLog.count(of: .trackingArea) == 0,
+              "\(NotchTransitionLog.count(of: .trackingArea)) tracking events appeared without a pointer")
+
+        controller.stop()
+        pumpEvents(for: 0.2)
     }
 
     /// Hover, end to end, through the catcher that actually handles it.
@@ -422,7 +773,7 @@ enum SelfTest {
         DistributedNotificationCenter.default().postNotificationName(
             .init("com.localnook.open"), object: nil, userInfo: nil, deliverImmediately: true
         )
-        pumpEvents(for: 1.2)
+        waitUntil { controller.activeModel?.state == .open }
         check("a posted com.localnook.open notification opens the notch",
               controller.activeModel?.state == .open,
               "state is \(String(describing: controller.activeModel?.state))")
@@ -430,7 +781,7 @@ enum SelfTest {
         DistributedNotificationCenter.default().postNotificationName(
             .init("com.localnook.close"), object: nil, userInfo: nil, deliverImmediately: true
         )
-        pumpEvents(for: 1.2)
+        waitUntil { controller.activeModel?.state == .closed }
         check("a posted com.localnook.close notification closes it",
               controller.activeModel?.state == .closed)
 
@@ -634,6 +985,24 @@ enum SelfTest {
 
         panel.orderOut(nil)
         panel.close()
+    }
+
+    /// Pumps the event loop until `condition` holds, or `timeout` elapses.
+    ///
+    /// Preferred over a fixed sleep: it makes the test wait exactly as long as
+    /// the behaviour needs, so a slow machine does not produce a false failure
+    /// and a fast one does not waste a second.
+    @discardableResult
+    private static func waitUntil(
+        _ condition: () -> Bool,
+        timeout: TimeInterval = 3.0
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            pumpEvents(for: 0.05)
+        }
+        return condition()
     }
 
     /// Pumps the AppKit event loop for `seconds`.

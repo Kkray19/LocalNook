@@ -19,6 +19,10 @@ enum NotchCommand: Sendable {
     case toggle, open, close
     /// Open the notch straight onto a page.
     case show(NotchPage)
+    /// Open on every display at once. Useful for scripting a multi-monitor
+    /// setup, and the only way to inspect a panel on a display the pointer is
+    /// not currently on.
+    case openEverywhere
     /// Not scriptable — raised by the system lock/unlock notifications.
     case screenLocked, screenUnlocked
 }
@@ -38,6 +42,7 @@ nonisolated final class DistributedCommandBridge: NSObject, @unchecked Sendable 
         ("com.localnook.dashboard", .show(.dashboard)),
         ("com.localnook.tray", .show(.tray)),
         ("com.localnook.tools", .show(.tools)),
+        ("com.localnook.open.all", .openEverywhere),
         ("com.apple.screenIsLocked", .screenLocked),
         ("com.apple.screenIsUnlocked", .screenUnlocked),
     ]
@@ -228,7 +233,7 @@ final class NotchWindowController: NSObject {
                         self?.syncKeyStatus()
                         self?.syncPanelExtents()
                         self?.syncInteractivity()
-                        self?.startPointerSafetyNet()
+                        self?.updatePointerSafetyNet()
                     }
                 }
                 .store(in: &stateObservers)
@@ -273,6 +278,7 @@ final class NotchWindowController: NSObject {
                 hitPanels[id] = makeHitPanel(for: model)
             }
             models[id]?.refreshGeometry()
+            models[id]?.loggedWindowNumber = panels[id]?.windowNumber ?? 0
             position(panels[id], on: screen)
         }
 
@@ -345,12 +351,12 @@ final class NotchWindowController: NSObject {
         }
         view.onClick = { [weak model] in
             guard let model, Settings.shared.openTrigger.allowsClick else { return }
-            model.toggle()
+            model.toggle(source: .trackingArea)
         }
         view.onDragEnter = { [weak model] in
             guard let model, Settings.shared.shelfAutoExpandOnDrag else { return }
             model.page = .tray
-            model.open()
+            model.open(source: .drag)
         }
 
         panel.contentView = view
@@ -392,8 +398,26 @@ final class NotchWindowController: NSObject {
     ///
     /// This is a fallback, not the mechanism: it ticks once a second and only
     /// while something is open, so an idle Mac does no work.
+    /// Starts or stops the recovery check to match the current state.
+    ///
+    /// Stopping eagerly — rather than letting the loop notice on its next tick —
+    /// means an idle Mac is never left with a pending timer, and makes the
+    /// behaviour observable immediately instead of up to a second later.
+    private func updatePointerSafetyNet() {
+        if models.values.contains(where: { $0.state == .open }) {
+            startPointerSafetyNet()
+        } else {
+            pointerSafetyTask?.cancel()
+            pointerSafetyTask = nil
+        }
+    }
+
     private func startPointerSafetyNet() {
         guard pointerSafetyTask == nil else { return }
+        // Only tick while something is actually open. `observeModelState` fires
+        // on subscribe, so without this the net would start at launch and poll
+        // an idle Mac forever.
+        guard models.values.contains(where: { $0.state == .open }) else { return }
         pointerSafetyTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
@@ -407,7 +431,49 @@ final class NotchWindowController: NSObject {
         }
     }
 
+    /// Interaction states the fallback must never interrupt.
+    ///
+    /// The pointer legitimately leaves the panel during all of these — typing in
+    /// Notes while looking elsewhere, picking from a menu, dragging a file in —
+    /// and closing the notch underneath the user would be worse than the missed
+    /// event this exists to recover from.
+    private var isInDeliberateInteraction: Bool {
+        // Typing: the panel itself holds key focus, e.g. a note being edited.
+        if panels.values.contains(where: { $0.isKeyWindow }) { return true }
+
+        // A sheet or alert is up.
+        if NSApp.modalWindow != nil { return true }
+
+        // Another of our own windows took focus — Settings, Quick Look.
+        if let key = NSApp.keyWindow, !(key is NotchPanel) { return true }
+
+        // A menu or popover is on screen. These are separate windows whose
+        // classes are private, so the class name is the available signal.
+        if NSApp.windows.contains(where: { window in
+            guard window.isVisible else { return false }
+            let name = window.className
+            return name.contains("Menu") || name.contains("Popover")
+        }) { return true }
+
+        // A button is held down — a drag or a press is in flight.
+        if NSEvent.pressedMouseButtons != 0 { return true }
+
+        return false
+    }
+
+    /// Whether the recovery check is currently scheduled. Must be false when
+    /// nothing is open, or the app would tick forever on an idle Mac.
+    var pointerSafetyNetIsRunning: Bool { pointerSafetyTask != nil }
+
+    /// Runs one recovery pass immediately. Lets tests drive the fallback
+    /// deterministically instead of waiting on its one-second cadence.
+    func runPointerSafetyCheckNow() { closeIfPointerHasLeft() }
+
+    /// True when the fallback would decline to act right now.
+    var fallbackIsHoldingOff: Bool { isInDeliberateInteraction }
+
     private func closeIfPointerHasLeft() {
+        guard !isInDeliberateInteraction else { return }
         let mouse = NSEvent.mouseLocation
         for (id, model) in models where model.state == .open {
             guard !model.isDragTargeting else { continue }
@@ -415,7 +481,7 @@ final class NotchWindowController: NSObject {
             // A generous margin: this must never fight legitimate hover, only
             // catch a pointer that is clearly elsewhere.
             let region = panel.frame.insetBy(dx: -24, dy: -24)
-            if !region.contains(mouse) { model.scheduleClose() }
+            if !region.contains(mouse) { model.scheduleClose(source: .pointerFallback) }
         }
     }
 
@@ -660,7 +726,7 @@ final class NotchWindowController: NSObject {
 
         observe(center, forName: .escapePressedInNotch, object: nil, queue: .main) {
             [weak self] _ in
-            MainActor.assumeIsolated { self?.allModels.forEach { $0.close() } }
+            MainActor.assumeIsolated { self?.allModels.forEach { $0.close(source: .escape) } }
         }
 
         // Wake and unlock both need a reposition: display geometry can change
@@ -703,19 +769,26 @@ final class NotchWindowController: NSObject {
         switch command {
         case .screenLocked: setLocked(true); return
         case .screenUnlocked: setLocked(false); return
+        case .openEverywhere:
+            models.values.forEach { $0.open(source: .explicitCommand) }
+            syncKeyStatus()
+            updatePointerSafetyNet()
+            return
         default: break
         }
         guard !isScreenLocked, let model = activeModel else { return }
         switch command {
-        case .toggle: model.toggle()
-        case .open: model.open()
-        case .close: model.close()
+        case .toggle: model.toggle(source: .explicitCommand)
+        case .open: model.open(source: .explicitCommand)
+        case .close: model.close(source: .explicitCommand)
         case let .show(page):
             model.page = page
             model.focusedTool = nil
-            model.open()
+            model.open(source: .explicitCommand)
         case .screenLocked: setLocked(true)
         case .screenUnlocked: setLocked(false)
+        // Handled above, before a single active model is resolved.
+        case .openEverywhere: break
         }
         syncKeyStatus()
         syncPanelExtents()

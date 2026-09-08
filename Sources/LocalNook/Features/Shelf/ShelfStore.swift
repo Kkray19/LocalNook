@@ -40,15 +40,25 @@ final class ShelfStore: NSObject, ObservableObject {
 
     // MARK: Mutation
 
-    func add(_ item: ShelfItem) {
+    /// Adds an item, or reports that it was already there.
+    ///
+    /// - Returns: `true` when the tray actually changed. Callers use this to
+    ///   decide whether a drop was handled, so it must reflect what happened
+    ///   rather than what was attempted — reporting success for a duplicate
+    ///   tells the UI a drop landed while the tray is unchanged.
+    @discardableResult
+    func add(_ item: ShelfItem) -> Bool {
         // Dropping the same file twice should not duplicate the row.
-        if let path = item.path, items.contains(where: { $0.path == path }) { return }
+        if let path = item.path, items.contains(where: { $0.path == path }) { return false }
         items.insert(item, at: 0)
         save()
+        return true
     }
 
-    func add(contentsOf newItems: [ShelfItem]) {
-        for item in newItems { add(item) }
+    /// - Returns: how many items were actually added.
+    @discardableResult
+    func add(contentsOf newItems: [ShelfItem]) -> Int {
+        newItems.reduce(0) { $0 + (add($1) ? 1 : 0) }
     }
 
     func remove(_ id: UUID) {
@@ -114,8 +124,7 @@ final class ShelfStore: NSObject, ObservableObject {
             }
         }
 
-        add(contentsOf: added)
-        return added.count
+        return add(contentsOf: added)
     }
 
     func pasteFromClipboard() -> Int {

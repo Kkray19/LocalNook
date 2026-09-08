@@ -138,6 +138,47 @@ layer=101  445x35   ← drawing panel: ignoresMouseEvents
 
 Down from a single 944×214 interactive window.
 
+## Evidence classes
+
+Not all "verified" is the same, so this log separates them.
+
+### Verified by automated check
+
+`--self-test`, **216 assertions**, run 20 consecutive times against a **frozen**
+binary with **0 failures**. Freezing matters: an earlier 16-run attempt straddled
+rebuilds and its counts climbed from 188 to 207, which made it useless as
+evidence for any single build.
+
+Covers, among the rest: dashboard fitting and the no-loss invariant across 68
+panel widths; the click-through footprint per display; external-display geometry
+with offset origins; the pointer-recovery fallback's start/stop and hold-off
+rules; the camera's explicit-start gate and its delayed-consent race; notes
+surviving a quit inside the autosave debounce; and the Tray against real files on
+a real pasteboard.
+
+### Verified by driving the installed app
+
+- The composed Dashboard, Tray and Tools pages on **both** displays, captured
+  from the running app.
+- The overflow control at a narrow panel width, with icon-only tabs.
+- 140 rapid open/close/page commands including open-during-close: no crash,
+  exactly four windows, catchers unchanged at 209×35 and 220×35.
+- Idle cost after repeated interaction: 0.0% CPU, ~41 MB resident, 0 sockets.
+- Liquid Glass over a dark background, and the collapsed notch staying solid over
+  the physical camera housing.
+
+### Verified by observing real user interaction
+
+Hover on the **built-in** display: seven open→close pairs recorded against the
+live app instance before any scripted command in that session. See BUGS.md.
+
+### Still requires a human
+
+See **docs/MANUAL_CHECKS.md**. Chiefly: the Finder drag gesture itself, dragging
+items back out, hover on the external display, and the "notch stays open while
+typing" guard. These need synthesised pointer input, i.e. Accessibility, which
+LocalNook deliberately does not require.
+
 ## Known gaps in coverage
 
 - **Live on-screen hover on the physical notch** has not been observed directly:

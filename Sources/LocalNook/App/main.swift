@@ -35,6 +35,14 @@ if let flagIndex = CommandLine.arguments.firstIndex(of: "--render-preview") {
     PreviewRenderer.run(outputDirectory: URL(fileURLWithPath: path))
 }
 
+// Dumps the transition log of a *running* LocalNook is not possible from a
+// second process; this prints the log of this process, which is useful after
+// --self-test to see what moved the notch and why.
+if CommandLine.arguments.contains("--transitions") {
+    print(NotchTransitionLog.report)
+    exit(0)
+}
+
 // Built-in test harness. See SelfTest.swift.
 if CommandLine.arguments.contains("--self-test") {
     SelfTest.run()

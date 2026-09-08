@@ -88,6 +88,9 @@ final class MirrorManager: NSObject, ObservableObject {
 
     private let box: any CaptureSessionDriver
     private let authorizationStatus: () -> AVAuthorizationStatus
+    /// Injectable so the delayed-response race can be tested without raising a
+    /// real system prompt.
+    private let requestAuthorization: (@escaping @Sendable (Bool) -> Void) -> Void
     private(set) var captureDemand = CaptureDemand()
     private var currentDeviceID: String?
     private var previewOwners: Set<UUID> = []
@@ -96,7 +99,11 @@ final class MirrorManager: NSObject, ObservableObject {
     private var observation: NSKeyValueObservation?
 
     init(box: any CaptureSessionDriver = CaptureSessionBox(),
-         authorizationStatus: @escaping () -> AVAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .video) }) {
+         authorizationStatus: @escaping () -> AVAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .video) },
+         requestAuthorization: @escaping (@escaping @Sendable (Bool) -> Void) -> Void = { completion in
+             AVCaptureDevice.requestAccess(for: .video, completionHandler: completion)
+         }) {
+        self.requestAuthorization = requestAuthorization
         self.box = box
         self.authorizationStatus = authorizationStatus
         authorization = authorizationStatus()
@@ -199,15 +206,18 @@ final class MirrorManager: NSObject, ObservableObject {
     }
 
     func requestAccess() {
-        AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+        requestAuthorization { [weak self] granted in
             Task { @MainActor in
                 guard let self else { return }
                 self.authorization = self.authorizationStatus()
                 Permissions.shared.refreshAll()
-                if granted, self.captureDemand.isActive {
-                    self.rebuildDeviceList()
-                    self.start()
-                }
+                // Consent can arrive long after the user has moved on. Starting
+                // capture then would turn the camera on for a view nobody is
+                // looking at, so the request must still be live *and* still
+                // wanted.
+                guard granted, self.captureDemand.isActive, self.userRequestedCamera else { return }
+                self.rebuildDeviceList()
+                self.start()
             }
         }
     }
