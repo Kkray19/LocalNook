@@ -89,6 +89,7 @@ struct HoverTracker: NSViewRepresentable {
         }
 
         override func mouseEntered(with event: NSEvent) {
+            HoverProbe.recordEnter()
             // AppKit re-sends this every time the tracking area is rebuilt,
             // which happens on every frame of the open animation as the notch
             // grows. Only a genuine transition should reach `onChange`.
@@ -99,6 +100,7 @@ struct HoverTracker: NSViewRepresentable {
         }
 
         override func mouseExited(with event: NSEvent) {
+            HoverProbe.recordExit()
             guard isInside else { return }
             HoverTracker.record("mouseExited")
             isInside = false

@@ -8,6 +8,7 @@ for scenario in ("compiler", "missing", "stale", "tests"):
         (root / "scripts").mkdir(); (root / "bin").mkdir(); (root / "dist").mkdir()
         shutil.copy(source, root / "scripts/build-release.sh")
         (root / "scripts/test-release.py").write_text("# Recursion disabled in fixture\n")
+        (root / "scripts/test-install.py").write_text("# Recursion disabled in fixture\n")
         (root / "scripts/make-icon.swift").write_text("")
         (root / "VERSION").write_text("0.1.0")
         (root / "LICENSE").write_text("test")
@@ -42,6 +43,6 @@ exit 0""",
         assert not (root / "dist/LocalNook.app").exists(), scenario
         assert not (root / "dist/LocalNook.dmg").exists(), scenario
         assert not (root / "packaged").exists(), scenario
-        if scenario == "tests": assert b"SELF-TEST FAILED" in result.stdout, result.stdout.decode()
+        if scenario == "tests": assert b"DETERMINISTIC SUITE FAILED" in result.stdout, result.stdout.decode()
         print("PASS release gate:", scenario)
 print("4 release regression scenarios passed")

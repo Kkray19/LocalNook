@@ -111,6 +111,7 @@ final class NotchWindowController: NSObject {
     func start() {
         guard !started else { return }
         started = true
+        sessionGeneration &+= 1
         rebuildPanels()
         installEventMonitors()
         observeSystemEvents()
@@ -148,7 +149,7 @@ final class NotchWindowController: NSObject {
 
     /// The model for the display the pointer is currently on, else the primary.
     var activeModel: NotchViewModel? {
-        let mouse = NSEvent.mouseLocation
+        let mouse = pointerLocation()
         if let match = models.first(where: { key, _ in
             NSScreen.screen(withStableID: key)?.frame.contains(mouse) ?? false
         }) {
@@ -205,22 +206,126 @@ final class NotchWindowController: NSObject {
         panels.keys.allSatisfy { NSScreen.screen(withStableID: $0) != nil }
     }
 
+    // MARK: Test seams and teardown inspection
+
+    /// Bumped by every `start()`. Work captured before a `stop()` can compare
+    /// this against the value it captured and decline to touch a later session.
+    private(set) var sessionGeneration = 0
+
+    /// Displays the controller should consider hosting a notch on.
+    ///
+    /// Injectable so attaching and removing a display can be exercised without
+    /// physically unplugging a monitor. Everything downstream — retiring panels,
+    /// releasing the claims that belonged to them — runs the production path.
+    var connectedScreens: () -> [NSScreen] = { NSScreen.screens }
+
+    /// Everything `stop()` is responsible for releasing, in one place, so a
+    /// leak shows up as a number rather than as a symptom three tests later.
+    struct Residue: Equatable, CustomStringConvertible {
+        var panels = 0
+        var catchers = 0
+        var models = 0
+        var claims = 0
+        var combineSubscriptions = 0
+        var stateObservers = 0
+        var notificationObservers = 0
+        var eventMonitors = 0
+        var shrinkTasks = 0
+        var pointerSafetyNet = false
+        var geometryTask = false
+        var commandBridge = false
+
+        /// A stopped controller must hold none of it.
+        var isEmpty: Bool { self == Residue() }
+
+        var description: String {
+            var parts: [String] = []
+            if panels > 0 { parts.append("panels=\(panels)") }
+            if catchers > 0 { parts.append("catchers=\(catchers)") }
+            if models > 0 { parts.append("models=\(models)") }
+            if claims > 0 { parts.append("claims=\(claims)") }
+            if combineSubscriptions > 0 { parts.append("subscriptions=\(combineSubscriptions)") }
+            if stateObservers > 0 { parts.append("stateObservers=\(stateObservers)") }
+            if notificationObservers > 0 { parts.append("notifObservers=\(notificationObservers)") }
+            if eventMonitors > 0 { parts.append("eventMonitors=\(eventMonitors)") }
+            if shrinkTasks > 0 { parts.append("shrinkTasks=\(shrinkTasks)") }
+            if pointerSafetyNet { parts.append("pointerSafetyNet") }
+            if geometryTask { parts.append("geometryTask") }
+            if commandBridge { parts.append("commandBridge") }
+            return parts.isEmpty ? "nothing" : parts.joined(separator: " ")
+        }
+    }
+
+    /// What the controller is currently holding on to.
+    var residue: Residue {
+        Residue(
+            panels: panels.count,
+            catchers: hitPanels.count,
+            models: models.count,
+            claims: models.values.reduce(0) { $0 + $1.claims.count },
+            combineSubscriptions: cancellables.count,
+            stateObservers: stateObservers.count,
+            notificationObservers: observers.count,
+            eventMonitors: [mouseMonitor, clickMonitor].compactMap { $0 }.count,
+            shrinkTasks: shrinkTasks.count,
+            pointerSafetyNet: pointerSafetyTask != nil,
+            geometryTask: geometryTask != nil,
+            commandBridge: notificationBridge != nil
+        )
+    }
+
+    var isStarted: Bool { started }
+
+    /// Registers an extra notch for a display that is not physically attached.
+    ///
+    /// Test-only. Multi-display scoping — "typing in Notes on one screen must
+    /// not pin the notch on another" — is otherwise unverifiable on a
+    /// single-display Mac, and a check that silently passes because it never
+    /// ran is worse than no check. This seeds the same `models`/`panels`
+    /// registry production uses, so `closeIfPointerHasLeft` and the claim
+    /// validator run their real code over it.
+    @discardableResult
+    func installSyntheticNotch(id: String, frame: CGRect) -> NotchViewModel {
+        let model = NotchViewModel(screenID: id)
+        let panel = NotchPanel(contentRect: frame)
+        panel.setFrame(frame, display: false)
+        models[id] = model
+        panels[id] = panel
+        observeModelState()
+        return model
+    }
+
+    func removeSyntheticNotch(id: String) {
+        models[id]?.cancelPending()
+        models.removeValue(forKey: id)
+        panels[id]?.orderOut(nil)
+        panels[id]?.close()
+        panels.removeValue(forKey: id)
+        observeModelState()
+    }
+
     // MARK: Panel management
 
     private func primaryScreenID() -> String? {
+        let live = connectedScreens()
         if let preferred = settings.preferredScreenID,
-           NSScreen.screen(withStableID: preferred) != nil {
+           live.contains(where: { $0.stableID == preferred }) {
             return preferred
         }
-        return NSScreen.main?.stableID ?? NSScreen.screens.first?.stableID
+        if let main = NSScreen.main?.stableID, live.contains(where: { $0.stableID == main }) {
+            return main
+        }
+        return live.first?.stableID
     }
 
     /// Displays that should currently host a panel.
     private func targetScreens() -> [NSScreen] {
+        let live = connectedScreens()
         if settings.showOnAllDisplays {
-            return NSScreen.screens.filter { NotchGeometry.shouldDisplay(on: $0) }
+            return live.filter { NotchGeometry.shouldDisplay(on: $0) }
         }
-        guard let id = primaryScreenID(), let screen = NSScreen.screen(withStableID: id) else {
+        guard let id = primaryScreenID(),
+              let screen = live.first(where: { $0.stableID == id }) else {
             return []
         }
         return NotchGeometry.shouldDisplay(on: screen) ? [screen] : []
@@ -256,7 +361,12 @@ final class NotchWindowController: NSObject {
             panel.orderOut(nil)
             panel.close()
             panels.removeValue(forKey: id)
-            models[id]?.cancelPending()
+            // A claim outlives the window it was made against unless it is
+            // released here: unplug a display mid-sentence in Notes and the
+            // retired model keeps a .textEditing claim forever. It is dropped
+            // from the registry, but any view still holding it — and any later
+            // code that consults it — sees a notch that is permanently pinned.
+            models[id]?.retire()
             models.removeValue(forKey: id)
         }
 
@@ -537,8 +647,18 @@ final class NotchWindowController: NSObject {
     /// would wrongly conclude that live drags get interrupted.
     var mouseButtonsAreDown: () -> Bool = { NSEvent.pressedMouseButtons != 0 }
 
+    /// Where the pointer is.
+    ///
+    /// Injectable for the same reason as `mouseButtonsAreDown`: recovery from a
+    /// missed crossing is defined entirely in terms of "the pointer is not near
+    /// the panel", and a test that cannot move the pointer can otherwise only
+    /// verify that rule when the tester's hand happens to be somewhere useful.
+    /// With this seam the recovery postcondition is a hard gate on every run
+    /// instead of something that depends on live machine state.
+    var pointerLocation: () -> NSPoint = { NSEvent.mouseLocation }
+
     private func modelUnderPointer() -> (String, NotchViewModel)? {
-        let mouse = NSEvent.mouseLocation
+        let mouse = pointerLocation()
         return models.first { id, _ in
             NSScreen.screen(withStableID: id)?.frame.contains(mouse) ?? false
         }
@@ -570,7 +690,7 @@ final class NotchWindowController: NSObject {
         // The only genuinely app-wide hold-off left.
         guard !isApplicationModal else { return }
 
-        let mouse = NSEvent.mouseLocation
+        let mouse = pointerLocation()
         for (id, model) in models where model.state == .open {
             // Scoped to this notch: interaction on one display never pins
             // another, and Settings taking focus pins nothing at all.
@@ -695,7 +815,7 @@ final class NotchWindowController: NSObject {
         }
         hitPanels.removeAll()
         panels.removeAll()
-        models.values.forEach { $0.cancelPending() }
+        models.values.forEach { $0.retire() }
         models.removeAll()
         elevatedSpace = nil
     }
@@ -777,7 +897,7 @@ final class NotchWindowController: NSObject {
     }
 
     private func handleGlobalClick() {
-        let mouse = NSEvent.mouseLocation
+        let mouse = pointerLocation()
         for (id, model) in models {
             guard let screen = NSScreen.screen(withStableID: id) else { continue }
             let inside = hoverRegion(for: model, on: screen).contains(mouse)

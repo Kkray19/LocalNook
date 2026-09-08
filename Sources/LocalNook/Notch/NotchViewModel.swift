@@ -205,6 +205,20 @@ final class NotchViewModel: ObservableObject {
         openTask?.cancel(); openTask = nil
         closeTask?.cancel(); closeTask = nil
     }
+
+    /// This notch is going away — its display was removed, or the controller
+    /// stopped. Everything it owns is released.
+    ///
+    /// Cancelling the pending work is not enough on its own: a claim is held
+    /// until someone gives it back, and after retirement nobody will. Leaving
+    /// one behind means the model reports itself as permanently interacting,
+    /// which is exactly the state the fallback refuses to close.
+    func retire() {
+        cancelPending()
+        releaseAllInteractions()
+        isDragTargeting = false
+        state = .closed
+    }
 }
 
 extension Notification.Name {

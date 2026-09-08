@@ -23,8 +23,32 @@ import SwiftUI
 enum SelfTest {
     private nonisolated(unsafe) static var passed = 0
     private nonisolated(unsafe) static var failed = 0
+    /// Checks whose precondition could not be met. Never counted as passes: an
+    /// integration check that could not run is unverified, not green.
+    private nonisolated(unsafe) static var unverified = 0
 
-    static func run() -> Never {
+    /// Which half of the suite to run.
+    ///
+    /// The two halves have genuinely different reliability characteristics and
+    /// mixing them hides that. Deterministic checks drive the controller through
+    /// injected seams — pointer position, mouse-button state, display metrics,
+    /// scheduling — and must pass every time on any machine. Integration checks
+    /// ask the live window server to deliver a real crossing, which it does not
+    /// always do for the only stimulus a test can produce without Accessibility.
+    /// A red gate that mixes the two teaches people to ignore the gate.
+    enum Suite: String {
+        case deterministic
+        case integration
+        case all
+
+        init(arguments: [String]) {
+            if arguments.contains("--deterministic") { self = .deterministic }
+            else if arguments.contains("--integration") { self = .integration }
+            else { self = .all }
+        }
+    }
+
+    static func run(_ suite: Suite = Suite(arguments: CommandLine.arguments)) -> Never {
         // Needs an NSApplication for AppKit geometry to be valid.
         // `.accessory`, not `.prohibited`: a prohibited app is not eligible to
         // receive UI events at all, which would make the hover test fail for a
@@ -32,37 +56,79 @@ enum SelfTest {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
 
-        print("LocalNook self-test\n")
+        print("LocalNook self-test — suite: \(suite.rawValue)")
+        print("displays connected: \(NSScreen.screens.count)\n")
 
-        testEnvironment()
-        testGeometry()
-        testPreferences()
-        testShelf()
-        testNotesAndTodos()
-        testTimers()
-        testMediaParsing()
-        // Session fixtures are covered by StabilizationTests; never scan user transcripts here.
-        testPermissionsDegradeGracefully()
+        if suite != .integration {
+            print("== DETERMINISTIC ==")
+            testEnvironment()
+            testGeometry()
+            testPreferences()
+            testShelf()
+            testNotesAndTodos()
+            testTimers()
+            testMediaParsing()
+            // Session fixtures are covered by StabilizationTests; never scan user transcripts here.
+            testPermissionsDegradeGracefully()
 
-        testHoverPath()
-        testClickThrough()
-        testExternalDisplays()
-        testInteractiveFootprint()
-        testDashboardComposition()
-        testLiquidGlass()
-        testPrivacyBoundaries()
-        testTrayWithRealFiles()
-        testInteractionOwnership()
-        testPointerFallback()
-        testCatcherHover()
-        testCloseLatch()
-        testScriptableControl()
-        StabilizationTests.run()
+            testClickThrough()
+            testExternalDisplays()
+            testInteractiveFootprint()
+            testDashboardComposition()
+            testLiquidGlass()
+            testPrivacyBoundaries()
+            testTrayWithRealFiles()
+            testInteractionOwnership()
+            testControllerTeardown()
+            testMissedCrossingRecovery()
+            testPointerFallback()
+            testCloseLatch()
+            testScriptableControl()
+            StabilizationTests.run()
+        }
+
+        let deterministic = Tally(passed: passed, failed: failed, unverified: unverified)
+
+        if suite != .deterministic {
+            print("\n== LIVE INTEGRATION (real window server) ==")
+            testHoverPath()
+            testCatcherHover()
+        }
+
         AppInfo.defaults.removePersistentDomain(forName: AppInfo.testSuiteName)
         try? FileManager.default.removeItem(at: AppInfo.testDirectory)
 
-        print("\n\(passed) passed, \(failed) failed")
+        let integration = Tally(passed: passed, failed: failed, unverified: unverified)
+            .subtracting(deterministic)
+
+        print("")
+        if suite != .integration { print("deterministic: \(deterministic.line)") }
+        if suite != .deterministic { print("integration:   \(integration.line)") }
+        print("total:         \(Tally(passed: passed, failed: failed, unverified: unverified).line)")
+        if unverified > 0 {
+            print("")
+            print("UNVERIFIED means a check could not be exercised, NOT that it passed.")
+            print("A required integration check that could not run remains unverified.")
+        }
         exit(failed == 0 ? 0 : 1)
+    }
+
+    private struct Tally {
+        var passed = 0
+        var failed = 0
+        var unverified = 0
+
+        func subtracting(_ other: Tally) -> Tally {
+            Tally(passed: passed - other.passed,
+                  failed: failed - other.failed,
+                  unverified: unverified - other.unverified)
+        }
+
+        var line: String {
+            var text = "\(passed) passed, \(failed) failed"
+            if unverified > 0 { text += ", \(unverified) UNVERIFIED" }
+            return text
+        }
     }
 
     /// End-to-end check of the real hover path.
@@ -127,6 +193,7 @@ enum SelfTest {
 
         // Retry the gesture, not the assertion — see provokeCrossing.
         let parkedFrame = NSRect(x: 4, y: 4, width: 320, height: 120)
+        HoverProbe.reset()
         var opened = waitUntil({ model.state == .open }, timeout: 1.0)
         var attempts = 0
         while !opened, attempts < 3 {
@@ -139,16 +206,32 @@ enum SelfTest {
             ))
             opened = waitUntil({ model.state == .open }, timeout: 1.0)
         }
-        let sawEnter = HoverTracker.diagnostics.contains("mouseEntered")
-        if opened {
-            check("hovering the notch opens it", true)
-        } else if !sawEnter {
-            skipped("hovering the notch opens it",
-                    "AppKit delivered no mouseEntered across \(attempts + 1) window moves")
-        } else {
-            check("hovering the notch opens it", false,
-                  "a crossing was delivered but the notch stayed shut")
+
+        // Attribute the outcome to a stage rather than reporting a bare "hover
+        // did not work". Each branch names a different culprit, and only two of
+        // them are LocalNook's.
+        let outcome = HoverProbe.classify(
+            placed: true,
+            placementDetail: "",
+            opened: opened
+        )
+        switch outcome {
+        case .succeeded:
+            check("[integration] hovering the notch opens it", true)
+        case .preconditionUnmet:
+            unmet("[integration] hovering the notch opens it", "placement check passed but was reported unmet")
+        case .noPlatformEvent:
+            unmet("[integration] hovering the notch opens it",
+                  "AppKit delivered no mouseEntered across \(attempts + 1) window moves; "
+                  + "the pointer was verified inside the strip each time")
+        case let .eventDropped(enters):
+            check("[integration] hovering the notch opens it", false,
+                  "AppKit delivered \(enters) crossing(s); LocalNook's handler ran 0 times")
+        case let .wrongState(calls):
+            check("[integration] hovering the notch opens it", false,
+                  "LocalNook handled \(calls) crossing(s) and the notch is still \(model.state)")
         }
+        print("    probe: \(HoverProbe.summary)")
         if !opened {
             // Only noisy when something is actually wrong.
             print("    cursor: \(cursor)")
@@ -157,10 +240,23 @@ enum SelfTest {
         }
 
         // Slide it away again.
+        //
+        // Only meaningful when the crossing in actually happened: this bare
+        // panel is not owned by NotchWindowController, so its only close path
+        // is the matching mouseExited. Recovery when no crossing is delivered
+        // at all belongs to the real, controller-owned panel and is asserted
+        // unconditionally by testMissedCrossingRecovery in the deterministic
+        // suite — a hard gate on every run rather than one that only fires when
+        // this flaky stimulus happens to work.
         panel.setFrameOrigin(NSPoint(x: 4, y: 4))
-        pumpEvents(for: 1.2)
-        check("moving the pointer off it collapses again", model.state == .closed,
-              "still \(model.state)")
+        if opened {
+            check("[integration] moving the pointer off it collapses again",
+                  waitUntil({ model.state == .closed }, timeout: 2.0),
+                  "still \(model.state); probe: \(HoverProbe.summary)")
+        } else {
+            unmet("[integration] moving the pointer off it collapses again",
+                  "the notch never opened, so there was no open state to collapse")
+        }
 
         // Click toggling must not depend on any permission either.
         model.open()
@@ -648,13 +744,28 @@ enum SelfTest {
 
         // Per-display scoping: this is the bug where typing on one display, or
         // opening Settings, pinned every notch everywhere.
-        if models.count > 1, let second = models.first(where: { $0 !== first }) {
-            check("a claim on one display does not pin another",
-                  !second.isInteracting && !controller.fallbackIsHoldingOff(for: second),
-                  "the other display was suppressed too")
+        //
+        // Previously this asserted `true` when only one display was attached,
+        // which reported a pass for a check that had not run. A second notch is
+        // seeded instead so the rule is exercised on any machine; the display
+        // count is printed so a reader knows which it was.
+        let physicalDisplays = NSScreen.screens.count
+        let seededID = "self-test.ownership-display"
+        let second: NotchViewModel
+        if models.count > 1, let other = models.first(where: { $0 !== first }) {
+            second = other
+            print("    second notch: a real one (\(physicalDisplays) display(s) attached)")
         } else {
-            check("a claim on one display does not pin another", true)
+            second = controller.installSyntheticNotch(
+                id: seededID,
+                frame: CGRect(x: -4000, y: -4000, width: 400, height: 200)
+            )
+            print("    second notch: seeded (\(physicalDisplays) display attached)")
         }
+        defer { controller.removeSyntheticNotch(id: seededID) }
+        check("a claim on one display does not pin another",
+              !second.isInteracting && !controller.fallbackIsHoldingOff(for: second),
+              "the other display was suppressed too")
 
         first.releaseInteraction(.textEditing, owner: owner)
         check("releasing ends the hold", !first.isInteracting)
@@ -678,7 +789,7 @@ enum SelfTest {
                   "a cancelled drag left the notch pinned")
             check("stale drag targeting is cleared with it", !first.isDragTargeting)
         } else {
-            skipped("a drag claim ends once no mouse button is held",
+            unmet("a drag claim ends once no mouse button is held",
                     "a mouse button is physically held right now")
             first.releaseAllInteractions()
             first.isDragTargeting = false
@@ -696,7 +807,7 @@ enum SelfTest {
                   "claims survived into the next open: \(first.activeInteractions.map(\.label))")
             check("closing clears drag targeting", !first.isDragTargeting)
         } else {
-            skipped("closing releases every claim", "the notch did not open to be closed")
+            unmet("closing releases every claim", "the notch did not open to be closed")
         }
 
         // A non-panel key window — Settings, Quick Look — must pin nothing.
@@ -745,32 +856,42 @@ enum SelfTest {
               lastOpen?.source == .explicitCommand,
               "got \(String(describing: lastOpen?.source))")
 
-        // The pointer is wherever it actually is; unless it happens to be on the
-        // notch, one pass should close it and say so.
-        let pointerOnNotch = controller.allModels.contains { model in
-            guard let screen = model.screen else { return false }
-            let region = CGRect(
-                x: screen.frame.midX - NotchGeometry.openSize.width / 2,
-                y: screen.frame.maxY - NotchGeometry.openSize.height,
-                width: NotchGeometry.openSize.width,
-                height: NotchGeometry.openSize.height
-            ).insetBy(dx: -24, dy: -24)
-            return region.contains(NSEvent.mouseLocation)
+        // Both branches are exercised on every run: the pointer is injected
+        // rather than read. Previously this asked where the tester's hand
+        // happened to be and reported a pass for whichever branch did not run.
+        // Restored on every path so an override cannot leak into a later test.
+        let realPointer = controller.pointerLocation
+        defer { controller.pointerLocation = realPointer }
+
+        // 1. Pointer resting on the notch: the fallback must leave it alone.
+        if let onNotch = controller.allModels.first.flatMap({ model -> NSPoint? in
+            guard let screen = model.screen else { return nil }
+            return NSPoint(x: screen.frame.midX,
+                           y: screen.frame.maxY - NotchGeometry.openSize.height / 2)
+        }) {
+            controller.pointerLocation = { onNotch }
+            controller.runPointerSafetyCheckNow()
+            pumpEvents(for: 0.3)
+            check("the fallback holds off while the pointer is on the notch",
+                  controller.allModels.contains { $0.state == .open },
+                  "it closed a notch the pointer was resting on")
+        } else {
+            unmet("the fallback holds off while the pointer is on the notch",
+                  "no notch has a screen to compute a pointer position on")
         }
 
-        if pointerOnNotch || controller.fallbackIsHoldingOff {
-            check("the fallback holds off while the pointer is on the notch", true)
-        } else {
-            controller.runPointerSafetyCheckNow()
-            pumpEvents(for: 0.9)
-            check("a notch the pointer has left is recovered",
-                  controller.allModels.allSatisfy { $0.state == .closed },
-                  "still open after a recovery pass")
-            let lastClose = NotchTransitionLog.all.last { !$0.opened }
-            check("the recovery close is attributed to the fallback, not to hover",
-                  lastClose?.source == .pointerFallback,
-                  "got \(String(describing: lastClose?.source))")
-        }
+        // 2. Pointer clearly elsewhere: one pass must close it, and say why.
+        controller.pointerLocation = { NSPoint(x: 12_000, y: 12_000) }
+        controller.runPointerSafetyCheckNow()
+        check("a notch the pointer has left is recovered",
+              waitUntil({ controller.allModels.allSatisfy { $0.state == .closed } },
+                        timeout: 1.5),
+              "still open after a recovery pass")
+        let lastClose = NotchTransitionLog.all.last { !$0.opened }
+        check("the recovery close is attributed to the fallback, not to hover",
+              lastClose?.source == .pointerFallback,
+              "got \(String(describing: lastClose?.source))")
+        controller.pointerLocation = realPointer
 
         // Dragging is a deliberate interaction; recovery must not interrupt it.
         // Asserted on what the pass *decided* rather than on state after a
@@ -866,23 +987,47 @@ enum SelfTest {
         // Move the window under the stationary pointer — no Accessibility needed.
         let cursor = NSEvent.mouseLocation
         let parked = NSRect(x: 4, y: 4, width: size.width, height: size.height)
-        NotchHitView.deliveredEnters = 0
-        let crossed = provokeCrossing(panel, around: cursor, size: size, parked: parked) {
-            model.state == .open
+        HoverProbe.reset()
+        let placed = placePanel(panel, around: cursor, size: size)
+        let crossed = placed && waitUntil({ model.state == .open }, timeout: 1.5)
+
+        switch HoverProbe.classify(
+            placed: placed,
+            placementDetail: "window server clamped the frame; pointer at \(cursor)",
+            opened: crossed
+        ) {
+        case .succeeded:
+            check("[integration] hovering the catcher opens the notch", true)
+        case let .preconditionUnmet(detail):
+            unmet("[integration] hovering the catcher opens the notch", detail)
+        case .noPlatformEvent:
+            unmet("[integration] hovering the catcher opens the notch",
+                  "AppKit delivered no crossing for a window moved under a still pointer")
+        case let .eventDropped(enters):
+            check("[integration] hovering the catcher opens the notch", false,
+                  "AppKit delivered \(enters) crossing(s) and LocalNook forwarded none")
+        case let .wrongState(calls):
+            check("[integration] hovering the catcher opens the notch", false,
+                  "LocalNook handled \(calls) crossing(s) but the notch is \(model.state)")
         }
+
+        print("    probe: \(HoverProbe.summary)")
+
+        // This model is not in the controller's registry, so the pointer
+        // fallback does not cover it — asserting recovery here would be
+        // asserting a promise the product does not make for a detached panel.
+        // The real postcondition ("a notch open with the pointer elsewhere
+        // always closes") is a hard gate in testMissedCrossingRecovery.
+        panel.setFrame(parked, display: true)
         if crossed {
-            check("hovering the catcher opens the notch", true)
-        } else if NotchHitView.deliveredEnters == 0 {
-            // AppKit never produced the crossing. That is a limitation of moving
-            // a window under a still pointer — the only way a test can simulate
-            // hover without Accessibility — not a LocalNook defect. Real hover
-            // moves the pointer onto a stationary panel and is unaffected.
-            skipped("hovering the catcher opens the notch",
-                    "AppKit delivered no mouseEntered to move a window under the pointer")
+            check("[integration] the catcher's notch collapses when the panel leaves",
+                  waitUntil({ model.state == .closed }, timeout: 2.0),
+                  "state is \(model.state)")
         } else {
-            check("hovering the catcher opens the notch", false,
-                  "a crossing WAS delivered (\(NotchHitView.deliveredEnters)) but the notch stayed shut")
+            unmet("[integration] the catcher's notch collapses when the panel leaves",
+                  "it never opened, so there was no open state to collapse")
         }
+        model.close()
 
         // Once open, hover belongs to the expanded panel — the pointer has moved
         // *into* it, not away. Closing on exit is covered by testHoverPath.
@@ -912,6 +1057,267 @@ enum SelfTest {
         panel.orderOut(nil)
         panel.close()
         settings.openDelay = originalDelay
+    }
+
+    /// Teardown, restart, and interaction ownership.
+    ///
+    /// Deterministic by construction: pointer position, mouse-button state and
+    /// the set of connected displays are all injected, and recovery is driven
+    /// with `runPointerSafetyCheckNow()` rather than by sleeping through the
+    /// fallback's one-second cadence. Nothing here waits on a wall clock for a
+    /// result, so it must pass on every machine, every run.
+    private static func testControllerTeardown() {
+        section("Controller teardown and ownership")
+        let controller = NotchWindowController.shared
+        let settings = Settings.shared
+
+        // Everything injected here is restored even if an assertion fails.
+        let realPointer = controller.pointerLocation
+        let realButtons = controller.mouseButtonsAreDown
+        let realScreens = controller.connectedScreens
+        defer {
+            controller.pointerLocation = realPointer
+            controller.mouseButtonsAreDown = realButtons
+            controller.connectedScreens = realScreens
+        }
+
+        controller.stop()
+        pumpEvents(for: 0.2)
+        check("a stopped controller holds nothing",
+              controller.residue.isEmpty, "still holds \(controller.residue)")
+
+        // --- stop() cancels outstanding work -------------------------------
+        controller.start()
+        pumpEvents(for: 0.4)
+        let started = controller.residue
+        check("starting builds a notch", started.panels > 0 && started.models > 0,
+              "residue after start: \(started)")
+
+        guard let first = controller.allModels.first else {
+            check("a notch exists to tear down", false)
+            return
+        }
+        first.open()
+        pumpEvents(for: 0.4)
+        check("an open notch schedules the recovery check",
+              controller.pointerSafetyNetIsRunning)
+
+        controller.stop()
+        pumpEvents(for: 0.2)
+        check("stop cancels the recovery check", !controller.pointerSafetyNetIsRunning)
+        check("stop releases every window, observer and task",
+              controller.residue.isEmpty, "still holds \(controller.residue)")
+
+        // --- work from the old session cannot touch the new one ------------
+        // A close scheduled before stop must not land on the session that
+        // replaces it. The stale model is kept alive deliberately: the danger
+        // is a task that outlives its controller, not one that is deallocated.
+        let stale = first
+        stale.open()
+        stale.scheduleClose(source: .pointerFallback)
+        let staleGeneration = controller.sessionGeneration
+        controller.stop()
+        pumpEvents(for: 0.1)
+
+        controller.start()
+        pumpEvents(for: 0.4)
+        check("restarting begins a new session",
+              controller.sessionGeneration != staleGeneration,
+              "generation stayed \(controller.sessionGeneration)")
+        check("the stale notch is no longer registered",
+              !controller.allModels.contains(where: { $0 === stale }))
+
+        if let fresh = controller.allModels.first {
+            // Park the pointer on the new notch first. Without this the
+            // production fallback closes it a second later for a perfectly good
+            // reason — the pointer is elsewhere — and the test reads that as
+            // stale work leaking through. Pinned here, the only thing that can
+            // close it is something the previous session scheduled.
+            if let screen = fresh.screen {
+                controller.pointerLocation = {
+                    NSPoint(x: screen.frame.midX,
+                            y: screen.frame.maxY - NotchGeometry.openSize.height / 2)
+                }
+            }
+            fresh.open()
+            pumpEvents(for: 0.4)
+            // Comfortably longer than anything the old session could have
+            // scheduled, and longer than one tick of the fallback.
+            pumpEvents(for: 1.4)
+            check("work scheduled before stop cannot close the new session's notch",
+                  fresh.state == .open, "the new notch is \(fresh.state)")
+            check("the stale notch's own pending work was cancelled",
+                  !stale.hasPendingClose)
+            controller.pointerLocation = realPointer
+            fresh.close()
+            pumpEvents(for: 0.3)
+        } else {
+            check("the restarted session has a notch", false)
+        }
+
+        // --- repeated start/stop accumulates nothing -----------------------
+        var residues: [NotchWindowController.Residue] = []
+        for _ in 0..<3 {
+            controller.stop()
+            pumpEvents(for: 0.15)
+            check("each stop leaves nothing behind",
+                  controller.residue.isEmpty, "held \(controller.residue)")
+            controller.start()
+            pumpEvents(for: 0.35)
+            residues.append(controller.residue)
+        }
+        check("repeated start/stop does not accumulate windows or observers",
+              residues.allSatisfy { $0 == residues[0] },
+              "residues differed across cycles: \(residues.map(\.description))")
+
+        // --- removing a display releases its claims ------------------------
+        if let doomed = controller.allModels.first {
+            let owner = UUID()
+            doomed.open()
+            doomed.claimInteraction(.textEditing, owner: owner)
+            pumpEvents(for: 0.2)
+            check("the notch about to be removed holds a claim", doomed.isInteracting)
+
+            controller.connectedScreens = { [] }
+            controller.rebuildPanels()
+            pumpEvents(for: 0.3)
+
+            check("removing the display retires its panel", controller.panelCount == 0,
+                  "\(controller.panelCount) panel(s) survived")
+            check("removing the display retires its catcher", controller.catcherCount == 0,
+                  "\(controller.catcherCount) catcher(s) survived")
+            check("panels and catchers stay in step through removal",
+                  controller.panelsAndCatchersAgree)
+            check("a removed display's claims are released", !doomed.isInteracting,
+                  "claims survived: \(doomed.activeInteractions.map(\.rawValue))")
+            check("a removed display's pending work is cancelled", !doomed.hasPendingClose)
+
+            controller.connectedScreens = realScreens
+            controller.rebuildPanels()
+            pumpEvents(for: 0.4)
+            check("reattaching the display rebuilds exactly one notch per screen",
+                  controller.panelCount == controller.catcherCount
+                  && controller.panelCount > 0,
+                  "panels=\(controller.panelCount) catchers=\(controller.catcherCount)")
+        }
+
+        // --- an interaction pins only its own nook -------------------------
+        // Seeded rather than physical: see installSyntheticNotch. The rule
+        // under test is the one production uses, not a restatement of it.
+        let farScreen = "self-test.synthetic-display"
+        let farFrame = CGRect(x: -4000, y: -4000, width: 400, height: 200)
+        let other = controller.installSyntheticNotch(id: farScreen, frame: farFrame)
+        defer { controller.removeSyntheticNotch(id: farScreen) }
+        pumpEvents(for: 0.2)
+
+        if let here = controller.allModels.first(where: { $0 !== other }) {
+            // Pointer parked somewhere neither notch covers, so the only reason
+            // either can stay open is a claim.
+            controller.pointerLocation = { NSPoint(x: 12_000, y: 12_000) }
+            controller.mouseButtonsAreDown = { false }
+
+            let typist = UUID()
+            here.open()
+            other.open()
+            pumpEvents(for: 0.3)
+            here.claimInteraction(.textEditing, owner: typist)
+
+            controller.runPointerSafetyCheckNow()
+            check("typing in Notes pins the notch being typed in",
+                  waitUntil({ here.state == .open }, timeout: 0.5))
+            check("typing in Notes does not pin the notch on another display",
+                  waitUntil({ other.state == .closed }, timeout: 1.0),
+                  "the other notch is \(other.state)")
+
+            // --- ending the interaction restores ordinary closing ----------
+            here.releaseInteraction(.textEditing, owner: typist)
+            check("releasing the claim ends the hold", !here.isInteracting)
+            controller.runPointerSafetyCheckNow()
+            check("once typing ends the notch closes normally again",
+                  waitUntil({ here.state == .closed }, timeout: 1.0),
+                  "it is \(here.state)")
+
+            // A menu claim behaves the same way, and a drag claim survives only
+            // while a button is actually held.
+            here.allowHoverToReopen()
+            here.open()
+            pumpEvents(for: 0.2)
+            let dragger = UUID()
+            here.claimInteraction(.dragging, owner: dragger)
+            controller.mouseButtonsAreDown = { true }
+            controller.validateClaimsNow()
+            controller.runPointerSafetyCheckNow()
+            check("a live drag keeps its own notch open",
+                  waitUntil({ here.state == .open }, timeout: 0.5))
+            controller.mouseButtonsAreDown = { false }
+            controller.validateClaimsNow()
+            check("letting go ends the drag claim", !here.isInteracting,
+                  "still holds \(here.activeInteractions.map(\.rawValue))")
+            controller.runPointerSafetyCheckNow()
+            check("after the drag ends the notch closes normally again",
+                  waitUntil({ here.state == .closed }, timeout: 1.0),
+                  "it is \(here.state)")
+
+            // Settings taking focus is not an interaction with any notch.
+            check("no notch is left claimed at the end",
+                  controller.allModels.allSatisfy { !$0.isInteracting })
+        } else {
+            check("a real notch exists alongside the synthetic one", false)
+        }
+
+        _ = settings
+        controller.pointerLocation = realPointer
+        controller.mouseButtonsAreDown = realButtons
+    }
+
+    /// The postcondition a missed tracking event must not be allowed to break.
+    ///
+    /// The live hover checks can only *try* to make the window server deliver a
+    /// crossing, and sometimes it does not. That is an excuse for the stimulus,
+    /// never for leaving a panel the user cannot dismiss. This asserts the
+    /// recovery contract directly, on the real controller-owned notch, with the
+    /// pointer injected — so it is a hard gate on every run rather than one
+    /// that only fires when the flaky stimulus happens to work.
+    private static func testMissedCrossingRecovery() {
+        section("Recovery from a missed crossing")
+        let controller = NotchWindowController.shared
+        let realPointer = controller.pointerLocation
+        defer { controller.pointerLocation = realPointer }
+
+        controller.start()
+        pumpEvents(for: 0.4)
+        guard let model = controller.allModels.first else {
+            check("a notch exists to recover", false)
+            return
+        }
+
+        // Exactly the failure under investigation: the notch is open and the
+        // mouseExited that should close it will never arrive.
+        model.allowHoverToReopen()
+        model.open()
+        pumpEvents(for: 0.4)
+        check("the notch is open to begin with", model.state == .open,
+              "it is \(model.state)")
+        check("an open notch always has a recovery check scheduled",
+              controller.pointerSafetyNetIsRunning,
+              "nothing would ever notice the missed event")
+
+        NotchTransitionLog.clear()
+        controller.pointerLocation = { NSPoint(x: 12_000, y: 12_000) }
+        controller.runPointerSafetyCheckNow()
+        check("a notch open with the pointer elsewhere closes itself",
+              waitUntil({ model.state == .closed }, timeout: 1.0),
+              "still \(model.state) after the recovery pass ran")
+        let closes = NotchTransitionLog.all.filter { !$0.opened }
+        check("the recovery close is attributed to the fallback",
+              closes.last?.source == .pointerFallback,
+              "attributed to \(String(describing: closes.last?.source))")
+
+        // And it must stop ticking once there is nothing open, so an idle Mac
+        // is not left polling.
+        pumpEvents(for: 0.3)
+        check("the recovery check stops once nothing is open",
+              waitUntil({ !controller.pointerSafetyNetIsRunning }, timeout: 2.5))
     }
 
     /// A deliberate close must not bounce straight back open under a still pointer.
@@ -1228,8 +1634,9 @@ enum SelfTest {
     /// attached. When the precondition does not hold, the honest outcome is
     /// "not exercised", not "failed": a red gate that means "you were holding
     /// the mouse" teaches people to ignore the gate.
-    private static func skipped(_ name: String, _ reason: String) {
-        print("  – \(name)  — not run: \(reason)")
+    private static func unmet(_ name: String, _ reason: String) {
+        unverified += 1
+        print("  ? \(name)  — UNVERIFIED: \(reason)")
     }
 
     /// Pumps the event loop until `condition` holds, or `timeout` elapses.
