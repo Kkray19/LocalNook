@@ -1094,7 +1094,6 @@ enum SelfTest {
     private static func testControllerTeardown() {
         section("Controller teardown and ownership")
         let controller = NotchWindowController.shared
-        let settings = Settings.shared
 
         // Everything injected here is restored even if an assertion fails.
         let realPointer = controller.pointerLocation
@@ -1297,7 +1296,6 @@ enum SelfTest {
             check("a real notch exists alongside the synthetic one", false)
         }
 
-        _ = settings
         controller.pointerLocation = realPointer
         controller.mouseButtonsAreDown = realButtons
     }

@@ -184,14 +184,14 @@ Not all "verified" is the same, so this log separates them.
 
 ### Verified by automated check
 
-`--self-test`, **232 assertions**, run against the shipped binary itself rather
-than a rebuild of the same sources.
+`--self-test`, run against the shipped binary itself rather than a rebuild of
+the same sources. The batch size and the split between halves are fixed in
+`scripts/verify-candidate.sh` *before* any run happens, so a report cannot be
+assembled from whichever batches came out clean, and the script aborts if the
+binary's hash changes underneath it.
 
-Honest rate on the shipped binary: **11 clean runs of 12**, the one failure being
-a missed hover crossing. Two consecutive batches of 8 and 6 runs were completely
-clean with 0 skips, so the crossings were genuinely delivered rather than waved
-through. This is not a green suite being reported as green — it is a suite with
-one known intermittent, and the number is what it is.
+See "Final candidate" below for this build's numbers and its SHA-256. A commit
+count is a version label; the hash is the only thing that identifies a binary.
 
 Two flakiness investigations in this pass were more informative than the green
 runs. A 15-run of build 21 produced *scattered* failures across unrelated
@@ -233,6 +233,22 @@ the run total is the honest figure.
   icon with a count badge rather than a bare "+1".
 - The populated Tray with real Finder icons and middle-truncated names.
 
+### Verified by driving the installed app — display counts
+
+Every window count in this document is meaningless without the number of
+displays that were connected when it was taken, so each says.
+
+| Observation | Displays connected |
+|---|---|
+| Four windows (two panels, two catchers); Dashboard/Tray/Tools on both | **2** |
+| 140 rapid open/close/page commands, exactly four windows | **2** |
+| Hot-unplug live: four windows → exactly two, no orphans | **2 → 1** |
+| Everything in this pass, including both suites and the final candidate batch | **1** |
+
+The last row is why the multi-display checks in this pass run against a seeded
+notch rather than a second monitor: with one display attached, the alternative
+was a check that reported a pass without running.
+
 ### Verified by observing real user interaction
 
 Hover on the **built-in** display: seven open→close pairs recorded against the
@@ -240,13 +256,35 @@ live app instance before any scripted command in that session. See BUGS.md.
 
 ### Deliberately not gating
 
-Two hover checks move a window under a stationary pointer, because that is the
-only way to simulate hover without Accessibility. AppKit does not always deliver
-the crossing. They now count crossings actually delivered, so "LocalNook ignored
-a crossing" remains a hard failure while "the platform produced none" is reported
-as not exercised. Checks that need no mouse button held, or a notch that actually
-opened, say so too. None of this weakens an assertion about LocalNook's own
-behaviour; it stops the gate reddening because someone was holding the mouse.
+The live integration half moves a window under a stationary pointer, because
+that is the only way to simulate hover without Accessibility, and AppKit does
+not always deliver the crossing. It is reported, never used as a gate.
+
+What that does and does not cover:
+
+- "LocalNook ignored a crossing it was given" (`eventDropped`) and "it handled
+  one and the state came out wrong" (`wrongState`) are **hard failures**. They
+  are never reported as unverified.
+- "The platform produced no crossing" (`noPlatformEvent`) and "the panel could
+  not be placed under the pointer" (`preconditionUnmet`) are reported as
+  **UNVERIFIED**, in their own column, never folded into the pass count.
+- The behaviour a missing event might otherwise excuse — a notch left open with
+  the pointer elsewhere — is asserted **deterministically**, on the real
+  controller-owned notch with an injected pointer, and does gate the release.
+
+Every hover result prints its provenance:
+
+```
+probe: enters=1 exits=0 handled=1 (of which containment=0) opened-by: trackingArea
+```
+
+Writing that line found three bugs in the instrumentation itself — a reset that
+zeroed the very crossing it was measuring, a forwarding site that never recorded,
+and counters that could not distinguish "the pointer arrived" from "the notch
+resized under a still pointer". Each produced a *passing* check whose provenance
+contradicted it. It also found two assertions that were simply wrong about the
+design, the larger being a demand that the catcher close an open notch when it
+deliberately hands over to the expanded panel instead.
 
 ### Still requires a human
 
@@ -255,17 +293,42 @@ items back out, hover on the external display, and the "notch stays open while
 typing" guard. These need synthesised pointer input, i.e. Accessibility, which
 LocalNook deliberately does not require.
 
+## What must be repeated if anything changes
+
+Not every change invalidates every result. This says which.
+
+| If you change… | Repeat |
+|---|---|
+| **Anything at all** | The deterministic suite against the rebuilt binary, and record its new SHA-256. Every result below is about one hash. |
+| `NotchHitPanel`, `HoverTracker`, `HoverProbe`, or `NotchViewModel`'s open/close scheduling | The full integration batch. These are the only files the live crossing path runs through, and the probe's own accuracy depends on them. |
+| `NotchWindowController` lifecycle (`start`, `stop`, `rebuildPanels`, `teardownPanels`, the pointer safety net) | `testControllerTeardown` and `testMissedCrossingRecovery` — and re-check that `residue` still enumerates everything the new code holds. A leak the struct does not name cannot be caught. |
+| The set of interaction kinds, or where claims are taken and released | `testInteractionOwnership` and `testControllerTeardown`. A new claim kind needs its own release path asserted; `retire()` covers the general case but a claim taken outside a `NotchViewModel` would not be. |
+| `scripts/install.sh` | `scripts/test-install.py` in full. It runs only in disposable directories, so there is no reason to run a subset. |
+| `scripts/build-release.sh` | `scripts/test-release.py`, and check that its fixtures still stub every script the release script now calls. Adding a call without adding the stub makes the fixtures test the wrong thing. |
+| Display handling, `NotchGeometry`, or `connectedScreens` | The deterministic suite **and** a physical hot-plug. The seam covers the logic; it does not cover the window server. |
+| The bundle layout, `Info.plist`, or signing | A full `build-release.sh`, then `install.sh` into a disposable target before `/Applications`. |
+
+Anything requiring a human is listed separately in **docs/MANUAL_CHECKS.md** and
+is not re-derivable from an automated run.
+
 ## Known gaps in coverage
 
-- **Live on-screen hover on the physical notch** has not been observed directly:
-  synthesising pointer movement requires Accessibility, which is not granted.
-  It is covered by the end-to-end test, which drives the real panel and view.
-  A five-second manual check (hover the notch) would confirm it in situ.
-- **External display behaviour has not been seen on screen.** The monitor
-  attached to this Mac (G274QPF E2, 2560×1440) is powered off, so
-  `CGGetOnlineDisplayList` reports one display. The geometry and hot-plug paths
-  are covered through `DisplayMetrics`, but placement on a real second monitor
-  is still unverified.
+- **Hover with a real pointer** cannot be automated: synthesising pointer
+  movement requires Accessibility, which LocalNook deliberately does not need
+  and which is not granted here. Hover on the **built-in** display was observed
+  live in an earlier pass (seven open→close pairs against the running app);
+  hover on an **external** display has not been observed and remains
+  unverified. The automated substitute — moving a window under a still pointer
+  — exercises the same code but is not the same gesture, and AppKit does not
+  always deliver the crossing for it.
+- **External display behaviour has not been seen on screen in this pass.** The
+  monitor attached to this Mac (G274QPF E2, 2560×1440) is powered off, so
+  `CGGetOnlineDisplayList` reports **one display**; every window count in this
+  document says how many were connected when it was taken. The geometry paths
+  are covered through `DisplayMetrics` and the attach/remove paths through the
+  injected `connectedScreens` seam, but neither is a substitute for a physical
+  hot-plug, and multi-display interaction scoping is verified against a notch
+  seeded into the controller's registry rather than a second monitor.
 - **Sleep/wake** handling is implemented and wired to `NSWorkspace.didWake`, but
   has not been exercised through a real sleep cycle.
 - **Permission-denied paths** are asserted structurally rather than by actually

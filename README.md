@@ -79,9 +79,14 @@ hold permissions on the Mac that built it.
 ## Install
 
 ```bash
-cp -R dist/LocalNook.app /Applications/
-open /Applications/LocalNook.app
+./scripts/install.sh
 ```
+
+The script validates the candidate before touching anything, stops only the
+process running from the target path, keeps your existing installation until the
+replacement has been verified in place, and puts it back if anything fails. A
+plain `cp -R dist/LocalNook.app /Applications/` still works, but it will happily
+half-replace a working app.
 
 LocalNook has no Dock icon — it lives in the notch and the menu bar. Click the
 menu bar glyph for Settings, or press ⌘, when Settings is focused.

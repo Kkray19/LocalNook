@@ -12,13 +12,29 @@ reproduced rather than taken on trust.
 **Status:** attributed, and no longer able to leave the panel stuck. Still
 present as a limitation of the *stimulus*, not of the product.
 
-**What was measured.** `HoverProbe` now counts crossings AppKit delivered,
-crossings LocalNook forwarded, and the resulting state, so the failure resolves
-to one of four causes rather than a guess. On every observed failure the count
-was `enters=0` — AppKit produced no tracking event at all. LocalNook has not
-been observed dropping a crossing it was given (`eventDropped`) or mishandling
-one (`wrongState`); those are the two outcomes that would be defects, and both
-are hard failures, never UNVERIFIED.
+**What is measured.** `HoverProbe` counts crossings AppKit delivered, crossings
+LocalNook forwarded, forwards that came from a tracking-area rebuild rather than
+a crossing, and the transition source that actually moved the notch. Each hover
+result prints, for example:
+
+```
+probe: enters=1 exits=0 handled=1 (of which containment=0) opened-by: trackingArea
+```
+
+so the failure resolves to one of four causes rather than a guess:
+
+| Outcome | Meaning | Reported as |
+|---|---|---|
+| `preconditionUnmet` | The window server clamped the frame; the panel never got under the pointer | UNVERIFIED |
+| `noPlatformEvent` | AppKit produced no crossing at all | UNVERIFIED |
+| `eventDropped` | A crossing arrived and was not forwarded | **failure** |
+| `wrongState` | It was forwarded and the state came out wrong | **failure** |
+
+Every failure observed in this pass classified as `noPlatformEvent` or as a
+defect in the test's own expectations (see the catcher hand-over entry under
+RESOLVED). LocalNook has not been observed dropping a crossing it was given or
+mishandling one. Getting to a provenance line that did not contradict its own
+result took three fixes to the instrumentation, all recorded below.
 
 **What this does not excuse.** A missing platform event is a reason the test
 could not produce its stimulus. It is not a reason for the panel to stay open.
@@ -86,7 +102,42 @@ the state the recovery fallback refuses to close.
 clears drag targeting and returns to `.closed`. Both teardown paths
 (`rebuildPanels`'s retire loop and `teardownPanels`) use it.
 
-### 0a. Two checks passed because they had not run
+### 0a. The catcher was asked to close a notch it deliberately hands over
+
+**Found by:** the new exit-side attribution reporting `wrongState` — an exit that
+AppKit delivered, that LocalNook forwarded, and after which the notch was still
+open. Four runs out of four, which is what distinguished it from the
+intermittent platform gap.
+
+**Cause:** the assertion, not the app. Once the notch is open the pointer has
+moved *into* the expanded panel; the catcher is behind it and its exit means
+nothing. `makeHitPanel` says so explicitly: closing is the panel's job. Demanding
+a collapse from the catcher asserted a behaviour the design does not have — and
+would have hidden the contract that does matter.
+
+**Fix:** the catcher now asserts the hand-over (the notch stays open) and that
+leaving clears the stay-shut latch. Closing on exit stays a hard assertion in
+`testHoverPath`, where it really is the panel's job.
+
+### 0a2. Three instrumentation bugs, each producing a passing check whose provenance contradicted it
+
+1. `HoverProbe.reset()` ran *after* the first placement, zeroing the crossing
+   that opened the notch — a pass reporting `enters=0`.
+2. `HoverTracker` forwarded crossings without recording that it had — a notch
+   opened by the tracking area reporting `handled=0`.
+3. Forwards caused by a tracking-area rebuild finding the pointer already inside
+   were counted as crossings, so `handled` could exceed `enters` for reasons
+   that had nothing to do with a pointer arriving.
+
+**Why it matters:** a probe that lies is worse than no probe, because it is
+believed. Each of these was visible only by reading the provenance line next to
+a green check and noticing it could not be true.
+
+**Fix:** reset before the stimulus; record at every forwarding site; count
+containment forwards separately; and print the transition source, since stage
+counters alone cannot say which mechanism moved the notch.
+
+### 0b. Two checks passed because they had not run
 
 **Found by:** reading the suite for `check(..., true)` with no computed condition.
 
@@ -99,7 +150,7 @@ clears drag targeting and returns to `.closed`. Both teardown paths
 real per-model rule is exercised; the second injects the pointer so both
 branches run on every machine. Neither reports a pass for work not done.
 
-### 0b. The install script reported success after failing
+### 0c. The install script reported success after failing
 
 **Found by:** `scripts/test-install.py`, on the first draft of `install.sh` —
 "the app lands at the target" failed while "succeeds" passed.
@@ -118,7 +169,7 @@ app uninstalled while reporting a completed release.
 every `$VAR` adjacent to non-ASCII text is braced, and the cleanup paths refuse
 to `rm -rf` an empty variable.
 
-### 0c. `stop()` left the recovery check running
+### 0d. `stop()` left the recovery check running
 
 **Found by:** a frozen 15-run of build 21 showing *scattered* failures across
 unrelated sections — `perform(.open)` not opening, claims surviving a close,

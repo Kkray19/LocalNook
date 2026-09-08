@@ -194,4 +194,5 @@ step "Done."
 echo "    App: $APP"
 [ "$MAKE_DMG" -eq 1 ] && echo "    DMG: $DIST/$APP_NAME.dmg"
 echo
-echo "Install with:  cp -R \"$APP\" /Applications/"
+echo "Install with:  ./scripts/install.sh"
+echo "               (validates first, keeps a recoverable copy, restores on failure)"

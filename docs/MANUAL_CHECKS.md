@@ -135,3 +135,38 @@ What the script guarantees, in order:
   from; that it is *visible* is not something it can check.
 - Recovery from a target the user does not own or cannot write (a managed
   `/Applications`). The refusal path is covered; the remedy is not scripted.
+
+---
+
+## Hover on an external display — still unverified
+
+This is the one check in the reliability pass that could not be run at all, and
+it is recorded here rather than quietly folded into a pass.
+
+**Why it cannot be automated.** Moving the pointer requires Accessibility, which
+LocalNook deliberately does not require and which is not granted. The automated
+substitute moves a *window* under a still pointer; AppKit does not always deliver
+a crossing for that, and it is not the gesture a user makes.
+
+**Why the single-display result does not cover it.** Hover on the built-in
+display was observed live in an earlier pass. An external display differs in the
+ways that matter to this code: a different `stableID`, an origin that is not
+`(0, 0)`, no physical camera housing, and a panel that is repositioned on attach
+— which is precisely the situation where a crossing is most likely to be missed.
+
+**What to do (about a minute):**
+
+1. Attach the external display.
+2. Move the pointer onto the notch area at the top-centre of **that** display.
+   It should expand after the open delay.
+3. Move the pointer away. It should collapse.
+4. Repeat two or three times, then do the same on the built-in display to
+   confirm both are live at once.
+5. If it expands but does not collapse, that is the case the pointer fallback
+   exists for — wait a second before concluding it is stuck, then say which it
+   was.
+
+**What a failure would mean.** It would be a real defect, not a platform gap: a
+user moving a real pointer onto a stationary panel is the case the tracking area
+is built for. Report it as a failure of "hover on an external display", not as
+an unverified check.
