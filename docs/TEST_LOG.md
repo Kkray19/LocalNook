@@ -144,8 +144,8 @@ Not all "verified" is the same, so this log separates them.
 
 ### Verified by automated check
 
-`--self-test`, **216 assertions**, run 20 consecutive times against a **frozen**
-binary with **0 failures**. Freezing matters: an earlier 16-run attempt straddled
+`--self-test`, **231 assertions** at build 21, run repeatedly against a **frozen**
+copy of the shipped binary. Freezing matters: an earlier 16-run attempt straddled
 rebuilds and its counts climbed from 188 to 207, which made it useless as
 evidence for any single build.
 
@@ -155,6 +155,12 @@ with offset origins; the pointer-recovery fallback's start/stop and hold-off
 rules; the camera's explicit-start gate and its delayed-consent race; notes
 surviving a quit inside the autosave debounce; and the Tray against real files on
 a real pasteboard.
+
+Assertion counts vary slightly with the machine: several sections iterate over
+attached displays, and two assertions are conditional branches (an error path in
+the shelf test, and the "Liquid Glass unavailable" fallback) that do not run on
+macOS 26+. The source contains more `check(` calls than any single run executes;
+the run total is the honest figure.
 
 ### Verified by driving the installed app
 
@@ -166,6 +172,12 @@ a real pasteboard.
 - Idle cost after repeated interaction: 0.0% CPU, ~41 MB resident, 0 sockets.
 - Liquid Glass over a dark background, and the collapsed notch staying solid over
   the physical camera housing.
+- **Hot-unplug observed live:** the external display was disconnected during this
+  pass and LocalNook went from four windows to exactly two — one panel and one
+  catcher on the remaining display — with no orphans.
+- The overflow control at a narrow panel width, showing the hidden section's own
+  icon with a count badge rather than a bare "+1".
+- The populated Tray with real Finder icons and middle-truncated names.
 
 ### Verified by observing real user interaction
 
