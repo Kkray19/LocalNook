@@ -19,6 +19,16 @@
 //
 
 import AppKit
+import Foundation
+
+// Development aid: render the notch UI offscreen to PNGs and exit.
+// See PreviewRenderer.swift. Never reached in normal use.
+if let flagIndex = CommandLine.arguments.firstIndex(of: "--render-preview") {
+    let path = CommandLine.arguments.count > flagIndex + 1
+        ? CommandLine.arguments[flagIndex + 1]
+        : FileManager.default.currentDirectoryPath
+    PreviewRenderer.run(outputDirectory: URL(fileURLWithPath: path))
+}
 
 // A plain AppKit entry point rather than SwiftUI's `App`: LocalNook owns its
 // panels directly and must never create a regular window or main menu.

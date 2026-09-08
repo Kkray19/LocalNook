@@ -92,7 +92,6 @@ struct NotchRootView: View {
         if isOpen {
             ExpandedNotchView(model: model)
                 .padding(.horizontal, topRadius + settings.contentPadding)
-                .padding(.top, settings.contentPadding * 0.6)
                 .padding(.bottom, settings.contentPadding)
                 .frame(
                     width: NotchShape.totalWidth(forBody: bodyWidth, topRadius: topRadius),
