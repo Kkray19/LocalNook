@@ -85,6 +85,7 @@ struct NotchRootView: View {
             Color.clear
 
             dropTarget
+            hoverRegion
 
             notchBody
                 .frame(
@@ -98,7 +99,16 @@ struct NotchRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .opacity(model.isSuppressed && !isOpen ? 0 : 1)
         .animation(NotchMotion.content, value: model.isSuppressed)
-        .onHover { hovering in
+    }
+
+    /// Pointer tracking for exactly the interactive region.
+    ///
+    /// Deliberately not `.onHover` on the whole panel: the panel is much wider
+    /// than the visible notch, so that would open on any pointer crossing the
+    /// top of the screen.
+    private var hoverRegion: some View {
+        HoverTracker { hovering in
+            guard !model.isSuppressed else { return }
             model.isHovering = hovering
             if hovering {
                 model.scheduleOpen()
@@ -106,6 +116,15 @@ struct NotchRootView: View {
                 model.scheduleClose()
             }
         }
+        .frame(width: hoverSize.width, height: hoverSize.height)
+    }
+
+    /// The region that counts as "on the notch".
+    private var hoverSize: CGSize {
+        if isOpen { return NotchGeometry.openSize }
+        let width = NotchShape.totalWidth(forBody: bodyWidth, topRadius: topRadius)
+        // A few points of slop makes the very top screen edge easier to hit.
+        return CGSize(width: width, height: max(model.effectiveClosedHeight, 4) + 3)
     }
 
     /// Invisible catcher that expands the notch when a drag arrives over it.

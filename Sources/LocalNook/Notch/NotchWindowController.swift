@@ -10,6 +10,7 @@
 //
 
 import AppKit
+import ApplicationServices
 import Combine
 import SwiftUI
 
@@ -21,6 +22,7 @@ final class NotchWindowController: NSObject {
     private var mouseMonitor: Any?
     private var clickMonitor: Any?
     private var cancellables = Set<AnyCancellable>()
+    private var stateObservers = Set<AnyCancellable>()
     private var isScreenLocked = false
     private var lastScreenSignature: String = ""
 
@@ -80,6 +82,21 @@ final class NotchWindowController: NSObject {
         return NotchGeometry.shouldDisplay(on: screen) ? [screen] : []
     }
 
+    /// Keeps panel key-status in step with each model's open state.
+    private func observeModelState() {
+        stateObservers.forEach { $0.cancel() }
+        stateObservers.removeAll()
+        for model in models.values {
+            model.$state
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in
+                    // Deferred so the model's own property has already updated.
+                    Task { @MainActor in self?.syncKeyStatus() }
+                }
+                .store(in: &stateObservers)
+        }
+    }
+
     func rebuildPanels() {
         let screens = targetScreens()
         let wanted = Set(screens.compactMap(\.stableID))
@@ -106,6 +123,7 @@ final class NotchWindowController: NSObject {
         }
 
         applyElevatedSpaceSetting()
+        observeModelState()
         lastScreenSignature = screenSignature()
     }
 
@@ -181,19 +199,24 @@ final class NotchWindowController: NSObject {
 
     // MARK: Event monitoring
 
+    /// Installs the *optional* global click monitor.
+    ///
+    /// Hover is handled by `HoverTracker`'s tracking areas, which need no
+    /// permission — see the note at the top of HoverTracker.swift. Global
+    /// monitors only fire once Accessibility has been granted, so nothing
+    /// essential may depend on them. This one adds "click somewhere else to
+    /// collapse"; without it, moving the pointer off the notch still closes it.
     private func installEventMonitors() {
         removeEventMonitors()
-
-        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) {
-            [weak self] _ in
-            MainActor.assumeIsolated { self?.handlePointerMoved() }
-        }
 
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
             [weak self] _ in
             MainActor.assumeIsolated { self?.handleGlobalClick() }
         }
     }
+
+    /// Whether the optional click-outside-to-collapse enhancement is active.
+    var globalClickMonitoringAvailable: Bool { AXIsProcessTrusted() }
 
     private func removeEventMonitors() {
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
@@ -223,24 +246,6 @@ final class NotchWindowController: NSObject {
             width: size.width,
             height: max(size.height, 4)
         )
-    }
-
-    private func handlePointerMoved() {
-        let mouse = NSEvent.mouseLocation
-        for (id, model) in models {
-            guard let screen = NSScreen.screen(withStableID: id) else { continue }
-            let inside = hoverRegion(for: model, on: screen).contains(mouse)
-            if inside != model.isHovering { model.isHovering = inside }
-
-            if inside {
-                model.scheduleOpen()
-            } else if model.state == .open, !model.isDragTargeting {
-                model.scheduleClose()
-            } else if model.state == .closed {
-                model.cancelPending()
-            }
-        }
-        syncKeyStatus()
     }
 
     private func handleGlobalClick() {

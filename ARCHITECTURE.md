@@ -115,10 +115,31 @@ It rebuilds on: `didChangeScreenParameters` (coalesced by 350 ms, because macOS
 emits a burst while a display is attaching), wake (600 ms delay — display
 geometry can change during sleep), space changes, and screen lock/unlock.
 
-Hover and click are driven by global `NSEvent` monitors testing the pointer
-against a hit region — the closed notch when collapsed, the full open panel when
-expanded — rather than by SwiftUI hover alone, which cannot see the pointer
-before it enters the window.
+### Hover must not need Accessibility
+
+The obvious implementation is a global event monitor:
+
+```swift
+NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved]) { ... }
+```
+
+**On macOS 27 that never fires without Accessibility.** Measured directly on this
+machine: with `AXIsProcessTrusted() == false`, a global `.mouseMoved` monitor
+received **0 of 12** synthesised moves. Hover would have been silently dead for
+anyone who had not granted Accessibility — a permission LocalNook otherwise
+never asks for.
+
+Hover therefore uses `NSTrackingArea` (`HoverTracker`), which the window server
+delivers to the owning window with no permission at all. The area is sized to
+the *interactive region* — the notch when collapsed, the whole panel when
+expanded — because the panel is far wider than the visible notch and tracking
+all of it would fire on any pointer crossing the top of the screen.
+`.activeAlways` is essential: LocalNook is an accessory app and is almost never
+frontmost, so `.activeInActiveApp` would mean hover effectively never fires.
+
+The global monitor survives only as an *optional* enhancement for
+click-somewhere-else-to-collapse. Nothing essential depends on it; without it,
+moving the pointer off the notch still closes it.
 
 ## Feature modules
 

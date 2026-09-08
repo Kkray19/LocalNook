@@ -30,6 +30,11 @@ if let flagIndex = CommandLine.arguments.firstIndex(of: "--render-preview") {
     PreviewRenderer.run(outputDirectory: URL(fileURLWithPath: path))
 }
 
+// Built-in test harness. See SelfTest.swift.
+if CommandLine.arguments.contains("--self-test") {
+    SelfTest.run()
+}
+
 // A plain AppKit entry point rather than SwiftUI's `App`: LocalNook owns its
 // panels directly and must never create a regular window or main menu.
 let application = NSApplication.shared

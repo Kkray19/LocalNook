@@ -42,6 +42,10 @@ final class NotchPanel: NSPanel {
         animationBehavior = .none
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         isRestorable = false
+        // Required for tracking areas to receive movement reliably in a
+        // borderless, non-activating panel.
+        acceptsMouseMovedEvents = true
+        ignoresMouseEvents = false
         // Excludes the panel from window lists and screen sharing pickers.
         sharingType = .none
     }

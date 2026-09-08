@@ -11,6 +11,7 @@
 #   ./scripts/build-release.sh          # build .app and .dmg
 #   ./scripts/build-release.sh --no-dmg # build .app only
 #   ./scripts/build-release.sh --debug  # debug configuration, faster
+#   ./scripts/build-release.sh --no-test # skip the self-test gate
 #
 set -euo pipefail
 
@@ -23,11 +24,13 @@ VERSION="$(cat VERSION 2>/dev/null || echo "0.1.0")"
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 CONFIG="release"
 MAKE_DMG=1
+RUN_TESTS=1
 
 for arg in "$@"; do
   case "$arg" in
     --no-dmg) MAKE_DMG=0 ;;
     --debug)  CONFIG="debug" ;;
+    --no-test) RUN_TESTS=0 ;;
     -h|--help) sed -n '3,20p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
@@ -41,9 +44,14 @@ step() { printf "\033[1;34m==>\033[0m %s\n" "$1"; }
 
 # ── 1. Compile ───────────────────────────────────────────────────────────────
 step "Building $APP_NAME ($CONFIG) for arm64…"
-swift build -c "$CONFIG" --arch arm64 2>&1 \
-  | grep -vE "ld: warning: (search path|Could not find or use auto-linked framework 'CoreAudioTypes'|Could not parse or use implicit file .*SwiftUICore)" \
-  || true
+# `set -o pipefail` is essential here: without it the grep filter swallows a
+# compile failure and the script happily packages a stale binary.
+set -o pipefail
+if ! swift build -c "$CONFIG" --arch arm64 2>&1 \
+     | grep -vE "ld: warning: (search path|Could not find or use auto-linked framework 'CoreAudioTypes'|Could not parse or use implicit file .*SwiftUICore)"; then
+  echo "BUILD FAILED — not packaging" >&2
+  exit 1
+fi
 
 BINARY="$(swift build -c "$CONFIG" --arch arm64 --show-bin-path)/$APP_NAME"
 [ -f "$BINARY" ] || { echo "build produced no binary at $BINARY" >&2; exit 1; }
@@ -124,6 +132,19 @@ codesign --force --deep --sign - \
          --identifier "$BUNDLE_ID" \
          "$APP" 2>&1 | sed 's/^/    /' || true
 codesign --verify --deep --strict "$APP" && echo "    signature verified"
+
+# ── 4b. Self-test ────────────────────────────────────────────────────────────
+# Gates the release on the built bundle actually working. Skippable for a
+# quick iteration, but never skipped by default.
+if [ "$RUN_TESTS" -eq 1 ]; then
+  step "Running self-test…"
+  if "$CONTENTS/MacOS/$APP_NAME" --self-test | sed 's/^/    /'; then
+    echo "    self-test passed"
+  else
+    echo "    SELF-TEST FAILED — not packaging" >&2
+    exit 1
+  fi
+fi
 
 # ── 5. DMG ───────────────────────────────────────────────────────────────────
 if [ "$MAKE_DMG" -eq 1 ]; then

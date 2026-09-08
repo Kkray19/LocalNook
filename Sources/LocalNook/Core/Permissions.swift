@@ -124,7 +124,10 @@ final class Permissions: ObservableObject {
                 // becomes known once an Apple Event is actually sent.
                 states[kind] = MediaScriptBridge.lastAutomationState
             case .notifications:
-                break  // async, filled in below
+                // Resolved asynchronously below, but seed a value now so the
+                // dictionary always has an entry for every permission and the
+                // UI never renders a missing row.
+                if states[kind] == nil { states[kind] = .unknown }
             }
         }
         guard AppInfo.isRunningFromBundle else {
