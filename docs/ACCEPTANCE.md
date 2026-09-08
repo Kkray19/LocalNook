@@ -116,6 +116,13 @@ with its real Finder icon; the count updates. Filenames should be **readable** �
 
 **Watch for:** the notch closing while you're mid-drag.
 
+**Also worth a glance — not yet checked by me.** The tray label width changed
+this pass (62pt → 90pt). I verified six items look right, but not twelve: the
+row is a horizontal scroller, so more items should scroll rather than clip, and
+I could not confirm that visually because `screencapture` is refused while the
+screen is locked. If you drag in a dozen files, check the row scrolls and
+nothing is cut off at the right edge.
+
 ### 6. Tray — drag back out
 
 1. Drag `data-fixture.csv` from the tray into `drag-out-target/` in Finder.
