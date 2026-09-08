@@ -32,6 +32,10 @@ connecting, or an agent session going quiet.
 | **AI Sessions** | Which Claude Code / Codex sessions are working, and which have gone quiet |
 | **Stats** | Battery, memory and storage |
 
+> **Note:** NotchNook is currently installed and running on this Mac. It draws
+> its own notch UI, and LocalNook floats above it. They do not conflict, but
+> quit NotchNook if you want to see LocalNook's own appearance clearly.
+
 ## System requirements
 
 - macOS 15 or later (built and tested on macOS 27)
@@ -73,6 +77,22 @@ menu bar glyph for Settings, or press ⌘, when Settings is focused.
 > **Install it before enabling "Launch at login."** macOS refuses to register a
 > login item for an app running out of a build directory; LocalNook will show
 > you the error rather than silently failing.
+
+## Controlling it from a script
+
+LocalNook listens for distributed notifications, so a Shortcut, an Automation
+action or a shell script can drive it — no Accessibility permission needed:
+
+```bash
+# Open, close or toggle the notch on the display under the pointer
+osascript -e 'tell application "System Events" to return' >/dev/null 2>&1
+python3 -c "
+from Foundation import NSDistributedNotificationCenter
+NSDistributedNotificationCenter.defaultCenter().postNotificationName_object_userInfo_deliverImmediately_(
+    'com.localnook.toggle', None, None, True)"
+```
+
+Names: `com.localnook.open`, `com.localnook.close`, `com.localnook.toggle`.
 
 ## Permissions
 
