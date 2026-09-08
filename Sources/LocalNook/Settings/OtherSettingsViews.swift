@@ -26,6 +26,8 @@ struct WidgetSettingsView: View {
                     }
                 }
             }
+
+            WidgetDetailSettingsView()
         }
     }
 
@@ -177,5 +179,74 @@ enum AppInfo {
         let dir = base.appendingPathComponent("LocalNook", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+}
+
+// MARK: - Per-widget settings
+
+/// Settings that belong to individual widgets, shown under the Widgets tab.
+struct WidgetDetailSettingsView: View {
+    @EnvironmentObject var settings: Settings
+    @ObservedObject private var calendar = CalendarManager.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsSection(
+                title: "Media",
+                footer: "LocalNook reads playback over Apple Events, which reaches apps with a scripting dictionary — Music and Spotify. Browser tabs and other Now Playing sources are not visible this way. See ARCHITECTURE.md for why."
+            ) {
+                Toggle("Show album artwork", isOn: settings.binding(\.mediaShowArtwork))
+                SettingsSlider(
+                    title: "Refresh while playing", value: settings.binding(\.mediaPollInterval),
+                    range: 0.5...5, step: 0.5, unit: " s", format: "%.1f"
+                )
+            }
+
+            SettingsSection(title: "Shelf") {
+                Toggle("Keep items between launches", isOn: settings.binding(\.shelfPersist))
+                Toggle("Open the shelf when a drag arrives", isOn: settings.binding(\.shelfAutoExpandOnDrag))
+                HStack {
+                    Text("\(ShelfStore.shared.items.count) item(s) on the shelf")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Clear shelf", role: .destructive) { ShelfStore.shared.clearAll() }
+                }
+            }
+
+            SettingsSection(
+                title: "Calendar",
+                footer: calendar.hasAccess ? nil : "Calendar access has not been granted yet. Open the Calendar widget once to be asked."
+            ) {
+                Toggle("Show every calendar", isOn: settings.binding(\.calendarShowAll))
+                if !settings.calendarShowAll {
+                    ForEach(calendar.availableCalendars, id: \.calendarIdentifier) { item in
+                        Toggle(item.title, isOn: Binding(
+                            get: { settings.enabledCalendarIDs.contains(item.calendarIdentifier) },
+                            set: { on in
+                                var ids = Set(settings.enabledCalendarIDs)
+                                if on { ids.insert(item.calendarIdentifier) }
+                                else { ids.remove(item.calendarIdentifier) }
+                                settings.enabledCalendarIDs = Array(ids)
+                                calendar.reload()
+                            }
+                        ))
+                    }
+                }
+            }
+
+            SettingsSection(title: "Mirror") {
+                Toggle("Flip horizontally (mirror image)", isOn: settings.binding(\.mirrorFlipHorizontally))
+            }
+
+            SettingsSection(
+                title: "AI coding sessions",
+                footer: "LocalNook watches the transcript folders for Claude Code (~/.claude/projects) and Codex (~/.codex/sessions). It reads file timestamps only — it never opens a transcript or reads any conversation."
+            ) {
+                Toggle("Watch Claude Code", isOn: settings.binding(\.watchClaudeCode))
+                Toggle("Watch Codex", isOn: settings.binding(\.watchCodex))
+                Toggle("Tell me when a session goes quiet", isOn: settings.binding(\.sessionsNotifyOnIdle))
+                Button("Rescan now") { SessionMonitor.shared.restart() }
+            }
+        }
     }
 }
