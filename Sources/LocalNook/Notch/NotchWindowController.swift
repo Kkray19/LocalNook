@@ -14,6 +14,59 @@ import ApplicationServices
 import Combine
 import SwiftUI
 
+/// Commands LocalNook accepts from outside the app.
+enum NotchCommand: Sendable {
+    case toggle, open, close
+    /// Not scriptable — raised by the system lock/unlock notifications.
+    case screenLocked, screenUnlocked
+}
+
+/// Receives `DistributedNotificationCenter` callbacks off the main actor and
+/// forwards them onto it.
+///
+/// Exists because the notification centre invokes its selector through the
+/// Objective-C runtime, which cannot call a `@MainActor`-isolated method.
+nonisolated final class DistributedCommandBridge: NSObject, @unchecked Sendable {
+    private let handler: @Sendable (NotchCommand) -> Void
+
+    private static let mapping: [(name: String, command: NotchCommand)] = [
+        ("com.localnook.toggle", .toggle),
+        ("com.localnook.open", .open),
+        ("com.localnook.close", .close),
+        ("com.apple.screenIsLocked", .screenLocked),
+        ("com.apple.screenIsUnlocked", .screenUnlocked),
+    ]
+
+    init(handler: @escaping @Sendable (NotchCommand) -> Void) {
+        self.handler = handler
+        super.init()
+    }
+
+    func register() {
+        let center = DistributedNotificationCenter.default()
+        for entry in Self.mapping {
+            center.addObserver(
+                self,
+                selector: #selector(receive(_:)),
+                name: .init(entry.name),
+                object: nil,
+                suspensionBehavior: .deliverImmediately
+            )
+        }
+    }
+
+    func unregister() {
+        DistributedNotificationCenter.default().removeObserver(self)
+    }
+
+    @objc private func receive(_ note: Notification) {
+        guard let command = Self.mapping.first(where: { $0.name == note.name.rawValue })?.command
+        else { return }
+        let handler = handler
+        DispatchQueue.main.async { handler(command) }
+    }
+}
+
 final class NotchWindowController: NSObject {
     static let shared = NotchWindowController()
 
@@ -23,6 +76,7 @@ final class NotchWindowController: NSObject {
     private var clickMonitor: Any?
     private var cancellables = Set<AnyCancellable>()
     private var stateObservers = Set<AnyCancellable>()
+    private var notificationBridge: DistributedCommandBridge?
     private var isScreenLocked = false
     private var lastScreenSignature: String = ""
 
@@ -42,6 +96,8 @@ final class NotchWindowController: NSObject {
     }
 
     func stop() {
+        notificationBridge?.unregister()
+        notificationBridge = nil
         removeEventMonitors()
         teardownPanels()
         NotificationCenter.default.removeObserver(self)
@@ -308,17 +364,43 @@ final class NotchWindowController: NSObject {
             MainActor.assumeIsolated { self?.repositionAll() }
         }
 
-        let distributed = DistributedNotificationCenter.default()
-        distributed.addObserver(
-            forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.setLocked(true) }
+        // Scriptable control, so a Shortcut, an Automation action or a shell
+        // one-liner can drive the notch without needing Accessibility.
+        //
+        // Registration goes through a *nonisolated* bridge object.
+        // `DistributedNotificationCenter` invokes its selector through the
+        // Objective-C runtime; pointing that at a main-actor-isolated method
+        // does not work under `defaultIsolation(MainActor.self)`. The bridge is
+        // plain Obj-C-visible and hops to the main actor itself.
+        //
+        // `suspensionBehavior: .deliverImmediately` is also essential: the
+        // default holds notifications for an app the system considers
+        // suspended, which an accessory app that is never frontmost always is.
+        notificationBridge = DistributedCommandBridge { command in
+            // The bridge already hops to the main queue; assume that isolation.
+            MainActor.assumeIsolated {
+                NotchWindowController.shared.perform(command)
+            }
         }
-        distributed.addObserver(
-            forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.setLocked(false) }
+        notificationBridge?.register()
+    }
+
+    /// Applies a scripted command to the notch on the display under the pointer.
+    func perform(_ command: NotchCommand) {
+        switch command {
+        case .screenLocked: setLocked(true); return
+        case .screenUnlocked: setLocked(false); return
+        default: break
         }
+        guard let model = activeModel else { return }
+        switch command {
+        case .toggle: model.toggle()
+        case .open: model.open()
+        case .close: model.close()
+        case .screenLocked: setLocked(true)
+        case .screenUnlocked: setLocked(false)
+        }
+        syncKeyStatus()
     }
 
     private func handleScreenParametersChanged() {

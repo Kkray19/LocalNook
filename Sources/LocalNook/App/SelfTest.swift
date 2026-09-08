@@ -45,6 +45,7 @@ enum SelfTest {
         testPermissionsDegradeGracefully()
         testShortcutsSafety()
         testHoverPath()
+        testScriptableControl()
 
         print("\n\(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)
@@ -118,6 +119,41 @@ enum SelfTest {
         panel.orderOut(nil)
         panel.close()
         settings.openDelay = originalDelay
+    }
+
+    /// Verifies the app answers scripted open/close commands.
+    private static func testScriptableControl() {
+        section("Scriptable control")
+        let controller = NotchWindowController.shared
+        controller.start()
+        pumpEvents(for: 0.5)
+        check("a panel exists to command", controller.activeModel != nil)
+
+        controller.perform(.open)
+        pumpEvents(for: 0.3)
+        check("perform(.open) opens", controller.activeModel?.state == .open)
+        controller.perform(.close)
+        pumpEvents(for: 0.3)
+        check("perform(.close) closes", controller.activeModel?.state == .closed)
+
+        // Round-trip through DistributedNotificationCenter, which is what an
+        // external script actually posts.
+        DistributedNotificationCenter.default().postNotificationName(
+            .init("com.localnook.open"), object: nil, userInfo: nil, deliverImmediately: true
+        )
+        pumpEvents(for: 1.2)
+        check("a posted com.localnook.open notification opens the notch",
+              controller.activeModel?.state == .open,
+              "state is \(String(describing: controller.activeModel?.state))")
+
+        DistributedNotificationCenter.default().postNotificationName(
+            .init("com.localnook.close"), object: nil, userInfo: nil, deliverImmediately: true
+        )
+        pumpEvents(for: 1.2)
+        check("a posted com.localnook.close notification closes it",
+              controller.activeModel?.state == .closed)
+
+        controller.stop()
     }
 
     /// Pumps the AppKit event loop for `seconds`.

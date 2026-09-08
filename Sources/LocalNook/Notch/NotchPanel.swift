@@ -46,8 +46,12 @@ final class NotchPanel: NSPanel {
         // borderless, non-activating panel.
         acceptsMouseMovedEvents = true
         ignoresMouseEvents = false
-        // Excludes the panel from window lists and screen sharing pickers.
-        sharingType = .none
+        // Deliberately NOT `.none`. That excludes the window from screen
+        // capture entirely, so the notch would be missing from the user's own
+        // screenshots and screen recordings — surprising for a UI element they
+        // are looking at, and it makes the app impossible to support by
+        // screenshot. `.readOnly` is the normal behaviour.
+        sharingType = .readOnly
     }
 
     /// Escape collapses the notch rather than beeping.
