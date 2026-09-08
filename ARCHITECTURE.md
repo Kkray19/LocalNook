@@ -153,6 +153,30 @@ content either side of the housing — widget title on the left, settings and
 collapse on the right — and puts the tab strip and widget body below it. This
 was also a real bug: the first layout put the widget rail in that strip.
 
+### Pages and the Dashboard
+
+The expanded notch has three pages, selected from pills in the left shoulder:
+**Dashboard**, **Tray**, **Tools**. This replaced a strip of ten widget icons
+that showed one widget at a time and left most of the panel empty.
+
+`DashboardView` lays complementary sections out by weight, but a section that
+cannot reach `dashboardMinimumWidth` is **dropped rather than squeezed** —
+making everything slightly too small to read is worse than showing one fewer
+thing. A widget switched off in Settings is omitted, never silently replaced by
+a fallback, because a fallback would put back exactly what the user removed.
+
+Two consent rules the composition forced into the open, both now covered by
+tests:
+
+- **Calendar must not prompt.** The Dashboard opens on hover, so
+  `refreshIfAuthorized()` reads events only when consent already exists and
+  never triggers a dialog. Asking is an explicit button.
+- **The camera must not start implicitly.** `MirrorManager.activate()` refuses
+  to start capture unless `requestStart()` has recorded a real user request.
+  The Mirror card is a button; a panel rebuild, a hover, or an offscreen render
+  cannot light the camera. Releasing the last preview withdraws the request
+  again. Owner-based reference counting still governs shutdown across displays.
+
 ### Notch surface
 
 `NotchSurface` paints the notch either opaque black or in macOS 26 Liquid Glass.
@@ -170,6 +194,10 @@ than failing to build or launch.
 The dark scrim under the glass is functional, not decorative: glass does not
 guarantee contrast, and widget text over a bright wallpaper is unreadable
 without it.
+
+Solid black carries **no border and no gradient** — the silhouette and a
+restrained shadow do the work. Glass gets a single hairline, because it has no
+colour of its own and otherwise loses its edge against a busy desktop.
 
 ### External displays
 

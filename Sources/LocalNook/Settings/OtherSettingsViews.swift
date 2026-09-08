@@ -17,6 +17,42 @@ struct WidgetSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsSection(
+                title: "Dashboard",
+                footer: "These appear side by side when the notch opens. If the panel is too narrow for all of them, the ones at the end are left out rather than everything being shrunk."
+            ) {
+                ForEach(WidgetKind.allCases.filter(\.suitsDashboard)) { kind in
+                    HStack(spacing: 10) {
+                        Image(systemName: kind.symbol)
+                            .frame(width: 20)
+                            .foregroundStyle(.secondary)
+                        Toggle(kind.label, isOn: Binding(
+                            get: { settings.dashboardWidgetIDs.contains(kind.rawValue) },
+                            set: { settings.setDashboardWidget(kind, on: $0) }
+                        ))
+                        .disabled(!settings.isWidgetEnabled(kind))
+                        Spacer()
+                        if !settings.isWidgetEnabled(kind) {
+                            Text("disabled below")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Button { moveDashboard(kind, by: -1) } label: {
+                                Image(systemName: "chevron.up")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(dashboardIndex(kind) <= 0)
+                            Button { moveDashboard(kind, by: 1) } label: {
+                                Image(systemName: "chevron.down")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(dashboardIndex(kind) < 0
+                                      || dashboardIndex(kind) >= settings.dashboardWidgetIDs.count - 1)
+                        }
+                    }
+                }
+            }
+
+            SettingsSection(
                 title: "Available widgets",
                 footer: "Drag to reorder. The order here is the order of the rail inside the expanded notch."
             ) {
@@ -48,6 +84,19 @@ struct WidgetSettingsView: View {
                 .buttonStyle(.borderless)
                 .disabled(index(of: kind) == settings.widgetOrderIDs.count - 1)
         }
+    }
+
+    private func dashboardIndex(_ kind: WidgetKind) -> Int {
+        settings.dashboardWidgetIDs.firstIndex(of: kind.rawValue) ?? -1
+    }
+
+    private func moveDashboard(_ kind: WidgetKind, by offset: Int) {
+        var order = settings.dashboardWidgetIDs
+        guard let from = order.firstIndex(of: kind.rawValue) else { return }
+        let to = from + offset
+        guard order.indices.contains(to) else { return }
+        order.swapAt(from, to)
+        settings.dashboardWidgetIDs = order
     }
 
     private func index(of kind: WidgetKind) -> Int {

@@ -84,6 +84,9 @@ final class NotchWindowController: NSObject {
     private var cancellables = Set<AnyCancellable>()
     private var stateObservers = Set<AnyCancellable>()
     private var notificationBridge: DistributedCommandBridge?
+    /// Low-frequency safety net, alive only while a notch is open. See
+    /// `startPointerSafetyNet()`.
+    private var pointerSafetyTask: Task<Void, Never>?
     private var isScreenLocked = false
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var geometryTask: Task<Void, Never>?
@@ -225,6 +228,7 @@ final class NotchWindowController: NSObject {
                         self?.syncKeyStatus()
                         self?.syncPanelExtents()
                         self?.syncInteractivity()
+                        self?.startPointerSafetyNet()
                     }
                 }
                 .store(in: &stateObservers)
@@ -376,6 +380,43 @@ final class NotchWindowController: NSObject {
             display: false
         )
         panel.orderFrontRegardless()
+    }
+
+    /// Closes a notch the pointer has already left.
+    ///
+    /// Hover is driven by tracking areas, which is the right mechanism, but
+    /// `mouseExited` is not guaranteed to arrive when a *window* moves out from
+    /// under a stationary pointer — a display change, a live activity resizing
+    /// the panel, or the notch collapsing can all move it. When that event is
+    /// missed the notch stays open with the pointer nowhere near it.
+    ///
+    /// This is a fallback, not the mechanism: it ticks once a second and only
+    /// while something is open, so an idle Mac does no work.
+    private func startPointerSafetyNet() {
+        guard pointerSafetyTask == nil else { return }
+        pointerSafetyTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                guard self.models.values.contains(where: { $0.state == .open }) else {
+                    self.pointerSafetyTask = nil
+                    return
+                }
+                self.closeIfPointerHasLeft()
+            }
+        }
+    }
+
+    private func closeIfPointerHasLeft() {
+        let mouse = NSEvent.mouseLocation
+        for (id, model) in models where model.state == .open {
+            guard !model.isDragTargeting else { continue }
+            guard let panel = panels[id] else { continue }
+            // A generous margin: this must never fight legitimate hover, only
+            // catch a pointer that is clearly elsewhere.
+            let region = panel.frame.insetBy(dx: -24, dy: -24)
+            if !region.contains(mouse) { model.scheduleClose() }
+        }
     }
 
     /// Exactly one of the two windows accepts input at a time.

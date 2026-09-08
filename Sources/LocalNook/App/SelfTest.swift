@@ -48,6 +48,7 @@ enum SelfTest {
         testClickThrough()
         testExternalDisplays()
         testInteractiveFootprint()
+        testDashboardComposition()
         testLiquidGlass()
         testCatcherHover()
         testCloseLatch()
@@ -201,6 +202,66 @@ enum SelfTest {
         LiveActivityCenter.shared.previewInject(nil)
         controller.stop()
         pumpEvents(for: 0.2)
+    }
+
+    /// Dashboard composition, and the two consent rules the layout forced open.
+    private static func testDashboardComposition() {
+        section("Dashboard")
+        let settings = Settings.shared
+        let originalDashboard = settings.dashboardWidgetIDs
+        let originalEnabled = settings.enabledWidgetIDs
+
+        settings.dashboardWidgetIDs = ["media", "mirror", "calendar"]
+        check("the default dashboard shows three sections",
+              settings.dashboardWidgets.count == 3,
+              "got \(settings.dashboardWidgets.map(\.rawValue))")
+
+        // Narrow panels drop sections instead of shrinking everything.
+        let all: [WidgetKind] = [.media, .mirror, .calendar]
+        let wide = DashboardView.fit(all, into: 900)
+        let medium = DashboardView.fit(all, into: 380)
+        let narrow = DashboardView.fit(all, into: 200)
+        check("a wide panel keeps every section", wide.count == 3)
+        check("a narrower panel drops sections from the end",
+              medium.count < 3 && medium.first == .media,
+              "got \(medium.map(\.rawValue))")
+        check("sections that survive still clear their minimum width",
+              medium.allSatisfy { $0.dashboardMinimumWidth <= 380 })
+        check("a very narrow panel keeps at most one section", narrow.count <= 1)
+        check("nothing is shown rather than something illegible",
+              DashboardView.fit(all, into: 60).isEmpty)
+
+        // Widths must add up to the space available.
+        let visible = DashboardView.fit(all, into: 900)
+        let sum = visible.reduce(0) { $0 + DashboardView.width(for: $1, in: visible, total: 900) }
+        let gaps = CGFloat(max(0, visible.count - 1)) * Theme.sectionGap
+        check("section widths fill the panel exactly",
+              abs(sum + gaps - 900) < 1, "sum \(Int(sum + gaps)) of 900")
+
+        // A widget switched off must vanish, not be quietly replaced.
+        settings.setWidget(.mirror, enabled: false)
+        check("a disabled widget leaves the dashboard",
+              !settings.dashboardWidgets.contains(.mirror))
+        check("a disabled widget is not replaced by a fallback",
+              settings.dashboardWidgets.count == 2,
+              "got \(settings.dashboardWidgets.map(\.rawValue))")
+        settings.setWidget(.mirror, enabled: true)
+
+        // Only widgets that suit a short, wide column may sit on the dashboard.
+        settings.dashboardWidgetIDs = ["notes", "shortcuts", "media"]
+        check("widgets that need room stay off the dashboard",
+              settings.dashboardWidgets == [.media],
+              "got \(settings.dashboardWidgets.map(\.rawValue))")
+
+        // Opening the notch must never trigger a consent dialog.
+        let before = CalendarManager.shared.authorization
+        CalendarManager.shared.refreshIfAuthorized()
+        check("showing the calendar section does not prompt for access",
+              CalendarManager.shared.authorization == before,
+              "authorization changed merely by rendering")
+
+        settings.dashboardWidgetIDs = originalDashboard
+        settings.enabledWidgetIDs = originalEnabled
     }
 
     /// The Liquid Glass toggle and the one rule that makes it look right.

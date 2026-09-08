@@ -209,21 +209,11 @@ struct NotchRootView: View {
             isOpen: isOpen,
             hasPhysicalNotch: model.displayHasPhysicalNotch
         )
-            .overlay {
-                // Subtle inner edge so the panel reads as an object against a
-                // dark wallpaper rather than a hole.
-                NotchShape(topRadius: topRadius, bottomRadius: bottomRadius)
-                    .stroke(
-                        LinearGradient(
-                            colors: [.white.opacity(isOpen ? 0.10 : 0), .white.opacity(0)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ),
-                        lineWidth: 0.6
-                    )
-            }
             .overlay(alignment: .top) { content }
-            .shadow(color: .black.opacity(isOpen ? 0.45 : 0), radius: 18, y: 8)
+            // Restrained: enough to lift the panel off the desktop, not enough
+            // to read as a halo. The edge treatment lives in NotchSurface,
+            // because only the glass material needs one.
+            .shadow(color: .black.opacity(isOpen ? 0.30 : 0), radius: 13, y: 5)
             .contentShape(NotchShape(topRadius: topRadius, bottomRadius: bottomRadius))
             .onTapGesture {
                 guard settings.openTrigger.allowsClick else { return }

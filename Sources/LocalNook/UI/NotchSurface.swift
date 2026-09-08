@@ -49,7 +49,15 @@ struct NotchSurface: View {
     var body: some View {
         if #available(macOS 26.0, *), usesGlass {
             glassSurface
+                // Glass has no colour of its own, so a hairline is what gives
+                // the silhouette an edge against a busy desktop. Solid black
+                // needs no such help and reads better without one.
+                .overlay {
+                    shape.stroke(Color.white.opacity(0.14), lineWidth: 0.5)
+                }
         } else {
+            // Deliberately unadorned: no border, no gradient, no glow. The
+            // silhouette and the shadow do the work.
             shape.fill(Color.black)
         }
     }

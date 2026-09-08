@@ -18,7 +18,19 @@ notch. When something happens it widens and shows a *live activity* flanking the
 camera housing: what's playing, a running timer, charging state, AirPods
 connecting, or an agent session going quiet.
 
-**Expanded** (hover or click), it opens into a panel with a widget strip:
+**Expanded** (hover or click), it opens onto one of three pages:
+
+| Page | What it holds |
+|---|---|
+| **Dashboard** | Everyday information side by side — media, calendar, a Mirror action |
+| **Tray** | Files you have dragged in, and the drop target |
+| **Tools** | Everything that needs more room than a dashboard column |
+
+Choose and reorder the Dashboard sections in Settings ▸ Widgets ▸ Dashboard. If
+the panel is too narrow for all of them, the ones at the end are left out rather
+than everything being shrunk.
+
+The widgets themselves:
 
 | Widget | What it does |
 |---|---|

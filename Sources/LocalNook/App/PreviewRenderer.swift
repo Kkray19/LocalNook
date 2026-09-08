@@ -34,6 +34,7 @@ enum PreviewRenderer {
             ("dashboard-populated", true, .media),
             ("tray-populated", true, .shelf),
             ("tools", true, .timers),
+            ("tray-drag-target", true, .shelf),
         ]
         scenes += WidgetKind.allCases.map { ("open-\($0.rawValue)", true, $0) }
 
@@ -52,6 +53,11 @@ enum PreviewRenderer {
                 model.page = .dashboard
             } else if scene.name == "tray-populated" {
                 model.page = .tray
+            } else if scene.name == "tray-drag-target" {
+                model.page = .tray
+                // Stage the drop-target state; a real drag cannot be
+                // synthesised without Accessibility.
+                model.isDragTargeting = true
             } else if scene.name == "tools" {
                 model.page = .tools
             } else {
