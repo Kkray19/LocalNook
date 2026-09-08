@@ -84,19 +84,47 @@ enum NotchMotion {
         return true
     }
 
-    /// The main open/close spring: enough bounce to feel alive, damped enough
-    /// that text inside the notch never visibly overshoots.
+    /// The main open/close spring.
+    ///
+    /// Softer and longer-settling than a merely fast animation: the notch
+    /// should read as a body relaxing into shape, not a box being resized.
+    /// `dampingFraction` below 1 gives a single visible overshoot, which is
+    /// what separates "liquid" from "linear" — a heavily damped spring at a
+    /// short response is perceptually indistinguishable from an ease curve.
+    ///
+    /// **The overshoot has a hard ceiling.** The panel window does not resize
+    /// during the animation; the content animates inside a window that is
+    /// `NotchGeometry.shadowPadding` (24pt) taller than the open state and
+    /// about 32pt wider on each side. Anything that overshoots past that is
+    /// clipped by the window edge and looks broken rather than springy. At
+    /// damping 0.68 the overshoot is roughly 5–6% of travel — about 8pt
+    /// vertically and 14pt per side horizontally — which stays inside it.
+    /// Lowering this further means enlarging the window first.
     static var expand: Animation {
         isAnimated
-            ? .spring(response: 0.42, dampingFraction: 0.78, blendDuration: 0.1)
+            ? .spring(response: 0.46, dampingFraction: 0.68, blendDuration: 0.15)
             : .linear(duration: 0.01)
     }
 
+    /// Small, frequent changes — a live activity appearing, the closed width
+    /// tracking a geometry change. Springy for consistency, but tighter: these
+    /// fire often and an overshoot on every one would read as instability.
     static var quick: Animation {
-        isAnimated ? .spring(response: 0.28, dampingFraction: 0.86) : .linear(duration: 0.01)
+        isAnimated
+            ? .spring(response: 0.3, dampingFraction: 0.8)
+            : .linear(duration: 0.01)
     }
 
+    /// Content inside the panel — page changes, sections appearing.
+    ///
+    /// Also a spring rather than the ease curve it used to be. With the shell
+    /// springing and the contents easing, the two arrived on different
+    /// schedules and the panel read as a box with a separate animation playing
+    /// inside it. Slightly quicker than `expand` so the contents settle just
+    /// after the shape rather than fighting it.
     static var content: Animation {
-        isAnimated ? .easeOut(duration: 0.22) : .linear(duration: 0.01)
+        isAnimated
+            ? .spring(response: 0.34, dampingFraction: 0.82)
+            : .linear(duration: 0.01)
     }
 }

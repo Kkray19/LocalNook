@@ -239,7 +239,15 @@ struct NotchRootView: View {
                     width: NotchShape.totalWidth(forBody: bodyWidth, topRadius: topRadius),
                     height: bodyHeight
                 )
-                .transition(.opacity.combined(with: .offset(y: -6)))
+                // Grows out of the notch rather than fading in over it: the
+                // scale is anchored at the top so the content appears to be
+                // drawn down out of the closed shape, which is what makes the
+                // open read as one movement instead of two.
+                .transition(
+                    .opacity
+                        .combined(with: .scale(scale: 0.93, anchor: .top))
+                        .combined(with: .offset(y: -10))
+                )
         }
     }
 }
