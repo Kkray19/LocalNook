@@ -47,6 +47,9 @@ enum SelfTest {
         testHoverPath()
         testClickThrough()
         testExternalDisplays()
+        testInteractiveFootprint()
+        testCatcherHover()
+        testCloseLatch()
         testScriptableControl()
         StabilizationTests.run()
         AppInfo.defaults.removePersistentDomain(forName: AppInfo.testSuiteName)
@@ -124,6 +127,163 @@ enum SelfTest {
         panel.orderOut(nil)
         panel.close()
         settings.openDelay = originalDelay
+    }
+
+    /// The collapsed notch must give the rest of the menu bar back.
+    ///
+    /// A nil hit test is not enough on its own: `NSWindow` dispatches to the view
+    /// `hitTest` returns and, when that is nil, drops the event rather than
+    /// passing it down. Only `ignoresMouseEvents` actually routes a click past a
+    /// window, and it is per-window — hence the split into a wide inert drawing
+    /// panel and a tiny interactive catcher.
+    private static func testInteractiveFootprint() {
+        section("Interactive footprint")
+        let controller = NotchWindowController.shared
+        let settings = Settings.shared
+        controller.start()
+        pumpEvents(for: 0.5)
+
+        check("collapsed, the wide drawing panel ignores mouse events",
+              controller.inertDrawingPanels)
+        check("collapsed, the small catcher accepts them", controller.activeCatchers)
+
+        // With an activity showing, the drawing panel stretches across the menu
+        // bar. The catcher must not follow it.
+        LiveActivityCenter.shared.previewInject(LiveActivity(
+            id: "footprint", symbol: "waveform", tint: .white,
+            leading: "Playing something", trailing: "Artist",
+            style: .persistent, progress: 0.4, priority: 40
+        ))
+        pumpEvents(for: 0.8)
+
+        guard let model = controller.activeModel,
+              let catcher = controller.catcherFrames.first,
+              let drawing = controller.drawingPanelFrames.first else {
+            check("panels exist to measure", false)
+            LiveActivityCenter.shared.previewInject(nil)
+            controller.stop()
+            return
+        }
+
+        let coreWidth = NotchShape.totalWidth(
+            forBody: model.closedSize.width, topRadius: settings.closedCornerRadius
+        )
+        check("the catcher stays the width of the notch",
+              abs(catcher.width - coreWidth) < 1.5,
+              "catcher \(Int(catcher.width))pt vs notch \(Int(coreWidth))pt")
+        check("the catcher is far smaller than the drawn strip",
+              catcher.width < drawing.width,
+              "catcher \(Int(catcher.width))pt, drawn \(Int(drawing.width))pt")
+        check("the catcher is only as tall as the notch",
+              catcher.height <= model.closedSize.height + 4,
+              "catcher is \(Int(catcher.height))pt tall")
+
+        // Opening hands input to the panel and stands the catcher down.
+        controller.perform(.open)
+        pumpEvents(for: 0.6)
+        check("expanded, the panel takes input", controller.inertDrawingPanels)
+        check("expanded, the catcher stands down", controller.activeCatchers)
+
+        controller.perform(.close)
+        pumpEvents(for: 0.6)
+        check("collapsing hands input back to the catcher",
+              controller.inertDrawingPanels && controller.activeCatchers)
+
+        LiveActivityCenter.shared.previewInject(nil)
+        controller.stop()
+        pumpEvents(for: 0.2)
+    }
+
+    /// Hover, end to end, through the catcher that actually handles it.
+    ///
+    /// This matters more than it looks: collapsed, the drawing panel is inert,
+    /// so its tracking area never fires. If the catcher's hover broke, the notch
+    /// would simply stop opening — and the older hover test would still pass,
+    /// because it exercises the wrong window.
+    private static func testCatcherHover() {
+        section("Catcher hover (end to end)")
+        let settings = Settings.shared
+        let originalDelay = settings.openDelay
+        settings.openDelay = 0.05
+
+        let model = NotchViewModel(screenID: NSScreen.main?.stableID)
+        let panel = NotchWindowController.shared.makeHitPanel(for: model)
+        let size = CGSize(width: 220, height: 40)
+        panel.setFrame(NSRect(x: 4, y: 4, width: size.width, height: size.height), display: true)
+        panel.orderFrontRegardless()
+        pumpEvents(for: 0.4)
+        check("starts collapsed", model.state == .closed)
+
+        // Move the window under the stationary pointer — no Accessibility needed.
+        let cursor = NSEvent.mouseLocation
+        panel.setFrame(
+            NSRect(
+                x: cursor.x - size.width / 2,
+                y: cursor.y - size.height / 2,
+                width: size.width, height: size.height
+            ),
+            display: true
+        )
+        pumpEvents(for: 1.0)
+        check("hovering the catcher opens the notch", model.state == .open,
+              "the catcher's tracking area did not fire")
+
+        // Once open, hover belongs to the expanded panel — the pointer has moved
+        // *into* it, not away. Closing on exit is covered by testHoverPath.
+        model.close()
+        model.allowHoverToReopen()
+        panel.setFrame(NSRect(x: 4, y: 4, width: size.width, height: size.height), display: true)
+        pumpEvents(for: 0.5)
+
+        // The case that matters for accidental activation: a pointer that only
+        // grazes the notch and leaves before the open delay elapses.
+        settings.openDelay = 0.8
+        panel.setFrame(
+            NSRect(
+                x: cursor.x - size.width / 2,
+                y: cursor.y - size.height / 2,
+                width: size.width, height: size.height
+            ),
+            display: true
+        )
+        pumpEvents(for: 0.15)
+        panel.setFrame(NSRect(x: 4, y: 4, width: size.width, height: size.height), display: true)
+        pumpEvents(for: 1.2)
+        check("a pointer merely passing over the notch does not open it",
+              model.state == .closed,
+              "it opened after the pointer had already left")
+
+        panel.orderOut(nil)
+        panel.close()
+        settings.openDelay = originalDelay
+    }
+
+    /// A deliberate close must not bounce straight back open under a still pointer.
+    private static func testCloseLatch() {
+        section("Close latch")
+        let settings = Settings.shared
+        let original = settings.openDelay
+        settings.openDelay = 0.02
+
+        let model = NotchViewModel(screenID: NSScreen.main?.stableID)
+        model.isHovering = true
+        model.open()
+        check("opens while hovered", model.state == .open)
+
+        model.close()
+        model.scheduleOpen()
+        pumpEvents(for: 0.4)
+        check("closing while the pointer rests on it stays closed",
+              model.state == .closed,
+              "it re-opened immediately")
+
+        model.allowHoverToReopen()
+        model.scheduleOpen()
+        pumpEvents(for: 0.4)
+        check("hovering again after the pointer leaves re-opens it",
+              model.state == .open)
+        model.close()
+        settings.openDelay = original
     }
 
     /// Verifies the app answers scripted open/close commands.

@@ -31,6 +31,10 @@ final class NotchViewModel: ObservableObject {
     @Published var closedSize: CGSize
     let screenID: String?
 
+    /// Set when the notch is closed deliberately while the pointer is still on
+    /// it, so hover does not immediately re-open it. Cleared when the pointer
+    /// leaves.
+    private var hoverReopenBlocked = false
     private var openTask: Task<Void, Never>?
     private var closeTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
@@ -87,9 +91,17 @@ final class NotchViewModel: ObservableObject {
         NotificationCenter.default.post(name: .notchDidOpen, object: self)
     }
 
+    /// Clears the latch that keeps hover from re-opening a deliberately closed notch.
+    func allowHoverToReopen() {
+        hoverReopenBlocked = false
+    }
+
     func close() {
         cancelPending()
         guard state != .closed else { return }
+        // If the pointer is still sitting on the notch, do not bounce straight
+        // back open — wait until it leaves.
+        hoverReopenBlocked = isHovering
         withAnimation(NotchMotion.expand) { state = .closed }
         NotificationCenter.default.post(name: .notchDidClose, object: self)
     }
@@ -101,7 +113,8 @@ final class NotchViewModel: ObservableObject {
     /// Schedules an open after the user's configured hover delay.
     func scheduleOpen() {
         closeTask?.cancel(); closeTask = nil
-        guard !isSuppressed, settings.openTrigger.allowsHover, state == .closed else { return }
+        guard !isSuppressed, settings.openTrigger.allowsHover, state == .closed,
+              !hoverReopenBlocked else { return }
         guard openTask == nil else { return }
         let delay = settings.openDelay
         openTask = Task { [weak self] in

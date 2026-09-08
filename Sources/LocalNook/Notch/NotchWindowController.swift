@@ -71,6 +71,8 @@ final class NotchWindowController: NSObject {
     static let shared = NotchWindowController()
 
     private var panels: [String: NotchPanel] = [:]
+    /// Tiny always-interactive catchers, one per panel. See NotchHitPanel.
+    private var hitPanels: [String: NotchHitPanel] = [:]
     private var models: [String: NotchViewModel] = [:]
     private var mouseMonitor: Any?
     private var clickMonitor: Any?
@@ -142,6 +144,31 @@ final class NotchWindowController: NSObject {
     /// after a display is attached or removed.
     var panelCount: Int { panels.count }
 
+    /// Inspection hooks for the self-test: which window is currently live, and
+    /// how much of the screen the interactive one covers.
+    var inertDrawingPanels: Bool {
+        models.allSatisfy { id, model in
+            let expectInert = model.state == .closed
+            return panels[id]?.ignoresMouseEvents == expectInert
+        }
+    }
+
+    var activeCatchers: Bool {
+        models.allSatisfy { id, model in
+            let expectActive = model.state == .closed
+            return hitPanels[id]?.ignoresMouseEvents == !expectActive
+        }
+    }
+
+    /// Frame of the only window that accepts input while collapsed.
+    var catcherFrames: [CGRect] {
+        hitPanels.values.map(\.frame)
+    }
+
+    var drawingPanelFrames: [CGRect] {
+        panels.values.map(\.frame)
+    }
+
     /// True when every panel is still associated with a connected display.
     var allPanelsOnLiveScreens: Bool {
         panels.keys.allSatisfy { NSScreen.screen(withStableID: $0) != nil }
@@ -177,7 +204,11 @@ final class NotchWindowController: NSObject {
                 .receive(on: RunLoop.main)
                 .sink { [weak self] _ in
                     // Deferred so the model's own property has already updated.
-                    Task { @MainActor in self?.syncKeyStatus(); self?.syncPanelExtents() }
+                    Task { @MainActor in
+                        self?.syncKeyStatus()
+                        self?.syncPanelExtents()
+                        self?.syncInteractivity()
+                    }
                 }
                 .store(in: &stateObservers)
         }
@@ -204,6 +235,7 @@ final class NotchWindowController: NSObject {
                 let panel = makePanel(for: screen, model: model)
                 panels[id] = panel
                 models[id] = model
+                hitPanels[id] = makeHitPanel(for: model)
             }
             models[id]?.refreshGeometry()
             position(panels[id], on: screen)
@@ -211,6 +243,7 @@ final class NotchWindowController: NSObject {
 
         applyElevatedSpaceSetting()
         observeModelState()
+        syncInteractivity()
         lastScreenSignature = screenSignature()
     }
 
@@ -249,6 +282,82 @@ final class NotchWindowController: NSObject {
             return NotchWindowController.interactiveRegion(for: model, in: container.bounds)
         }
         return container
+    }
+
+    /// Builds the interactive catcher.
+    ///
+    /// Not private: the self-test drives this exact panel so the hover path it
+    /// asserts is the one the app ships.
+    func makeHitPanel(for model: NotchViewModel) -> NotchHitPanel {
+        let panel = NotchHitPanel(contentRect: NSRect(x: 0, y: 0, width: 10, height: 10))
+        let view = NotchHitView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+        view.autoresizingMask = [.width, .height]
+
+        view.onHoverChange = { [weak model] hovering in
+            guard let model else { return }
+            model.isHovering = hovering
+            if hovering {
+                model.scheduleOpen()
+            } else {
+                // Leaving clears the "stay shut" latch set by an explicit close.
+                model.allowHoverToReopen()
+                // Abandon an open that has not fired yet — this is what makes a
+                // pointer merely passing over the notch harmless. Once the notch
+                // is actually open the panel owns hover, and closing is its job:
+                // the pointer has moved *into* the panel, not away from it.
+                if model.state == .closed { model.cancelPending() }
+            }
+        }
+        view.onClick = { [weak model] in
+            guard let model, Settings.shared.openTrigger.allowsClick else { return }
+            model.toggle()
+        }
+        view.onDragEnter = { [weak model] in
+            guard let model, Settings.shared.shelfAutoExpandOnDrag else { return }
+            model.selectedWidget = .shelf
+            model.open()
+        }
+
+        panel.contentView = view
+        panel.orderFrontRegardless()
+        return panel
+    }
+
+    /// Places the catcher over the collapsed notch only.
+    private func positionHitPanel(_ id: String, on screen: NSScreen) {
+        guard let panel = hitPanels[id], let model = models[id] else { return }
+        let height = model.effectiveClosedHeight
+        guard height > 0, !model.isSuppressed else {
+            panel.setFrame(.zero, display: false)
+            panel.orderOut(nil)
+            return
+        }
+        let width = NotchShape.totalWidth(
+            forBody: model.closedSize.width, topRadius: settings.closedCornerRadius
+        )
+        // A few points of slop makes the very top screen edge easier to hit.
+        let size = CGSize(width: width, height: height + 3)
+        panel.setFrame(
+            NSRect(
+                origin: NotchGeometry.windowOrigin(on: screen, windowSize: size),
+                size: size
+            ),
+            display: false
+        )
+        panel.orderFrontRegardless()
+    }
+
+    /// Exactly one of the two windows accepts input at a time.
+    ///
+    /// Collapsed, the wide drawing panel is completely inert and only the tiny
+    /// catcher takes events, so the rest of the menu bar stays clickable.
+    /// Expanded, the panel is visible and covers real content, so it takes over.
+    private func syncInteractivity() {
+        for (id, model) in models {
+            let isOpen = model.state == .open
+            panels[id]?.ignoresMouseEvents = !isOpen
+            hitPanels[id]?.ignoresMouseEvents = isOpen
+        }
     }
 
     /// The part of the panel that accepts clicks, in panel coordinates.
@@ -293,6 +402,7 @@ final class NotchWindowController: NSObject {
             panel.setContentSize(size)
         }
         panel.setFrameOrigin(NotchGeometry.windowOrigin(on: screen, windowSize: size))
+        if let id = screen.stableID { positionHitPanel(id, on: screen) }
     }
 
     private func panelSize(for model: NotchViewModel, on screen: NSScreen) -> CGSize {
@@ -342,6 +452,11 @@ final class NotchWindowController: NSObject {
             panel.orderOut(nil)
             panel.close()
         }
+        for panel in hitPanels.values {
+            panel.orderOut(nil)
+            panel.close()
+        }
+        hitPanels.removeAll()
         panels.removeAll()
         models.values.forEach { $0.cancelPending() }
         models.removeAll()
