@@ -78,6 +78,18 @@ menu bar glyph for Settings, or press ⌘, when Settings is focused.
 > login item for an app running out of a build directory; LocalNook will show
 > you the error rather than silently failing.
 
+## Liquid Glass
+
+Settings ▸ Notch ▸ Appearance switches the notch between **Solid black** and
+**Liquid Glass** (macOS 26+), with a style, a dimming slider and an opt-in for
+the collapsed state.
+
+Collapsed, the notch stays solid black on displays with a real camera housing —
+it is imitating the cutout there, and a translucent panel over an opaque hole
+reads as a smudge. Expanded, and on external displays that have no housing,
+glass applies throughout. On macOS 25 or earlier the setting quietly falls back
+to solid.
+
 ## Controlling it from a script
 
 LocalNook listens for distributed notifications, so a Shortcut, an Automation

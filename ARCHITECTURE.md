@@ -153,6 +153,24 @@ content either side of the housing — widget title on the left, settings and
 collapse on the right — and puts the tab strip and widget body below it. This
 was also a real bug: the first layout put the widget rail in that strip.
 
+### Notch surface
+
+`NotchSurface` paints the notch either opaque black or in macOS 26 Liquid Glass.
+The decision lives in a static function rather than the view so it can be tested
+without an environment, and it turns on one rule:
+
+> Collapsed, on a display with a real camera housing, the notch **must** be
+> opaque black. It is imitating the housing; a translucent panel over an opaque
+> cutout reads as a smudge, not an effect.
+
+Expanded — or on any display without a housing — glass applies. `glassEffect` is
+macOS 26+, so it sits behind an availability check and degrades to solid rather
+than failing to build or launch.
+
+The dark scrim under the glass is functional, not decorative: glass does not
+guarantee contrast, and widget text over a bright wallpaper is unreadable
+without it.
+
 ### External displays
 
 "Show on every display" defaults **on**, so a second monitor gets a notch out of
