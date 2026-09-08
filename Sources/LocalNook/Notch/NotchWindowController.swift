@@ -208,8 +208,20 @@ final class NotchWindowController: NSObject {
     private func makePanel(for screen: NSScreen, model: NotchViewModel) -> NotchPanel {
         let size = NotchGeometry.windowSize(for: screen)
         let panel = NotchPanel(contentRect: NSRect(origin: .zero, size: size))
+
+        panel.contentView = Self.makeContentView(for: model, size: size)
+        panel.orderFrontRegardless()
+        return panel
+    }
+
+    /// Builds the panel's content view.
+    ///
+    /// Shared with the self-test so the click-through behaviour that is asserted
+    /// is the behaviour the app actually ships, rather than a hand-rolled
+    /// look-alike that can drift.
+    static func makeContentView(for model: NotchViewModel, size: CGSize) -> NotchHitTestView {
         let host = NSHostingView(
-            rootView: NotchRootView(model: model).environmentObject(settings)
+            rootView: NotchRootView(model: model).environmentObject(Settings.shared)
         )
         // Without this the hosting view propagates its content's ideal size up
         // to the window, which silently widens the panel and knocks the notch
@@ -217,9 +229,51 @@ final class NotchWindowController: NSObject {
         host.sizingOptions = []
         host.frame = NSRect(origin: .zero, size: size)
         host.autoresizingMask = [.width, .height]
-        panel.contentView = host
-        if !isScreenLocked { panel.orderFrontRegardless() }
-        return panel
+
+        // Everything outside the drawn notch must fall through to the app
+        // underneath — see NotchHitTestView.
+        let container = NotchHitTestView(frame: NSRect(origin: .zero, size: size))
+        container.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        container.interactiveRegion = { [weak model, weak container] in
+            guard let model, let container else { return .zero }
+            return NotchWindowController.interactiveRegion(for: model, in: container.bounds)
+        }
+        return container
+    }
+
+    /// The part of the panel that accepts clicks, in panel coordinates.
+    ///
+    /// Collapsed, this is only the notch itself — deliberately *not* the live
+    /// activity "wings", which are display-only. Those sit over the menu bar,
+    /// and making them clickable would block menu-bar items for as long as
+    /// something was playing.
+    static func interactiveRegion(for model: NotchViewModel, in bounds: NSRect) -> NSRect {
+        guard !model.isSuppressed else { return .zero }
+
+        if model.state == .open {
+            let size = NotchGeometry.openSize
+            let width = size.width + Settings.shared.openCornerRadius * 2
+            return NSRect(
+                x: bounds.midX - width / 2,
+                y: bounds.maxY - size.height,
+                width: width,
+                height: size.height
+            )
+        }
+
+        let height = model.effectiveClosedHeight
+        guard height > 0 else { return .zero }
+        let width = NotchShape.totalWidth(
+            forBody: model.closedSize.width,
+            topRadius: Settings.shared.closedCornerRadius
+        )
+        return NSRect(
+            x: bounds.midX - width / 2,
+            y: bounds.maxY - height,
+            width: width,
+            height: height
+        )
     }
 
     private func position(_ panel: NotchPanel?, on screen: NSScreen) {

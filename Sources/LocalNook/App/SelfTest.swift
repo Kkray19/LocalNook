@@ -45,6 +45,7 @@ enum SelfTest {
         testPermissionsDegradeGracefully()
 
         testHoverPath()
+        testClickThrough()
         testScriptableControl()
         StabilizationTests.run()
         AppInfo.defaults.removePersistentDomain(forName: AppInfo.testSuiteName)
@@ -157,6 +158,90 @@ enum SelfTest {
               controller.activeModel?.state == .closed)
 
         controller.stop()
+    }
+
+    /// Asserts that clicks land on the notch and pass *through* everywhere else.
+    ///
+    /// The panel is a transparent overlay pinned over the menu bar. Any point in
+    /// it that hit-tests to a view swallows a click that belongs to whatever is
+    /// underneath — which is exactly the complaint that motivated this test:
+    /// the top of the screen became unusable for other apps.
+    private static func testClickThrough() {
+        section("Click-through")
+        let settings = Settings.shared
+        let model = NotchViewModel(screenID: NSScreen.main?.stableID)
+        let size = CGSize(width: 900, height: 220)
+        let panel = NotchPanel(contentRect: NSRect(origin: .zero, size: size))
+        // The real construction path, so this asserts shipped behaviour.
+        let host = NotchWindowController.makeContentView(for: model, size: size)
+        panel.contentView = host
+        panel.orderFrontRegardless()
+        pumpEvents(for: 0.5)
+
+        // View coordinates: origin bottom-left, notch drawn top-centre.
+        let notchWidth = NotchShape.totalWidth(
+            forBody: model.closedSize.width, topRadius: settings.closedCornerRadius
+        )
+        let notchHeight = model.effectiveClosedHeight
+
+        func hits(_ point: NSPoint) -> Bool {
+            host.hitTest(point) != nil
+        }
+
+        // Dead centre of the collapsed notch must be clickable.
+        let centre = NSPoint(x: size.width / 2, y: size.height - notchHeight / 2)
+        check("the collapsed notch itself accepts clicks", hits(centre))
+
+        // Everything outside it must fall through.
+        let farLeft = NSPoint(x: 40, y: size.height - 10)
+        let farRight = NSPoint(x: size.width - 40, y: size.height - 10)
+        let below = NSPoint(x: size.width / 2, y: size.height - notchHeight - 60)
+        let justOutside = NSPoint(
+            x: size.width / 2 + notchWidth / 2 + 25, y: size.height - notchHeight / 2
+        )
+
+        check("a click far left of the notch passes through", !hits(farLeft))
+        check("a click far right of the notch passes through", !hits(farRight))
+        check("a click below the collapsed notch passes through", !hits(below))
+        check("a click just outside the notch edge passes through", !hits(justOutside))
+
+        // While open the panel is visible, so it may legitimately take clicks.
+        model.open()
+        pumpEvents(for: 0.6)
+        check("the expanded panel accepts clicks in its body",
+              hits(NSPoint(x: size.width / 2, y: size.height - 100)))
+        model.close()
+        pumpEvents(for: 0.6)
+        check("after collapsing, that same point passes through again",
+              !hits(NSPoint(x: size.width / 2, y: size.height - 100)))
+
+        // A live activity stretches the drawn notch across the menu bar. Those
+        // wings must stay display-only, or the pointer passing near the top of
+        // the screen would expand the notch and steal menu-bar clicks.
+        LiveActivityCenter.shared.previewInject(LiveActivity(
+            id: "selftest", symbol: "waveform", tint: .white,
+            leading: "Something", trailing: "Playing",
+            style: .persistent, progress: 0.5, priority: 40
+        ))
+        pumpEvents(for: 0.5)
+
+        let coreWidth = NotchShape.totalWidth(
+            forBody: model.closedSize.width, topRadius: settings.closedCornerRadius
+        )
+        let wing = NSPoint(
+            x: size.width / 2 + coreWidth / 2 + 60,
+            y: size.height - notchHeight / 2
+        )
+        check("a live-activity wing does not accept clicks", !hits(wing))
+
+        let region = NotchWindowController.interactiveRegion(for: model, in: host.bounds)
+        check("the clickable region stays the width of the notch, not the activity",
+              abs(region.width - coreWidth) < 1,
+              "region is \(region.width)pt, notch is \(coreWidth)pt")
+        LiveActivityCenter.shared.previewInject(nil)
+
+        panel.orderOut(nil)
+        panel.close()
     }
 
     /// Pumps the AppKit event loop for `seconds`.

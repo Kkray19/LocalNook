@@ -80,9 +80,11 @@ struct NotchRootView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            // Full-panel transparent catcher so SwiftUI hover/drop events fire
-            // anywhere in the panel, not just over the drawn shape.
+            // Spacer only — `Color.clear` is hit-testable in SwiftUI, so
+            // without this it silently swallows every click across the whole
+            // panel, making the top of the screen unusable for other apps.
             Color.clear
+                .allowsHitTesting(false)
 
             dropTarget
             hoverRegion
@@ -122,7 +124,14 @@ struct NotchRootView: View {
     /// The region that counts as "on the notch".
     private var hoverSize: CGSize {
         if isOpen { return NotchGeometry.openSize }
-        let width = NotchShape.totalWidth(forBody: bodyWidth, topRadius: topRadius)
+        // Deliberately the notch *core*, not `bodyWidth`. When a live activity
+        // is showing, the drawn body stretches to roughly 445pt; hovering that
+        // whole strip would expand the notch whenever the pointer passed near
+        // the top of the screen, which is the opposite of what anyone wants.
+        // The activity wings are display-only.
+        let width = NotchShape.totalWidth(
+            forBody: model.closedSize.width, topRadius: topRadius
+        )
         // A few points of slop makes the very top screen edge easier to hit.
         return CGSize(width: width, height: max(model.effectiveClosedHeight, 4) + 3)
     }
