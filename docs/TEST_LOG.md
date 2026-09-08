@@ -331,6 +331,59 @@ items back out, hover on the external display, and the "notch stays open while
 typing" guard. These need synthesised pointer input, i.e. Accessibility, which
 LocalNook deliberately does not require.
 
+## Current candidate — 2026-09-08
+
+| | |
+|---|---|
+| Shipped binary | `64e8b294d41b862fb51d1879261226a3c8815011f340cb7dc4f4460686879897` |
+| Disk image | `5c69c2e3253fbdb17e42c284bf2f7ee982f864a3dbb92bb9b2a29f83c9de2bea` |
+| Source commit | `3470e4d79487185509d556416405988138fff2fc` |
+| **Displays connected** | **2** (built-in + G274QPF E2) |
+| Batch | 10 deterministic + 12 integration, fixed before the first run |
+
+```
+deterministic: 10/10 clean, 0 unverified, 0 defects   (265 checks per run)
+integration:    0/12 clean, 12 unverified, 0 defects
+VERDICT: no defects; some scenarios could not be exercised.   (exit 2)
+```
+
+Every integration run reported the same reason, and the suite names it itself:
+
+```
+probe: enters=0 exits=0 handled=0 (of which containment=0) idle=898s SCREEN-LOCKED
+? [integration] hovering the notch opens it — UNVERIFIED: the screen is locked;
+  loginwindow is above every window, so no crossing can reach the panel
+```
+
+**This candidate is explicitly not fully verified.** Six hover checks could not
+be exercised because the screen was locked for the whole batch. Zero defects, in
+either half. The hands-on checklist (docs/ACCEPTANCE.md) is what closes the gap.
+
+### Installation
+
+```
+candidate  64e8b294…
+installed  64e8b294…   /Applications/LocalNook.app
+running    64e8b294…   pid 5439, executable resolved via lsof … txt
+```
+
+No staging or backup directory left in `/Applications`. Window layout with both
+displays awake: 4 windows, one panel and one catcher per display, all at y=0.
+
+### A note on measuring anything while the screen is locked
+
+Two separate symptoms in this pass were artefacts of the machine being locked or
+asleep, and both initially read as defects:
+
+- **Hover crossings not delivered.** `loginwindow` covers everything; a
+  background app receives none. See BUGS.md.
+- **Panels at y=49/y=72 instead of y=0**, narrower and shorter. `caffeinate -u`
+  woke the displays and the geometry returned to y=0, w=445/209, h=35 on both.
+  Nothing was wrong with the app.
+
+Neither is visible from the numbers alone. Any window-geometry or hover figure
+recorded while the screen is locked describes the lock screen, not LocalNook.
+
 ## Superseded candidate — 2026-09-08 (1 display)
 
 One binary, one batch, every run reported.
