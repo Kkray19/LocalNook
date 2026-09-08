@@ -262,5 +262,80 @@ with tempfile.TemporaryDirectory(prefix="localnook-install-") as tmp:
         except subprocess.TimeoutExpired:
             bystander.kill()
 
+# ── 9. It actually stops a process running from the target ───────────────────
+# This path was untested until it was about to run against a live installation:
+# every earlier scenario had an empty target or a bystander elsewhere, so the
+# stop branch was skipped and reported nothing.
+with tempfile.TemporaryDirectory(prefix="localnook-install-") as tmp:
+    scenario("Stopping the process that is running from the target")
+    target = pathlib.Path(tmp) / "Applications"
+    target.mkdir()
+    old = make_bundle(pathlib.Path(tmp) / "old", "OLD")
+    shutil.copytree(old, target / APP)
+    installed_exe = target / APP / "Contents/MacOS/LocalNook"
+    installed_exe.write_text("#!/bin/bash\nsleep 120\n")
+    installed_exe.chmod(0o755)
+    subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(target / APP)],
+                   check=True, capture_output=True)
+    victim = subprocess.Popen([str(installed_exe)],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        src = make_bundle(pathlib.Path(tmp) / "src", "NEW")
+        r = run(src, target)
+        output = r.stdout + r.stderr
+        check("the install succeeds", r.returncode == 0, output)
+        check("it reports stopping the running process", "Stopping the running" in output)
+        try:
+            victim.wait(timeout=15)
+            stopped = True
+        except subprocess.TimeoutExpired:
+            stopped = False
+        check("the process running from the target is actually stopped", stopped)
+        installed = subprocess.run(
+            [str(installed_exe), "--version"],
+            capture_output=True, text=True, errors="replace").stdout.strip()
+        check("the new version replaced it", installed == "NEW", installed)
+    finally:
+        if victim.poll() is None:
+            victim.kill()
+            victim.wait(timeout=10)
+
+# ── 10. A process that refuses to die ────────────────────────────────────────
+# SIGTERM ignored: the script must escalate, and must not proceed if it still
+# cannot stop it — replacing a bundle out from under a live process is how an
+# installation ends up half-written.
+with tempfile.TemporaryDirectory(prefix="localnook-install-") as tmp:
+    scenario("Escalating past a process that ignores SIGTERM")
+    target = pathlib.Path(tmp) / "Applications"
+    target.mkdir()
+    old = make_bundle(pathlib.Path(tmp) / "old", "OLD")
+    shutil.copytree(old, target / APP)
+    installed_exe = target / APP / "Contents/MacOS/LocalNook"
+    installed_exe.write_text("#!/bin/bash\ntrap '' TERM\nsleep 120\n")
+    installed_exe.chmod(0o755)
+    subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(target / APP)],
+                   check=True, capture_output=True)
+    stubborn = subprocess.Popen([str(installed_exe)],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        src = make_bundle(pathlib.Path(tmp) / "src", "NEW")
+        r = run(src, target)
+        check("the install still succeeds after escalating", r.returncode == 0,
+              r.stdout + r.stderr)
+        try:
+            stubborn.wait(timeout=15)
+            stopped = True
+        except subprocess.TimeoutExpired:
+            stopped = False
+        check("the stubborn process is killed rather than worked around", stopped)
+        installed = subprocess.run(
+            [str(installed_exe), "--version"],
+            capture_output=True, text=True, errors="replace").stdout.strip()
+        check("the new version replaced it", installed == "NEW", installed)
+    finally:
+        if stubborn.poll() is None:
+            stubborn.kill()
+            stubborn.wait(timeout=10)
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

@@ -190,8 +190,17 @@ the same sources. The batch size and the split between halves are fixed in
 assembled from whichever batches came out clean, and the script aborts if the
 binary's hash changes underneath it.
 
-See "Final candidate" below for this build's numbers and its SHA-256. A commit
-count is a version label; the hash is the only thing that identifies a binary.
+A commit count is a version label; the hash is the only thing that identifies a
+binary. Note that there are **two** hashes and they are not interchangeable:
+
+| Where | What it is |
+|---|---|
+| `LocalNookSourceSHA256` in `Info.plist` | The compiler's output, **before** ad-hoc signing. Reproducible from source; not the file that ships. |
+| `dist/SHA256SUMS` | The **shipped** binary and disk image, after signing. This is what an installed copy must match. |
+
+They differ because `codesign` rewrites the Mach-O in place. Embedding the final
+hash in the plist is not possible — the signature covers the plist, so the value
+would have to be known before it exists.
 
 Two flakiness investigations in this pass were more informative than the green
 runs. A 15-run of build 21 produced *scattered* failures across unrelated

@@ -70,24 +70,43 @@ fi
 # killed by an install into /Applications.
 WAS_RUNNING=0
 TARGET_EXEC="$TARGET/Contents/MacOS/$APP_NAME"
+
+# Processes whose command line names the target's executable.
+#
+# Anchoring this to the start of the command line ("^$TARGET_EXEC") looked
+# tighter and was wrong: it silently missed anything launched through a wrapper,
+# so the script would replace a bundle out from under a live process while
+# reporting that nothing was running. Matching the full path anywhere in the
+# command line still cannot catch a different app — no other binary's argv
+# contains this path — and it does catch the wrapped case.
+#
+# `pgrep` excludes itself, but not us: running with --source pointing at the
+# target would put that path in our own argv, so this process and its parent are
+# excluded explicitly.
+running_from_target() {
+  pgrep -f "$TARGET_EXEC" 2>/dev/null | grep -vx -e "$$" -e "$PPID" || true
+}
+
 if [ -d "$TARGET" ]; then
-  RUNNING_PIDS="$(pgrep -f "^${TARGET_EXEC}" 2>/dev/null || true)"
+  RUNNING_PIDS="$(running_from_target)"
   if [ -n "$RUNNING_PIDS" ]; then
     WAS_RUNNING=1
     step "Stopping the running $APP_NAME (pids: $(echo "$RUNNING_PIDS" | tr '\n' ' '))…"
     # shellcheck disable=SC2086
     kill $RUNNING_PIDS 2>/dev/null || true
     for _ in $(seq 1 40); do
-      pgrep -f "^${TARGET_EXEC}" >/dev/null 2>&1 || break
+      [ -z "$(running_from_target)" ] && break
       sleep 0.25
     done
-    if pgrep -f "^${TARGET_EXEC}" >/dev/null 2>&1; then
+    STILL="$(running_from_target)"
+    if [ -n "$STILL" ]; then
       # shellcheck disable=SC2086
-      kill -9 $(pgrep -f "^${TARGET_EXEC}") 2>/dev/null || true
+      kill -9 $STILL 2>/dev/null || true
       sleep 0.5
     fi
-    pgrep -f "^${TARGET_EXEC}" >/dev/null 2>&1 \
-      && fail "could not stop the running $APP_NAME — the installation is untouched"
+    if [ -n "$(running_from_target)" ]; then
+      fail "could not stop the running $APP_NAME — the installation is untouched"
+    fi
     echo "    stopped"
   fi
 fi
@@ -111,6 +130,7 @@ restore() {
       if [ "$WAS_RUNNING" -eq 1 ]; then
         open -a "$TARGET" 2>/dev/null && echo "    relaunched the previous version" >&2
       fi
+
     else
       # The one case worth shouting about: say exactly where the copy is.
       echo "    COULD NOT RESTORE. Your previous app is intact at:" >&2
@@ -175,10 +195,10 @@ if [ "$LAUNCH" -eq 1 ]; then
   step "Launching…"
   open -a "$TARGET"
   for _ in $(seq 1 20); do
-    pgrep -f "^${TARGET_EXEC}" >/dev/null 2>&1 && break
+    [ -n "$(running_from_target)" ] && break
     sleep 0.25
   done
-  RUNNING="$(pgrep -f "^${TARGET_EXEC}" 2>/dev/null | head -1 || true)"
+  RUNNING="$(running_from_target | head -1)"
   if [ -n "$RUNNING" ]; then
     echo "    running as pid $RUNNING from $TARGET"
   else

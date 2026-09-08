@@ -150,6 +150,25 @@ counters alone cannot say which mechanism moved the notch.
 real per-model rule is exercised; the second injects the pointer so both
 branches run on every machine. Neither reports a pass for work not done.
 
+### 0b2. The install script could not see a process launched through a wrapper
+
+**Found by:** adding the scenario that was missing. Every earlier install test
+had either an empty target or a bystander running from a different path, so the
+"stop the running app" branch was skipped and reported nothing — the path about
+to run against a live installation was the one path with no coverage.
+
+**Cause:** `pgrep -f "^$TARGET_EXEC"`. Anchoring to the start of the command line
+looked tighter and was wrong: a process launched through a wrapper has the
+wrapper first, so the match failed and the script concluded nothing was running.
+It then replaced the bundle out from under a live process while reporting a
+clean install.
+
+**Fix:** match the full executable path anywhere in the command line — no other
+binary's argv contains it — and exclude this script and its parent explicitly,
+since `--source` pointing at the target would otherwise make it a match for
+itself. Two scenarios now cover it: a process that stops on `TERM`, and one that
+ignores `TERM` and must be escalated past.
+
 ### 0c. The install script reported success after failing
 
 **Found by:** `scripts/test-install.py`, on the first draft of `install.sh` —
