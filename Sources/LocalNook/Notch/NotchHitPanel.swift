@@ -65,6 +65,9 @@ final class NotchHitPanel: NSPanel {
 
 /// The catcher's content: reports hover, clicks and drags for the notch.
 final class NotchHitView: NSView {
+    /// Counts crossings AppKit actually delivered. Lets the self-test tell
+    /// "LocalNook ignored a crossing" from "no crossing was delivered".
+    nonisolated(unsafe) static var deliveredEnters = 0
     var onHoverChange: ((Bool) -> Void)?
     var onClick: (() -> Void)?
     var onDragEnter: (() -> Void)?
@@ -113,6 +116,7 @@ final class NotchHitView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        NotchHitView.deliveredEnters += 1
         guard !isInside else { return }
         isInside = true
         onHoverChange?(true)
