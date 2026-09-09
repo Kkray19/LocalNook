@@ -213,6 +213,11 @@ struct NotchRootView: View {
             hasPhysicalNotch: model.displayHasPhysicalNotch
         )
             .overlay(alignment: .top) { content }
+            // The content is composed at its final size, so it has to be masked
+            // by the silhouette while that silhouette is still growing.
+            // Clipping here rather than after the shadow keeps the shadow
+            // following the visible edge.
+            .clipShape(NotchShape(topRadius: topRadius, bottomRadius: bottomRadius))
             // Restrained: enough to lift the panel off the desktop, not enough
             // to read as a halo. The edge treatment lives in NotchSurface,
             // because only the glass material needs one.
@@ -236,24 +241,34 @@ struct NotchRootView: View {
         }
         if isOpen {
             ExpandedNotchView(model: model)
-                .padding(.horizontal, topRadius + settings.contentPadding)
+                .padding(.horizontal, settings.openCornerRadius + settings.contentPadding)
                 .padding(.bottom, settings.contentPadding)
+                // Laid out once, at the final size.
+                //
+                // This frame used to animate along with the shell, which meant
+                // the dashboard re-planned itself on every frame of the open:
+                // at the collapsed width every section is in overflow, so the
+                // panel began as a lone "More" control and sections popped in
+                // one at a time as it widened. That is what read as opening
+                // from a fixed midpoint rather than growing — the layout was
+                // arriving, not expanding.
+                //
+                // Fixed at the open size, the content is composed once and the
+                // growing silhouette reveals it, while the scale below carries
+                // it outward from the notch.
                 .frame(
-                    width: NotchShape.totalWidth(forBody: bodyWidth, topRadius: topRadius),
-                    height: bodyHeight
+                    width: NotchShape.totalWidth(
+                        forBody: NotchGeometry.openSize.width,
+                        topRadius: settings.openCornerRadius
+                    ),
+                    height: NotchGeometry.openSize.height
                 )
-                // Grows out of the notch rather than fading in over it: the
-                // scale is anchored at the top so the content appears to be
-                // drawn down out of the closed shape, which is what makes the
-                // open read as one movement instead of two.
-                // Subtler than it was: the content should look like it is
-                // being drawn out of the notch, not thrown into place. A large
-                // scale delta plus a large offset reads as a pop, which fights
-                // the smoothness the shell is trying to have.
+                // Anchored at the top centre, which is the notch itself, so the
+                // content expands away from it in every direction rather than
+                // sliding down into place.
                 .transition(
                     .opacity
-                        .combined(with: .scale(scale: 0.97, anchor: .top))
-                        .combined(with: .offset(y: -5))
+                        .combined(with: .scale(scale: 0.90, anchor: .top))
                 )
         }
     }
