@@ -4,13 +4,22 @@ Honest list of what is not done, and why.
 
 ## Known limitations
 
-- **Media sources are limited to Music and Spotify.** LocalNook reads playback
-  over Apple Events, which only reaches apps with a scripting dictionary.
-  Browser tabs and other Now Playing sources are invisible to it. The
-  alternative — the private MediaRemote framework, or the prebuilt
-  MediaRemoteAdapter binary upstream ships — was rejected: see
-  ARCHITECTURE.md § Media. `MediaProvider` exists so another backend can be
-  added without touching the UI.
+- **Media sources are Music, Spotify, Chrome and Safari.** LocalNook reads
+  playback over Apple Events, which only reaches apps with a scripting
+  dictionary; a source that publishes none is invisible. The alternative — the
+  private MediaRemote framework, or the prebuilt MediaRemoteAdapter binary
+  upstream ships — was rejected: see ARCHITECTURE.md § Media.
+- **Browser playback cannot be attributed to a tab without page access.**
+  Neither Chrome nor Safari publishes a per-tab audio property, and Chrome mixes
+  every tab's audio through one shared process, so "the browser is emitting
+  audio" is the strongest claim available. LocalNook says exactly that and marks
+  the tab's state unknown. Turning on "Allow JavaScript from Apple Events" lifts
+  this; LocalNook will not turn it on for you.
+- **Browser artwork is not implemented.** Deferred, not impossible: a page has
+  plausible local sources (a `<video>` poster, `navigator.mediaSession`
+  metadata) reachable through page access, but none has been verified here and
+  most hand back a URL, which would mean a network request this app does not
+  make.
 - **Album artwork is generated, not fetched.** Spotify exposes artwork only as a
   remote URL, and LocalNook makes no network requests. Tracks get a stable
   gradient derived from a hash instead.

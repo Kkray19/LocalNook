@@ -112,9 +112,7 @@ final class Permissions: ObservableObject {
             case .calendar:
                 states[kind] = Self.mapEvent(EKEventStore.authorizationStatus(for: .event))
             case .automation:
-                // There is no read-only API for Automation consent; it only
-                // becomes known once an Apple Event is actually sent.
-                states[kind] = MediaScriptBridge.lastAutomationState
+                states[kind] = Self.automationState()
             case .notifications:
                 // Resolved asynchronously below, but seed a value now so the
                 // dictionary always has an entry for every permission and the
@@ -136,6 +134,35 @@ final class Permissions: ObservableObject {
             }
             self?.states[.notifications] = state
         }
+    }
+
+    /// Automation consent, read rather than provoked.
+    ///
+    /// It is per-target, and this row is one line, so it summarises: granted if
+    /// any media app LocalNook talks to has said yes, refused if one has said
+    /// no and none has said yes, otherwise not requested. The per-browser
+    /// answer, which is the one that can be acted on, is shown in Settings ▸
+    /// Media beside its own Connect button.
+    ///
+    /// A target that is not running cannot be asked about, so it contributes
+    /// nothing either way; when nothing at all can be asked, the outcome of the
+    /// most recent real Apple Event stands in.
+    static func automationState() -> PermissionState {
+        let targets = ["com.apple.Music", "com.spotify.client"]
+            + MediaBrowser.allCases.map(\.bundleID)
+        var sawDenied = false
+        var sawAnswer = false
+        for bundleID in targets {
+            switch AutomationPermission.status(forBundleID: bundleID) {
+            case .granted: return .granted
+            case .denied: sawDenied = true; sawAnswer = true
+            case .notDetermined: sawAnswer = true
+            case .targetNotRunning, .other: break
+            }
+        }
+        if sawDenied { return .denied }
+        if sawAnswer { return .notDetermined }
+        return MediaScriptBridge.lastAutomationState
     }
 
     private static func mapEvent(_ status: EKAuthorizationStatus) -> PermissionState {

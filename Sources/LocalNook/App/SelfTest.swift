@@ -1148,6 +1148,12 @@ enum SelfTest {
     private static func testBrowserMedia() {
         section("Browser media (synthetic)")
 
+        // Fixtures and constructed observations throughout. Nothing here talks
+        // to a browser, plays audio, or asks for permission — so nothing here
+        // is evidence about what a real browser does. That is a separate
+        // question, answered by observing playback, and these results must not
+        // be read as standing in for it.
+
         // ── Which tabs count as a player ───────────────────────────────────
         check("a YouTube watch page is a player",
               BrowserMediaParser.site(forURL: "https://www.youtube.com/watch?v=abc") == "YouTube")
@@ -1191,26 +1197,261 @@ enum SelfTest {
         check("a song about ads is not mistaken for one",
               !BrowserMediaParser.looksLikeAdvertisement("Adagio in G Minor"))
 
+        // ── Reading the page's own answer ──────────────────────────────────
+        check("a playing page parses",
+              BrowserMediaParser.parsePageMedia("0|0|0|12.5|300")
+                  == PageMedia(isPaused: false, isEnded: false, isMuted: false,
+                               position: 12.5, duration: 300))
+        check("an empty reply means no media element was found, not a pause",
+              BrowserMediaParser.parsePageMedia("") == nil)
+        check("whitespace alone means nothing was found",
+              BrowserMediaParser.parsePageMedia("\n ") == nil)
+        check("a livestream reports no duration rather than zero",
+              BrowserMediaParser.parsePageMedia("0|0|0|900|-1")?.duration == nil)
+        check("a muted page is still reported as playing",
+              BrowserMediaParser.parsePageMedia("0|0|1|30|300")?.isPlaying == true)
+        check("an ended page is not playing",
+              BrowserMediaParser.parsePageMedia("1|1|0|300|300")?.isPlaying == false)
+        check("a garbled reply is discarded rather than half-read",
+              BrowserMediaParser.parsePageMedia("0|0|0|nonsense|300") == nil)
+        check("a truncated reply is discarded",
+              BrowserMediaParser.parsePageMedia("0|0|300") == nil)
+        check("a negative position is clamped rather than trusted",
+              BrowserMediaParser.parsePageMedia("0|0|0|-5|300")?.position == 0)
+
+        // ── Audio activity is debounced, but not remembered ────────────────
+        var hold = BrowserAudioHold()
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        check("silence with no history is silence", !hold.observe(false, now: t0))
+        check("audio is reported at once", hold.observe(true, now: t0))
+        check("a momentary gap does not blink the widget out",
+              hold.observe(false, now: t0.addingTimeInterval(1)))
+        check("a real stop is reported once the window passes",
+              !hold.observe(false, now: t0.addingTimeInterval(BrowserAudioHold.window + 0.1)))
+        var reset = BrowserAudioHold()
+        _ = reset.observe(true, now: t0)
+        reset.reset()
+        check("a reset forgets the hold immediately",
+              !reset.observe(false, now: t0.addingTimeInterval(0.1)))
+        var backwards = BrowserAudioHold()
+        _ = backwards.observe(true, now: t0)
+        check("a clock that jumps backwards does not hold forever",
+              !backwards.observe(false, now: t0.addingTimeInterval(-3600)))
+
+        // ── What may honestly be claimed ───────────────────────────────────
+        //
+        // The matrix the browser path has to survive. Each case names an
+        // observation and asserts the claim it does *not* license.
+        func tab(_ key: String, _ title: String, page: PageMedia? = nil) -> BrowserMediaTab {
+            BrowserMediaTab(key: key, title: title,
+                            url: "https://www.youtube.com/watch?v=\(key)",
+                            site: "YouTube", page: page)
+        }
+        func playingPage(at position: Double = 10, duration: Double? = 300) -> PageMedia {
+            PageMedia(isPaused: false, isEnded: false, isMuted: false,
+                      position: position, duration: duration)
+        }
+        func pausedPage(at position: Double = 10) -> PageMedia {
+            PageMedia(isPaused: true, isEnded: false, isMuted: false,
+                      position: position, duration: 300)
+        }
+        func resolve(
+            _ tabs: [BrowserMediaTab], audio: Bool, incumbent: String? = nil
+        ) -> BrowserPlaybackResolver.Resolution? {
+            BrowserPlaybackResolver.resolve(
+                tabs: tabs, audioActive: audio,
+                browserName: "Google Chrome", incumbentTabKey: incumbent
+            )
+        }
+
+        // Nothing open.
+        check("no tabs and no audio says nothing",
+              resolve([], audio: false) == nil)
+        check("audio with no player tab open is not attributed to a player",
+              resolve([], audio: true) == nil,
+              "an unrelated tab's audio was reported as media")
+
+        // One tab, no page access: the browser is audible, the tab is not known
+        // to be the source.
+        let oneTab = resolve([tab("a", "Track One")], audio: true)
+        check("one media tab with browser audio is named", oneTab?.title == "Track One")
+        check("one media tab with browser audio is not called playing",
+              oneTab?.state == .unknown,
+              "got \(oneTab?.state.rawValue ?? "nil")")
+        check("that wording says what was actually measured",
+              statusText(oneTab) == "Browser audio active")
+        check("it offers no play/pause it cannot honour",
+              oneTab?.capabilities.contains(.playPause) == false)
+        check("it claims no authoritative playback state",
+              oneTab?.capabilities.contains(.playbackState) == false)
+        check("a silent browser with a tab open reports nothing at all",
+              resolve([tab("a", "Track One")], audio: false) == nil,
+              "no audio was read as evidence of a pause")
+
+        // Two tabs, no page access: nothing distinguishes them.
+        let twoTabs = resolve([tab("a", "Track One"), tab("b", "Track Two")], audio: true)
+        check("two media tabs and no page access names neither",
+              twoTabs?.title == "Browser audio active",
+              "got \(twoTabs?.title ?? "nil")")
+        check("that case is marked ambiguous", twoTabs?.isAmbiguous == true)
+        check("the ambiguous case says the tab is unknown",
+              statusText(twoTabs) == "Source tab unknown")
+        check("the ambiguous case names the browser and the count",
+              twoTabs?.subtitle == "Google Chrome · 2 media tabs")
+        check("the ambiguous case selects no tab", twoTabs?.tabKey.isEmpty == true)
+
+        // Two tabs, page access: the page names the one that is playing.
+        let identified = resolve([
+            tab("a", "Track One", page: pausedPage()),
+            tab("b", "Track Two", page: playingPage()),
+        ], audio: true)
+        check("page access identifies which of two tabs is playing",
+              identified?.title == "Track Two")
+        check("an identified tab is called playing", identified?.state == .playing)
+        check("an identified tab is not ambiguous", identified?.isAmbiguous == false)
+        check("an identified tab offers play/pause",
+              identified?.capabilities.contains(.playPause) == true)
+        check("an identified tab with a duration offers a scrubber",
+              identified?.capabilities.contains(.position) == true)
+
+        // A paused video while another plays.
+        check("a paused tab does not win over a playing one",
+              resolve([
+                  tab("a", "Paused One", page: pausedPage()),
+                  tab("b", "Playing One", page: playingPage()),
+              ], audio: true)?.title == "Playing One")
+
+        // Everything paused, and everything readable: a definite statement.
+        let allPaused = resolve([
+            tab("a", "Track One", page: pausedPage()),
+            tab("b", "Track Two", page: pausedPage()),
+        ], audio: false)
+        check("every readable tab paused is reported as paused",
+              allPaused?.state == .paused)
+        check("a definite pause claims an authoritative state",
+              allPaused?.capabilities.contains(.playbackState) == true)
+
+        // Page access on, but one tab could not be read — an embedded player in
+        // a cross-origin frame, or a page with no media element.
+        let partiallyReadable = resolve([
+            tab("a", "Readable", page: pausedPage()),
+            tab("b", "Unreadable"),
+        ], audio: true)
+        check("an unreadable tab blocks a paused claim about the others",
+              partiallyReadable?.state == .unknown,
+              "got \(partiallyReadable?.state.rawValue ?? "nil")")
+        check("and that case is ambiguous rather than named",
+              partiallyReadable?.isAmbiguous == true)
+        check("without audio, an unreadable tab does not block the paused claim",
+              resolve([tab("a", "Readable", page: pausedPage()),
+                       tab("b", "Unreadable")], audio: false)?.state == .paused)
+
+        // Muted playback: the page knows, CoreAudio cannot.
+        let muted = resolve([tab("a", "Muted", page: PageMedia(
+            isPaused: false, isEnded: false, isMuted: true, position: 5, duration: 300
+        ))], audio: false)
+        check("muted playback is still playing, because the page said so",
+              muted?.state == .playing)
+
+        // Buffering: not paused, nothing played yet.
+        let buffering = resolve([tab("a", "Buffering", page: PageMedia(
+            isPaused: false, isEnded: false, isMuted: false, position: 0, duration: nil
+        ))], audio: false)
+        check("a buffering tab is playing with no progress bar",
+              buffering?.state == .playing && buffering?.durationIsUnknown == true)
+        check("a buffering tab offers no scrubber",
+              buffering?.capabilities.contains(.position) == false)
+
+        // Ended media.
+        let ended = PageMedia(isPaused: true, isEnded: true, isMuted: false,
+                              position: 300, duration: 300)
+        check("an ended video with no audio reports nothing",
+              resolve([tab("a", "Finished", page: ended)], audio: false) == nil)
+        check("an ended video is never called playing",
+              resolve([tab("a", "Finished", page: ended)], audio: true)?.state != .playing)
+        check("a second tab playing wins over an ended one",
+              resolve([tab("a", "Finished", page: ended),
+                       tab("b", "Live One", page: playingPage())], audio: true)?.title
+                  == "Live One")
+
+        // A livestream: position without an end.
+        let livestream = resolve([tab("a", "Stream", page: playingPage(at: 900, duration: nil))],
+                                 audio: true)
+        check("a livestream is playing", livestream?.state == .playing)
+        check("a livestream has no known duration", livestream?.durationIsUnknown == true)
+        check("a livestream offers no scrubber",
+              livestream?.capabilities.contains(.position) == false)
+        check("a livestream still offers play/pause",
+              livestream?.capabilities.contains(.playPause) == true)
+
+        // Stickiness, and its limit.
+        let bothPlaying = [tab("a", "Track One", page: playingPage()),
+                           tab("b", "Track Two", page: playingPage())]
+        check("the tab already on screen is kept while it is still playing",
+              resolve(bothPlaying, audio: true, incumbent: "b")?.tabKey == "b",
+              "the widget would have jumped between two playing tabs")
+        check("an incumbent that stopped gives way",
+              resolve([tab("a", "Track One", page: playingPage()),
+                       tab("b", "Track Two", page: pausedPage())],
+                      audio: true, incumbent: "b")?.tabKey == "a")
+        check("an incumbent whose tab closed is replaced, not remembered",
+              resolve([tab("a", "Track One", page: playingPage())],
+                      audio: true, incumbent: "gone")?.tabKey == "a")
+        check("closing every media tab clears the widget",
+              resolve([], audio: true, incumbent: "a") == nil)
+
+        // Repeated polls with unchanged input must settle.
+        var held: String? = nil
+        var picks: [String] = []
+        for _ in 0..<12 {
+            held = resolve(bothPlaying, audio: true, incumbent: held)?.tabKey
+            picks.append(held ?? "")
+        }
+        check("repeated polls settle on one tab rather than alternating",
+              Set(picks).count == 1, "picked \(Set(picks).sorted())")
+
+        // An advert is labelled as one rather than as the track.
+        check("an advertisement is attributed to the advert, not the video",
+              resolve([tab("a", "Ad · 15s", page: playingPage())], audio: true)?.subtitle
+                  == "Advertisement · YouTube")
+
         // ── Capability gating ──────────────────────────────────────────────
         var titleOnly = NowPlaying.idle
         titleOnly.title = "Something"
-        titleOnly.state = .playing
+        titleOnly.state = .unknown
         titleOnly.capabilities = .titleOnly
         check("a title-only source offers no play/pause",
               !titleOnly.capabilities.contains(.playPause))
         check("a title-only source offers no skip",
               !titleOnly.capabilities.contains(.skip))
         check("a title-only source draws no progress bar", !titleOnly.showsProgress)
-        check("a title-only source still reports playing or paused",
-              titleOnly.capabilities.contains(.playbackState))
+        check("a title-only source claims no authoritative state",
+              !titleOnly.capabilities.contains(.playbackState))
+        check("a title-only source is not idle — it is showing something true",
+              !titleOnly.isIdle)
+        check("an unknown state still animates the level meter",
+              titleOnly.showsMotion, "audio is measured; only its tab is in doubt")
 
         var scripted = NowPlaying.idle
         scripted.title = "Track"
         scripted.duration = 200
         scripted.position = 20
+        scripted.state = .playing
         scripted.capabilities = .full
         check("a scripted source offers play/pause", scripted.capabilities.contains(.playPause))
         check("a scripted source draws a progress bar", scripted.showsProgress)
+        check("a definite state says so", scripted.state.isDefinite)
+        check("an inferred state does not", !PlaybackState.unknown.isDefinite)
+
+        // ── Wording ────────────────────────────────────────────────────────
+        check("playing is called playing", statusText(.playing, ambiguous: false) == "Playing")
+        check("paused is called paused", statusText(.paused, ambiguous: false) == "Paused")
+        check("an inferred state is never called playing",
+              statusText(.unknown, ambiguous: false) != "Playing"
+                  && statusText(.unknown, ambiguous: true) != "Playing")
+        check("an inferred state is never called paused",
+              statusText(.unknown, ambiguous: false) != "Paused"
+                  && statusText(.unknown, ambiguous: true) != "Paused")
 
         // ── Unknown duration: livestreams and metadata that never arrives ──
         var live = scripted
@@ -1239,6 +1480,13 @@ enum SelfTest {
         check("playing beats paused",
               MediaManager.choose(from: [snapshot("a", .paused), snapshot("b", .playing)],
                                   current: "")?.sourceID == "b")
+        check("a source that knows it is playing beats one that only might be",
+              MediaManager.choose(from: [snapshot("a", .unknown), snapshot("b", .playing)],
+                                  current: "")?.sourceID == "b",
+              "an inferred state masked a measured one")
+        check("a source that might be playing beats one that is paused",
+              MediaManager.choose(from: [snapshot("a", .paused), snapshot("b", .unknown)],
+                                  current: "")?.sourceID == "b")
         check("the source already on screen is kept while it plays",
               MediaManager.choose(from: [snapshot("a", .playing), snapshot("b", .playing)],
                                   current: "b")?.sourceID == "b",
@@ -1254,16 +1502,16 @@ enum SelfTest {
 
         // Repeated polls with the same input must not oscillate.
         var current = ""
-        var picks: [String] = []
+        var sourcePicks: [String] = []
         for _ in 0..<12 {
             let pick = MediaManager.choose(
                 from: [snapshot("a", .playing), snapshot("b", .playing)], current: current
             )
             current = pick?.sourceID ?? ""
-            picks.append(current)
+            sourcePicks.append(current)
         }
         check("repeated polls settle on one source rather than alternating",
-              Set(picks).count == 1, "picked \(Set(picks).sorted())")
+              Set(sourcePicks).count == 1, "picked \(Set(sourcePicks).sorted())")
 
         // ── Stale state is cleared ─────────────────────────────────────────
         check("idle has no capabilities at all", NowPlaying.idle.capabilities.isEmpty)
@@ -1280,15 +1528,60 @@ enum SelfTest {
         check("an empty bundle identifier is not reported as playing",
               !BrowserAudioMonitor.isOutputtingAudio(bundleID: ""))
 
+        // ── Permission is read, never provoked ─────────────────────────────
+        check("noErr reads as granted", AutomationPermission.interpret(0) == .granted)
+        check("-1743 reads as refused, not as absent",
+              AutomationPermission.interpret(-1743) == .denied)
+        check("-1744 reads as never asked, not as refused",
+              AutomationPermission.interpret(-1744) == .notDetermined,
+              "a pending consent would have been shown as a refusal")
+        check("-600 reads as the target not running, which says nothing about consent",
+              AutomationPermission.interpret(-600) == .targetNotRunning)
+        check("an unexpected status is kept as itself rather than flattened",
+              AutomationPermission.interpret(-12345) == .other(-12345))
+        check("an empty bundle identifier is never asked about",
+              !AutomationPermission.status(forBundleID: "").isGranted)
+        check("a self-test never consults real automation consent",
+              AutomationPermission.status(forBundleID: "com.google.Chrome")
+                  == .targetNotRunning,
+              "the self-test read the machine's real TCC state")
+        // The real call costs ~12.6 ms, and both media views ask about both
+        // browsers while building their bodies. Asking must therefore be cheap
+        // by construction, not by luck.
+        AutomationPermission.forgetCachedAnswers()
+        let askStart = Date()
+        for _ in 0..<500 { _ = AutomationPermission.status(forBundleID: "com.google.Chrome") }
+        let askCost = Date().timeIntervalSince(askStart)
+        check("asking about consent repeatedly is cheap enough for a view body",
+              askCost < 0.1,
+              "500 reads took \(Int(askCost * 1000))ms — a blocking TCC call reached the UI")
+
         // ── Browsers are never launched, and stay off until switched on ────
         let chrome = BrowserMediaProvider(browser: .chrome)
         check("a browser provider is unavailable while the setting is off",
               Settings.shared.browserMediaEnabled || !chrome.isAvailable,
               "the provider offered itself without consent")
+        check("a browser provider is unavailable without automation consent",
+              !chrome.isAvailable,
+              "the provider would have scripted a browser it has no permission for")
         check("the browser toggle hint names a real menu path",
               MediaBrowser.chrome.javaScriptToggleHint.contains("Apple Events")
                   && MediaBrowser.safari.javaScriptToggleHint.contains("Apple Events"))
     }
+
+    /// The words a resolution would put on screen.
+    private static func statusText(_ state: PlaybackState, ambiguous: Bool) -> String {
+        var snapshot = NowPlaying.idle
+        snapshot.state = state
+        snapshot.sourceIsAmbiguous = ambiguous
+        return snapshot.statusText
+    }
+
+    private static func statusText(_ resolution: BrowserPlaybackResolver.Resolution?) -> String {
+        guard let resolution else { return "" }
+        return statusText(resolution.state, ambiguous: resolution.isAmbiguous)
+    }
+
 
     /// Motion honours Reduce Motion, and survives interruption.
     ///

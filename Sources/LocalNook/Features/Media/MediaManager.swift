@@ -66,21 +66,60 @@ final class MediaManager: ObservableObject {
     /// consequence was that the dashboard's media section said "Nothing
     /// playing" permanently — it was never asking anything, for any source.
     ///
-    /// Consent that already exists changes that. Two conditions each mean the
-    /// answer to the prompt is already known, so polling adds no dialog:
+    /// Consent that already exists changes that, and it can now be *read*
+    /// rather than inferred: `AutomationPermission.status` answers from the TCC
+    /// database without sending an event, so a browser whose answer is already
+    /// "yes" can be polled with no dialog possible. The two older conditions
+    /// remain for the scripted apps, whose consent is still only observable
+    /// through the outcome of an attempt.
     ///
-    ///   * the user switched browser media on, which is an explicit choice made
-    ///     in Settings with the permission consequence stated there; or
-    ///   * an Apple Event has already succeeded this session, so consent is on
-    ///     record.
-    ///
-    /// Neither is inferred from the widget merely being visible.
+    /// Nothing here is inferred from the widget merely being visible.
     func activateIfAlreadyConsented() {
         guard !AppInfo.isSelfTest else { return }
         guard Settings.shared.browserMediaEnabled
             || MediaScriptBridge.lastAutomationState == .granted
         else { return }
         activate()
+    }
+
+    // MARK: Connecting a browser
+
+    /// Browsers that are switched on and running but not yet permitted.
+    ///
+    /// Their providers report nothing at all rather than prompting, so without
+    /// this the widget would just look empty for a reason it never explains.
+    var browsersAwaitingConnection: [(browser: MediaBrowser, status: AutomationPermission.Status)] {
+        providers.compactMap { provider in
+            guard let browserProvider = provider as? BrowserMediaProvider,
+                  let status = browserProvider.connectionStatus
+            else { return nil }
+            return (browserProvider.browser, status)
+        }
+    }
+
+    /// The deliberate request for Automation consent.
+    ///
+    /// This is the only call in the app that may raise the system dialog, and
+    /// it happens because someone pressed a button asking for exactly that. It
+    /// is also what creates the app's entry under System Settings ▸ Privacy &
+    /// Security ▸ Automation: that list shows apps that have asked, so until
+    /// something asks there is nothing there to switch on. Refusing here is
+    /// recoverable — the entry exists afterwards either way.
+    ///
+    /// Blocks while the dialog is up, so it runs off the main actor.
+    func connect(_ browser: MediaBrowser) {
+        let bundleID = browser.bundleID
+        Task.detached(priority: .userInitiated) {
+            let status = AutomationPermission.request(forBundleID: bundleID)
+            await MainActor.run {
+                Permissions.shared.refreshAll()
+                self.objectWillChange.send()
+                if status.isGranted {
+                    self.activate()
+                    self.refreshNow()
+                }
+            }
+        }
     }
 
     deinit { pollTask?.cancel() }
@@ -185,24 +224,35 @@ final class MediaManager: ObservableObject {
         Task { await poll() }
     }
 
-    /// Picks the most interesting snapshot: a playing source always wins over a
-    /// paused one, so having Music paused in the background does not mask
-    /// Spotify actually playing.
     /// Which of several sources to show.
     ///
-    /// Playing beats paused, and the source already on screen beats an equally
-    /// playing rival. Without that second rule two players — a browser tab and
-    /// Music, say — swap the widget back and forth on alternate polls, which
-    /// makes the panel unreadable and the controls untrustworthy. Stickiness
-    /// only lasts while the incumbent is still playing: when it stops, the
-    /// choice is made afresh.
+    /// Ranked by how much is actually known, then made sticky. A source that
+    /// reports its own state beats one whose state was inferred from a browser
+    /// making a noise, which in turn beats a paused source — so Music playing
+    /// is never masked by a Chrome tab that might be, and a Chrome tab that
+    /// might be is never masked by Spotify sitting paused in the background.
+    ///
+    /// Stickiness is the second rule and it matters as much: without it two
+    /// equally ranked players swap the widget back and forth on alternate
+    /// polls, which makes the panel unreadable and its controls untrustworthy.
+    /// It only holds while the incumbent stays in the top rank — when it stops,
+    /// the choice is made afresh rather than preserved.
     static func choose(from snapshots: [NowPlaying], current: String) -> NowPlaying? {
         guard !snapshots.isEmpty else { return nil }
-        let playing = snapshots.filter { $0.state == .playing }
-        if let incumbent = playing.first(where: { $0.sourceID == current }) { return incumbent }
-        if let first = playing.first { return first }
-        if let incumbent = snapshots.first(where: { $0.sourceID == current }) { return incumbent }
-        return snapshots.first
+        guard let best = snapshots.map(rank).min() else { return nil }
+        let tier = snapshots.filter { rank($0) == best }
+        if let incumbent = tier.first(where: { $0.sourceID == current }) { return incumbent }
+        return tier.first
+    }
+
+    /// Lower is more worth showing.
+    private static func rank(_ snapshot: NowPlaying) -> Int {
+        switch snapshot.state {
+        case .playing: 0
+        case .unknown: 1
+        case .paused: 2
+        case .stopped: 3
+        }
     }
 
     private func poll() async {
@@ -247,7 +297,8 @@ final class MediaManager: ObservableObject {
     }
 
     func playPause() {
-        guard let provider = activeProvider else { return }
+        guard let provider = activeProvider,
+              nowPlaying.capabilities.contains(.playPause) else { return }
         // Reflect the new state immediately; the next poll confirms it.
         nowPlaying.position = nowPlaying.interpolatedPosition
         nowPlaying.state = nowPlaying.state == .playing ? .paused : .playing
@@ -278,7 +329,9 @@ final class MediaManager: ObservableObject {
     }
 
     func seek(toFraction fraction: Double) {
-        guard let provider = activeProvider, nowPlaying.duration > 0 else { return }
+        guard let provider = activeProvider,
+              nowPlaying.capabilities.contains(.seek),
+              nowPlaying.duration > 0 else { return }
         let seconds = max(0, min(nowPlaying.duration, fraction * nowPlaying.duration))
         nowPlaying.position = seconds
         nowPlaying.positionSampledAt = Date()

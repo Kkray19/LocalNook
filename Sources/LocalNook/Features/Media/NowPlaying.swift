@@ -9,10 +9,25 @@
 import AppKit
 import Foundation
 
-enum PlaybackState: String, Sendable {
+nonisolated enum PlaybackState: String, Sendable {
     case playing, paused, stopped
+    /// Something is audible but nothing has said what, or whether *this* is it.
+    ///
+    /// Only a browser produces this. Neither Chrome's nor Safari's scripting
+    /// dictionary has any per-tab audio or playback property — Chrome's `tab`
+    /// class is `id`, `title`, `URL`, `loading`; Safari's is `source`, `URL`,
+    /// `index`, `text`, `visible`, `name` — and CoreAudio attributes output to
+    /// a *process*, which in Chrome is one shared `audio.mojom.AudioService`
+    /// utility for every tab at once. So without page access there is no signal
+    /// anywhere that says which tab the sound is coming from. Saying "Playing"
+    /// then would be a guess wearing the clothes of a fact.
+    case unknown
 
     var isActive: Bool { self != .stopped }
+
+    /// Whether the source itself told us this, as opposed to it being inferred
+    /// from the browser making a noise.
+    var isDefinite: Bool { self != .unknown }
 }
 
 /// What a source can actually do, as opposed to what it can be asked to do.
@@ -22,7 +37,7 @@ enum PlaybackState: String, Sendable {
 /// dictionary yields a title and nothing else: no position, no artwork, and no
 /// way to pause it. Showing a pause button there would produce a control that
 /// silently does nothing, which is worse than showing no control.
-struct MediaCapabilities: OptionSet, Equatable, Sendable {
+nonisolated struct MediaCapabilities: OptionSet, Equatable, Sendable {
     let rawValue: Int
     init(rawValue: Int) { self.rawValue = rawValue }
 
@@ -39,14 +54,16 @@ struct MediaCapabilities: OptionSet, Equatable, Sendable {
     static let full: MediaCapabilities = [
         .playbackState, .position, .artwork, .playPause, .skip, .seek
     ]
-    /// A browser tab identified only by its title, with playback inferred from
-    /// whether the app is emitting audio. Enough to say *what* is playing, and
-    /// nothing more.
-    static let titleOnly: MediaCapabilities = [.playbackState]
+    /// A browser tab known only by its title, with no page access.
+    ///
+    /// Empty on purpose, `playbackState` included: the browser is emitting
+    /// audio, which is not the same as this tab playing. The state travels as
+    /// `.unknown` and the UI says so in words rather than claiming otherwise.
+    static let titleOnly: MediaCapabilities = []
 }
 
 /// A snapshot of what a media app is playing.
-struct NowPlaying: Equatable, Sendable {
+nonisolated struct NowPlaying: Equatable, Sendable {
     var sourceID: String
     var sourceName: String
     var state: PlaybackState
@@ -65,6 +82,10 @@ struct NowPlaying: Equatable, Sendable {
     /// livestream, or a video whose metadata has not loaded. A progress bar
     /// must not be drawn at 0% for something that has no end.
     var durationIsUnknown = false
+    /// Set when more than one candidate could be the source and nothing
+    /// distinguishes them. The title then names the browser rather than a tab,
+    /// because naming one of several would be picking at random.
+    var sourceIsAmbiguous = false
 
     static let idle = NowPlaying(
         sourceID: "", sourceName: "", state: .stopped, title: "", artist: "",
@@ -73,6 +94,34 @@ struct NowPlaying: Equatable, Sendable {
     )
 
     var isIdle: Bool { state == .stopped || title.isEmpty }
+
+    /// What to tell the reader about playback, in words that are true.
+    ///
+    /// The `.unknown` cases are the whole point of this property. "Browser
+    /// audio active" is a statement about the browser; "Playing" would be a
+    /// statement about the tab, and only page access can support that one.
+    var statusText: String {
+        switch state {
+        case .playing: "Playing"
+        case .paused: "Paused"
+        case .stopped: "Not playing"
+        case .unknown: sourceIsAmbiguous ? "Source tab unknown" : "Browser audio active"
+        }
+    }
+
+    var statusSymbol: String {
+        switch state {
+        case .playing: "speaker.wave.2.fill"
+        case .paused: "pause.fill"
+        case .stopped: "stop.fill"
+        case .unknown: sourceIsAmbiguous ? "questionmark.circle" : "speaker.wave.2.fill"
+        }
+    }
+
+    /// Whether anything is moving, for the animated level meter. True for
+    /// `.unknown` because audio genuinely *is* coming out of the browser —
+    /// that much is measured; only its tab is in doubt.
+    var showsMotion: Bool { state == .playing || state == .unknown }
 
     /// Position advanced to *now*, so the scrubber moves smoothly between the
     /// once-a-second polls instead of stepping.

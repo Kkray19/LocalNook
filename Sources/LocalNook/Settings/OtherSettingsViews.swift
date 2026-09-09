@@ -284,7 +284,7 @@ struct WidgetDetailSettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsSection(
                 title: "Media",
-                footer: "LocalNook reads playback over Apple Events, which reaches apps with a scripting dictionary — Music and Spotify. Browser tabs and other Now Playing sources are not visible this way. See ARCHITECTURE.md for why."
+                footer: "LocalNook reads playback over Apple Events, which reaches apps that publish a scripting dictionary — Music, Spotify, and browser tabs. There is no system-wide Now Playing feed available to an ordinary app, so a source that publishes no dictionary is not visible. See ARCHITECTURE.md."
             ) {
                 Toggle("Show album artwork", isOn: settings.binding(\.mediaShowArtwork))
                 SettingsSlider(
@@ -295,26 +295,38 @@ struct WidgetDetailSettingsView: View {
 
             SettingsSection(
                 title: "Browser media",
-                footer: "Off by default because reading tabs needs Automation permission for that browser, and macOS asks the first time. Nothing is read until you switch this on, and nothing leaves this Mac."
+                footer: "Off by default because reading tabs needs Automation permission for that browser. LocalNook checks whether it already has that permission without asking for it, so nothing here can raise a dialog on its own — pressing Connect is what asks. That press is also what puts LocalNook into System Settings ▸ Privacy & Security ▸ Automation: that list only shows apps that have asked, so until you press it there is nothing there to find. Nothing is read until you switch this on, and nothing leaves this Mac."
             ) {
                 Toggle("Show what a browser is playing",
                        isOn: settings.binding(\.browserMediaEnabled))
                 Text("Chrome and Safari. LocalNook reads the title of a tab on a "
                      + "known player — YouTube, YouTube Music, Spotify Web, "
                      + "SoundCloud, Twitch, Vimeo, Bandcamp — and asks macOS "
-                     + "whether the browser is emitting audio, which is how it "
-                     + "knows whether that tab is playing or merely open.")
+                     + "whether the browser is emitting audio.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("For a scrubber and a working play/pause button, also turn on "
-                     + "“Allow JavaScript from Apple Events” in your browser "
-                     + "(Chrome: View ▸ Developer. Safari: Develop menu). Without "
-                     + "it LocalNook can say what is playing but cannot control "
-                     + "it, and shows no buttons rather than ones that do nothing.")
+                Text("That says the browser is making a noise, not which tab is "
+                     + "making it: neither browser publishes a per-tab audio "
+                     + "property, and Chrome mixes every tab through one shared "
+                     + "audio process. So playback shows as “Browser audio "
+                     + "active” rather than “Playing”, unless page access is on.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Text("For a real playing/paused state, a scrubber and a working "
+                     + "play/pause button, also turn on “Allow JavaScript from "
+                     + "Apple Events” in your browser (Chrome: View ▸ Developer. "
+                     + "Safari: Develop menu). It lets any scripting app run "
+                     + "JavaScript in every tab, so it is your call, and "
+                     + "LocalNook cannot and does not set it for you.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if settings.browserMediaEnabled {
+                    BrowserConnectionRows()
+                }
             }
 
             SettingsSection(title: "Shelf") {
@@ -377,6 +389,71 @@ struct WidgetDetailSettingsView: View {
                 Toggle("Tell me when a session goes quiet", isOn: settings.binding(\.sessionsNotifyOnIdle))
                 Button("Rescan now") { SessionMonitor.shared.restart() }
             }
+        }
+    }
+}
+
+
+/// Per-browser Automation consent, read and requested where it can be acted on.
+///
+/// The state shown here is read with `AEDeterminePermissionToAutomateTarget`,
+/// which answers from the system's own records without sending an Apple Event,
+/// so simply opening this pane asks the user for nothing. Pressing Connect is
+/// the deliberate request — and the only thing that puts LocalNook into System
+/// Settings ▸ Privacy & Security ▸ Automation, which lists apps that have
+/// asked. Until something asks, there is no switch there to find.
+private struct BrowserConnectionRows: View {
+    @ObservedObject private var media = MediaManager.shared
+    @LNState private var refreshed = Date()
+
+    private let ticker = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(MediaBrowser.allCases) { browser in
+                row(for: browser)
+            }
+        }
+        .padding(.top, 2)
+        .onReceive(ticker) { refreshed = $0 }
+    }
+
+    private func row(for browser: MediaBrowser) -> some View {
+        let installed = MediaScriptBridge.isInstalled(bundleID: browser.bundleID)
+        let running = MediaScriptBridge.isRunning(bundleID: browser.bundleID)
+        let status = AutomationPermission.status(forBundleID: browser.bundleID)
+        return HStack(spacing: 8) {
+            Image(systemName: status.isGranted ? "checkmark.circle.fill" : "circle.dashed")
+                .foregroundStyle(status.isGranted ? Color.green : .secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(browser.displayName).font(.system(size: 12, weight: .medium))
+                Text(detail(installed: installed, running: running, status: status))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if installed, running, !status.isGranted {
+                if status == .denied {
+                    Button("Open Settings") { Permissions.shared.open(.automation) }
+                } else {
+                    Button("Connect") { media.connect(browser) }
+                }
+            }
+        }
+        .id(refreshed)
+    }
+
+    private func detail(
+        installed: Bool, running: Bool, status: AutomationPermission.Status
+    ) -> String {
+        guard installed else { return "Not installed" }
+        guard running else { return "Not running — open it to connect" }
+        switch status {
+        case .granted: return "Connected"
+        case .denied: return "Refused — re-enable under Automation ▸ LocalNook"
+        case .notDetermined: return "Not requested yet"
+        case .targetNotRunning: return "Not running — open it to connect"
+        case .other(let code): return "Unexpected status \(code)"
         }
     }
 }

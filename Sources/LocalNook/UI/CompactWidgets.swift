@@ -33,6 +33,25 @@ struct CompactMediaView: View {
                     detail: "Allow LocalNook to control Music and Spotify.",
                     actionTitle: "Open Settings"
                 ) { Permissions.shared.open(.automation) }
+            } else if let pending = media.browsersAwaitingConnection.first,
+                      media.nowPlaying.isIdle {
+                // Switched on and running, but not permitted. Consent is asked
+                // for by pressing this, never by the dashboard appearing.
+                CompactMessage(
+                    symbol: "link.badge.plus",
+                    title: "\(pending.browser.displayName) isn't connected",
+                    detail: pending.status == .denied
+                        ? "Automation access was refused."
+                        : "macOS will ask once.",
+                    actionTitle: pending.status == .denied
+                        ? "Open Settings" : "Connect"
+                ) {
+                    if pending.status == .denied {
+                        Permissions.shared.open(.automation)
+                    } else {
+                        media.connect(pending.browser)
+                    }
+                }
             } else if media.nowPlaying.isIdle {
                 CompactMessage(
                     symbol: "play.slash",
@@ -137,12 +156,15 @@ struct CompactMediaView: View {
                 TransportControl(symbol: "forward.fill", size: 12) { media.next() }
             }
             if !capabilities.contains(.playPause) {
-                Text(media.nowPlaying.state == .playing ? "Playing" : "Paused")
+                Text(media.nowPlaying.statusText)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(Theme.secondaryText)
+                    .lineLimit(1)
             }
             Spacer(minLength: 0)
-            PlayingIndicator(isPlaying: media.nowPlaying.state == .playing)
+            // Audio really is coming out of the browser in the `.unknown` case;
+            // only which tab it belongs to is in doubt, so the meter moves.
+            PlayingIndicator(isPlaying: media.nowPlaying.showsMotion)
         }
     }
 

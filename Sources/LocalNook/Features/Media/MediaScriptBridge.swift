@@ -13,9 +13,10 @@
 //  scripting dictionary. That is more than it once sounded — Chrome and Safari
 //  both publish one, so browser tabs *are* reachable this way, and
 //  BrowserMediaProvider uses it. What Apple Events cannot give is a system-wide
-//  now-playing feed: MediaRemote has been entitlement-gated since macOS 15.4,
-//  measured nil on this machine while audio was confirmed playing. See
-//  BrowserMedia.swift for the full finding.
+//  now-playing feed. MediaRemote, which used to, is entitlement-gated as of
+//  macOS 15.4 and returned nil when probed from this app on this Mac while
+//  audio was confirmed playing — a result scoped to that test, not a claim
+//  about every configuration. See BrowserMedia.swift for the full finding.
 //
 
 import AppKit

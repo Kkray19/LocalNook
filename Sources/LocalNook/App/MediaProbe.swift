@@ -28,6 +28,14 @@ enum MediaProbe {
         print("LocalNook media probe")
         print("browser media enabled: \(Settings.shared.browserMediaEnabled)")
         print("")
+        print("Automation consent, read without sending an event:")
+        for bundleID in ["com.apple.Music", "com.spotify.client",
+                         "com.google.Chrome", "com.apple.Safari"] {
+            let running = MediaScriptBridge.isRunning(bundleID: bundleID)
+            print("  \(bundleID): \(AutomationPermission.status(forBundleID: bundleID).label)"
+                  + " (running=\(running))")
+        }
+        print("")
 
         let providers: [any MediaProvider] = [
             MusicAppProvider(),
@@ -57,6 +65,9 @@ enum MediaProbe {
                           + " position=\(snapshot.capabilities.contains(.position))")
                 } else {
                     print("  fetch returned nothing")
+                }
+                if let browserProvider = provider as? BrowserMediaProvider {
+                    print(await browserProvider.diagnostics())
                 }
                 print("  automation state after asking: \(MediaScriptBridge.lastAutomationState)")
                 print("")

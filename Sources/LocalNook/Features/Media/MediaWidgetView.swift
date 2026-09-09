@@ -30,6 +30,9 @@ struct MediaWidgetView: View {
                     actionTitle: "Open Settings",
                     action: { Permissions.shared.open(.automation) }
                 )
+            } else if let pending = media.browsersAwaitingConnection.first,
+                      media.nowPlaying.isIdle {
+                connect(pending.browser, status: pending.status)
             } else if media.nowPlaying.isIdle {
                 idle
             } else {
@@ -64,6 +67,30 @@ struct MediaWidgetView: View {
             : "Open \(installed.formattedList) and LocalNook will pick it up."
     }
 
+    /// Offered when a browser is switched on and running but has not been
+    /// permitted. Reading its tabs needs Automation consent, and consent is
+    /// only ever asked for from a button like this one — never because a panel
+    /// appeared.
+    private func connect(
+        _ browser: MediaBrowser, status: AutomationPermission.Status
+    ) -> some View {
+        MediaMessage(
+            symbol: "link.badge.plus",
+            title: "\(browser.displayName) isn't connected",
+            detail: status == .denied
+                ? "Automation access for \(browser.displayName) was refused. Turn it back on in System Settings ▸ Privacy & Security ▸ Automation ▸ LocalNook."
+                : "LocalNook needs your permission to read \(browser.displayName)'s tabs. macOS will ask once.",
+            actionTitle: status == .denied ? "Open Settings" : "Connect \(browser.displayName)",
+            action: {
+                if status == .denied {
+                    Permissions.shared.open(.automation)
+                } else {
+                    media.connect(browser)
+                }
+            }
+        )
+    }
+
     // MARK: Player
 
     private var player: some View {
@@ -82,9 +109,12 @@ struct MediaWidgetView: View {
 
                 Spacer(minLength: 4)
 
-                scrubber(for: track)
-
-                Spacer(minLength: 4)
+                // A title-only source has no position, and a livestream has no
+                // end: neither gets a bar that would sit at 0:00 looking stuck.
+                if track.showsProgress {
+                    scrubber(for: track)
+                    Spacer(minLength: 4)
+                }
 
                 transport
             }
@@ -173,12 +203,11 @@ struct MediaWidgetView: View {
                 TransportButton(symbol: "forward.fill", size: 12) { media.next() }
             }
             if !capabilities.contains(.playPause) {
-                // Says why there are no buttons, rather than leaving a gap.
-                Label(
-                    media.nowPlaying.state == .playing ? "Playing" : "Paused",
-                    systemImage: media.nowPlaying.state == .playing
-                        ? "speaker.wave.2.fill" : "pause.fill"
-                )
+                // Says what is known, rather than leaving a gap — and says it
+                // in words that survive scrutiny: "Browser audio active" is a
+                // claim about the browser, which is all Tier 1 can support.
+                Label(media.nowPlaying.statusText,
+                      systemImage: media.nowPlaying.statusSymbol)
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.white.opacity(0.55))
                 .labelStyle(.titleAndIcon)

@@ -258,8 +258,9 @@ Each feature is a manager (state, system integration) plus a view. Managers are
 
 ### Media
 
-`MediaProvider` is the abstraction; `MusicAppProvider` and `SpotifyProvider`
-implement it over **Apple Events**.
+`MediaProvider` is the abstraction. `MusicAppProvider` and `SpotifyProvider`
+implement it over **Apple Events**; `BrowserMediaProvider` implements it over the
+same mechanism against Chrome's and Safari's scripting dictionaries.
 
 **Why not MediaRemote.** Apple restricted the private MediaRemote framework in
 macOS 15.4. Upstream works around this by bundling `MediaRemoteAdapter`, a
@@ -268,9 +269,39 @@ it is an opaque binary that cannot be audited from source, and the spec for this
 project forbids shipping copied binaries. Apple Events are public, documented and
 user-consented.
 
-**What that costs.** Apple Events only reach apps with a scripting dictionary.
-Music and Spotify work; browser tabs do not. This is a real functional gap and is
-recorded in TODO.md rather than papered over.
+Probed directly from this app on this Mac (macOS 27.0), MediaRemote loads, its
+symbol resolves, its callback fires, and the payload is nil while QuickTime is
+confirmed playing. That is scoped to what it is — one app without the
+entitlement, one machine, one OS version — and it is consistent with Apple's
+gating, but it is not a claim that no configuration anywhere gets an answer. It
+is enough to establish that LocalNook cannot rely on it.
+
+**What that costs, and what it does not.** Apple Events only reach apps with a
+scripting dictionary, so a source that publishes none is invisible. Browser tabs
+*are* reachable — an earlier version of this document said otherwise, and that
+was wrong — but with a hard limit worth stating precisely:
+
+| | tab title | which tab is playing | position | controls |
+|---|---|---|---|---|
+| Tier 1 — dictionary + CoreAudio | yes | **no** | no | no |
+| Tier 2 — "Allow JavaScript from Apple Events" | yes | yes | yes | play/pause, seek |
+
+Tier 1 cannot name the playing tab for two independent, checked reasons: neither
+browser publishes a per-tab audio property (Chrome's `tab` class is `id`,
+`title`, `URL`, `loading`; Safari's is `source`, `URL`, `index`, `text`,
+`visible`, `name`), and CoreAudio attributes output per process, while Chrome
+mixes every tab through one shared `audio.mojom.AudioService` utility. So Tier 1
+reports "Browser audio active" with the tab's playback state marked unknown, and
+never "Playing". `BrowserPlaybackResolver` holds that decision as a pure
+function so every case is testable without a browser.
+
+**Consent is read, not provoked.** `AutomationPermission` wraps
+`AEDeterminePermissionToAutomateTarget`, public since 10.14, which answers from
+the system's records without sending an event or showing a dialog. Providers
+check it before scripting anything, so opening the dashboard and polling in the
+background cannot raise a prompt. Asking is a separate, explicit action behind a
+Connect button — and it is what creates the app's entry in System Settings ▸
+Privacy & Security ▸ Automation, which lists only apps that have asked.
 
 **Polling discipline** matters more than anything else here, because an
 always-on 1 Hz AppleScript poll is exactly what keeps a laptop awake:
