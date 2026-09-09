@@ -474,6 +474,48 @@ a runtime state that no longer reproduces. Nothing failed in either case, and
 the current figure is stable across thirteen runs — but the discrepancy is not
 accounted for, and is recorded here rather than rounded away.
 
+## Current candidate — 2026-09-09
+
+| | |
+|---|---|
+| Shipped binary | `b00478e36f7769a703c2b1fe8bc61fd1e3e33addbfeb9a6081229e751b3e5005` |
+| Disk image | `a9e243e71836c8a3d18ff148555588952fede1f6a3075a78bc1017331816dd30` |
+| Source commit | `4a6b23c33a4eaa972f50ec10299f3e220c3328d6` |
+| **Displays connected** | **1** (built-in only; the external monitor is powered off) |
+
+```
+deterministic: 10/10 clean, 0 unverified, 0 defects   (456 checks per run)
+integration:   12/12 clean, 0 unverified, 0 defects
+VERDICT: every run clean, nothing unverified.
+```
+
+Plus, against that same binary: installer failure paths 36/36, self-test
+isolation 23/23 across completion / SIGTERM / SIGKILL, release gates 6/6
+(5 blocking scenarios blocked, 1 non-blocking scenario allowed).
+
+Every integration run reported a delivered crossing:
+`enters=1 handled=1 (containment=0) opened-by: trackingArea`. Run 1 showed
+`exits=1` after the notch had already opened, which is the pointer leaving
+afterwards and does not affect the assertion.
+
+**"All automated checks passed" is not "feature acceptance complete."** The
+browser-media feature's remaining acceptance is listed under *What has and has
+not been observed* above: no playback has been observed, page access has never
+been enabled, and Safari has never been running. Those are unverified, not
+passed.
+
+### Two release gates fired during this pass, and both were the harness
+
+Recorded because a gate that cries wolf is worse than no gate. Both are written
+up in full below. Neither was a product defect; both were checks reading the
+machine's state instead of establishing it, and both are now fixed at the seam
+rather than by loosening the assertion.
+
+`scripts/build-release.sh` also exited non-zero twice with its output
+suppressed, and did not reproduce in five subsequent runs, three of them with
+output captured. Unexplained. It failed closed — no artifact was produced — so
+nothing shipped on the strength of it.
+
 ## A deterministic check that was not — 2026-09-09
 
 The frozen batch for this pass failed on run 2 of 10:
