@@ -10,9 +10,12 @@
 //  the private MediaRemote framework, and ships no prebuilt binaries.
 //
 //  Trade-off, recorded honestly: Apple Events only reach apps that expose a
-//  scripting dictionary (Music, Spotify, VLC…). Browser tabs and other
-//  Now Playing sources are not visible this way. `MediaProvider` exists so an
-//  additional provider can be dropped in later without touching the UI.
+//  scripting dictionary. That is more than it once sounded — Chrome and Safari
+//  both publish one, so browser tabs *are* reachable this way, and
+//  BrowserMediaProvider uses it. What Apple Events cannot give is a system-wide
+//  now-playing feed: MediaRemote has been entitlement-gated since macOS 15.4,
+//  measured nil on this machine while audio was confirmed playing. See
+//  BrowserMedia.swift for the full finding.
 //
 
 import AppKit

@@ -115,14 +115,28 @@ struct CompactMediaView: View {
         .help("Open \(track.sourceName)")
     }
 
+    /// See MediaWidgetView.transport — controls appear only where the source
+    /// supports them.
     private var transport: some View {
-        HStack(spacing: 13) {
-            TransportControl(symbol: "backward.fill", size: 12) { media.previous() }
-            TransportControl(
-                symbol: media.nowPlaying.state == .playing ? "pause.fill" : "play.fill",
-                size: 15
-            ) { media.playPause() }
-            TransportControl(symbol: "forward.fill", size: 12) { media.next() }
+        let capabilities = media.nowPlaying.capabilities
+        return HStack(spacing: 13) {
+            if capabilities.contains(.skip) {
+                TransportControl(symbol: "backward.fill", size: 12) { media.previous() }
+            }
+            if capabilities.contains(.playPause) {
+                TransportControl(
+                    symbol: media.nowPlaying.state == .playing ? "pause.fill" : "play.fill",
+                    size: 15
+                ) { media.playPause() }
+            }
+            if capabilities.contains(.skip) {
+                TransportControl(symbol: "forward.fill", size: 12) { media.next() }
+            }
+            if !capabilities.contains(.playPause) {
+                Text(media.nowPlaying.state == .playing ? "Playing" : "Paused")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Theme.secondaryText)
+            }
             Spacer(minLength: 0)
             PlayingIndicator(isPlaying: media.nowPlaying.state == .playing)
         }
@@ -130,7 +144,9 @@ struct CompactMediaView: View {
 
     @ViewBuilder
     private func progress(for track: NowPlaying) -> some View {
-        if track.duration > 0 {
+        // A livestream has no end and an unknown duration is not zero, so
+        // neither gets a bar that would sit at 0% and look stuck.
+        if track.showsProgress {
             VStack(spacing: 2) {
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {

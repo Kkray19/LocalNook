@@ -100,6 +100,7 @@ enum SelfTest {
             testLiquidGlass()
             testPrivacyBoundaries()
             testTrayWithRealFiles()
+            testBrowserMedia()
             testMotion()
             testSessionDetail()
             testClearingTheTrayNeedsConfirming()
@@ -1136,6 +1137,157 @@ enum SelfTest {
         panel.orderOut(nil)
         panel.close()
         settings.openDelay = originalDelay
+    }
+
+    /// Browser media: parsing, capability gating and source selection.
+    ///
+    /// Synthetic throughout — fixtures and constructed snapshots, no browser
+    /// involved. What a real browser actually does is a separate question,
+    /// answered by observing playback, and this section must not be read as
+    /// evidence for it.
+    private static func testBrowserMedia() {
+        section("Browser media (synthetic)")
+
+        // ── Which tabs count as a player ───────────────────────────────────
+        check("a YouTube watch page is a player",
+              BrowserMediaParser.site(forURL: "https://www.youtube.com/watch?v=abc") == "YouTube")
+        check("a YouTube live page is a player",
+              BrowserMediaParser.site(forURL: "https://www.youtube.com/live/xyz") == "YouTube")
+        check("YouTube Music is named as itself",
+              BrowserMediaParser.site(forURL: "https://music.youtube.com/watch?v=1") == "YouTube Music")
+        check("the YouTube home page is not a player",
+              BrowserMediaParser.site(forURL: "https://www.youtube.com/") == nil)
+        check("an unrelated site is not a player",
+              BrowserMediaParser.site(forURL: "https://example.com/watch") == nil)
+        check("a lookalike host is not matched",
+              BrowserMediaParser.site(forURL: "https://notyoutube.com/watch?v=1") == nil)
+        check("a subdomain of a known host is matched",
+              BrowserMediaParser.site(forURL: "https://m.soundcloud.com/x") == "SoundCloud")
+        check("nonsense is not a player",
+              BrowserMediaParser.site(forURL: "not a url at all") == nil)
+        check("an empty URL is not a player",
+              BrowserMediaParser.site(forURL: "") == nil)
+
+        // ── Titles, including the decoration seen in a real capture ────────
+        check("a notification count is stripped",
+              BrowserMediaParser.cleanTitle("(72) Big Buck Bunny - YouTube", site: "YouTube")
+                  == "Big Buck Bunny",
+              "got \(BrowserMediaParser.cleanTitle("(72) Big Buck Bunny - YouTube", site: "YouTube"))")
+        check("the site suffix is stripped",
+              BrowserMediaParser.cleanTitle("Some Song - SoundCloud", site: "SoundCloud")
+                  == "Some Song")
+        check("a title that is only decoration falls back to the site",
+              BrowserMediaParser.cleanTitle(" - YouTube", site: "YouTube") == "YouTube")
+        check("a bracketed non-number is left alone",
+              BrowserMediaParser.cleanTitle("(Live) Session One", site: "YouTube")
+                  == "(Live) Session One")
+        check("an empty title falls back to the site",
+              BrowserMediaParser.cleanTitle("", site: "Vimeo") == "Vimeo")
+        check("a title with no decoration is untouched",
+              BrowserMediaParser.cleanTitle("Plain Title", site: "YouTube") == "Plain Title")
+
+        check("an advertisement is recognised",
+              BrowserMediaParser.looksLikeAdvertisement("Ad · 5s"))
+        check("a song about ads is not mistaken for one",
+              !BrowserMediaParser.looksLikeAdvertisement("Adagio in G Minor"))
+
+        // ── Capability gating ──────────────────────────────────────────────
+        var titleOnly = NowPlaying.idle
+        titleOnly.title = "Something"
+        titleOnly.state = .playing
+        titleOnly.capabilities = .titleOnly
+        check("a title-only source offers no play/pause",
+              !titleOnly.capabilities.contains(.playPause))
+        check("a title-only source offers no skip",
+              !titleOnly.capabilities.contains(.skip))
+        check("a title-only source draws no progress bar", !titleOnly.showsProgress)
+        check("a title-only source still reports playing or paused",
+              titleOnly.capabilities.contains(.playbackState))
+
+        var scripted = NowPlaying.idle
+        scripted.title = "Track"
+        scripted.duration = 200
+        scripted.position = 20
+        scripted.capabilities = .full
+        check("a scripted source offers play/pause", scripted.capabilities.contains(.playPause))
+        check("a scripted source draws a progress bar", scripted.showsProgress)
+
+        // ── Unknown duration: livestreams and metadata that never arrives ──
+        var live = scripted
+        live.durationIsUnknown = true
+        check("an unknown duration draws no progress bar", !live.showsProgress)
+        check("an unknown duration reports zero progress rather than a wrong one",
+              live.progress == 0)
+
+        var zero = scripted
+        zero.duration = 0
+        check("a zero duration draws no progress bar", !zero.showsProgress)
+
+        // ── Choosing between sources ───────────────────────────────────────
+        func snapshot(_ id: String, _ state: PlaybackState) -> NowPlaying {
+            var value = NowPlaying.idle
+            value.sourceID = id
+            value.sourceName = id
+            value.title = "t"
+            value.state = state
+            return value
+        }
+        check("nothing playing yields nothing",
+              MediaManager.choose(from: [], current: "") == nil)
+        check("a single source is chosen",
+              MediaManager.choose(from: [snapshot("a", .playing)], current: "")?.sourceID == "a")
+        check("playing beats paused",
+              MediaManager.choose(from: [snapshot("a", .paused), snapshot("b", .playing)],
+                                  current: "")?.sourceID == "b")
+        check("the source already on screen is kept while it plays",
+              MediaManager.choose(from: [snapshot("a", .playing), snapshot("b", .playing)],
+                                  current: "b")?.sourceID == "b",
+              "the widget would have jumped to another player")
+        check("a stopped incumbent gives way to one that is playing",
+              MediaManager.choose(from: [snapshot("a", .playing), snapshot("b", .paused)],
+                                  current: "b")?.sourceID == "a")
+        check("with nothing playing the incumbent is still kept",
+              MediaManager.choose(from: [snapshot("a", .paused), snapshot("b", .paused)],
+                                  current: "b")?.sourceID == "b")
+        check("an incumbent that has gone away is replaced",
+              MediaManager.choose(from: [snapshot("a", .playing)], current: "gone")?.sourceID == "a")
+
+        // Repeated polls with the same input must not oscillate.
+        var current = ""
+        var picks: [String] = []
+        for _ in 0..<12 {
+            let pick = MediaManager.choose(
+                from: [snapshot("a", .playing), snapshot("b", .playing)], current: current
+            )
+            current = pick?.sourceID ?? ""
+            picks.append(current)
+        }
+        check("repeated polls settle on one source rather than alternating",
+              Set(picks).count == 1, "picked \(Set(picks).sorted())")
+
+        // ── Stale state is cleared ─────────────────────────────────────────
+        check("idle has no capabilities at all", NowPlaying.idle.capabilities.isEmpty)
+        check("idle reads as idle", NowPlaying.idle.isIdle)
+        check("a snapshot with no title reads as idle", {
+            var empty = scripted
+            empty.title = ""
+            return empty.isIdle
+        }())
+
+        // ── The audio monitor answers, and does not guess ──────────────────
+        check("an unknown bundle path is not reported as playing",
+              !BrowserAudioMonitor.isOutputtingAudio(bundlePath: "/no/such/app.app"))
+        check("an empty bundle path is not reported as playing",
+              !BrowserAudioMonitor.isOutputtingAudio(bundlePath: ""))
+
+        // ── Browsers are never launched, and stay off until switched on ────
+        let chrome = BrowserMediaProvider(browser: .chrome)
+        check("a browser provider is unavailable while the setting is off",
+              Settings.shared.browserMediaEnabled || !chrome.isAvailable,
+              "the provider offered itself without consent")
+        check("the browser toggle hint names a real menu path",
+              MediaBrowser.chrome.javaScriptToggleHint.contains("Apple Events")
+                  && MediaBrowser.safari.javaScriptToggleHint.contains("Apple Events"))
     }
 
     /// Motion honours Reduce Motion, and survives interruption.

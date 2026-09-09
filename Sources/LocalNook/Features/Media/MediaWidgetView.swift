@@ -152,14 +152,37 @@ struct MediaWidgetView: View {
         }
     }
 
+    /// Only the controls the current source can actually honour.
+    ///
+    /// A browser tab read without page access reports what is playing but
+    /// cannot be paused, so it gets no buttons. A control that quietly does
+    /// nothing is worse than an absent one — it teaches you the app is broken.
     private var transport: some View {
-        HStack(spacing: 16) {
-            TransportButton(symbol: "backward.fill", size: 12) { media.previous() }
-            TransportButton(
-                symbol: media.nowPlaying.state == .playing ? "pause.fill" : "play.fill",
-                size: 16
-            ) { media.playPause() }
-            TransportButton(symbol: "forward.fill", size: 12) { media.next() }
+        let capabilities = media.nowPlaying.capabilities
+        return HStack(spacing: 16) {
+            if capabilities.contains(.skip) {
+                TransportButton(symbol: "backward.fill", size: 12) { media.previous() }
+            }
+            if capabilities.contains(.playPause) {
+                TransportButton(
+                    symbol: media.nowPlaying.state == .playing ? "pause.fill" : "play.fill",
+                    size: 16
+                ) { media.playPause() }
+            }
+            if capabilities.contains(.skip) {
+                TransportButton(symbol: "forward.fill", size: 12) { media.next() }
+            }
+            if !capabilities.contains(.playPause) {
+                // Says why there are no buttons, rather than leaving a gap.
+                Label(
+                    media.nowPlaying.state == .playing ? "Playing" : "Paused",
+                    systemImage: media.nowPlaying.state == .playing
+                        ? "speaker.wave.2.fill" : "pause.fill"
+                )
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.55))
+                .labelStyle(.titleAndIcon)
+            }
 
             Spacer()
 

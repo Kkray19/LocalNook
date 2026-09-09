@@ -288,6 +288,30 @@ struct WidgetDetailSettingsView: View {
                 )
             }
 
+            SettingsSection(
+                title: "Browser media",
+                footer: "Off by default because reading tabs needs Automation permission for that browser, and macOS asks the first time. Nothing is read until you switch this on, and nothing leaves this Mac."
+            ) {
+                Toggle("Show what a browser is playing",
+                       isOn: settings.binding(\.browserMediaEnabled))
+                Text("Chrome and Safari. LocalNook reads the title of a tab on a "
+                     + "known player — YouTube, YouTube Music, Spotify Web, "
+                     + "SoundCloud, Twitch, Vimeo, Bandcamp — and asks macOS "
+                     + "whether the browser is emitting audio, which is how it "
+                     + "knows whether that tab is playing or merely open.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("For a scrubber and a working play/pause button, also turn on "
+                     + "“Allow JavaScript from Apple Events” in your browser "
+                     + "(Chrome: View ▸ Developer. Safari: Develop menu). Without "
+                     + "it LocalNook can say what is playing but cannot control "
+                     + "it, and shows no buttons rather than ones that do nothing.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             SettingsSection(title: "Shelf") {
                 Toggle("Keep items between launches", isOn: settings.binding(\.shelfPersist))
                 Toggle("Open the shelf when a drag arrives", isOn: settings.binding(\.shelfAutoExpandOnDrag))

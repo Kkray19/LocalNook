@@ -29,7 +29,17 @@ final class MediaManager: ObservableObject {
     /// Set when Automation consent was refused, so the UI can explain itself.
     @Published private(set) var automationDenied = false
 
-    private let providers: [any MediaProvider] = [MusicAppProvider(), SpotifyProvider()]
+    /// Scripted apps first, browsers last.
+    ///
+    /// Order is the tie-break when nothing is playing, and a real media app is
+    /// a better guess than a browser tab that happens to be open. Browser
+    /// providers return nothing at all until the user switches them on.
+    private let providers: [any MediaProvider] = [
+        MusicAppProvider(),
+        SpotifyProvider(),
+        BrowserMediaProvider(browser: .chrome),
+        BrowserMediaProvider(browser: .safari),
+    ]
     private var pollTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
     private var notchIsOpen = false
@@ -154,18 +164,34 @@ final class MediaManager: ObservableObject {
     /// Picks the most interesting snapshot: a playing source always wins over a
     /// paused one, so having Music paused in the background does not mask
     /// Spotify actually playing.
+    /// Which of several sources to show.
+    ///
+    /// Playing beats paused, and the source already on screen beats an equally
+    /// playing rival. Without that second rule two players — a browser tab and
+    /// Music, say — swap the widget back and forth on alternate polls, which
+    /// makes the panel unreadable and the controls untrustworthy. Stickiness
+    /// only lasts while the incumbent is still playing: when it stops, the
+    /// choice is made afresh.
+    static func choose(from snapshots: [NowPlaying], current: String) -> NowPlaying? {
+        guard !snapshots.isEmpty else { return nil }
+        let playing = snapshots.filter { $0.state == .playing }
+        if let incumbent = playing.first(where: { $0.sourceID == current }) { return incumbent }
+        if let first = playing.first { return first }
+        if let incumbent = snapshots.first(where: { $0.sourceID == current }) { return incumbent }
+        return snapshots.first
+    }
+
     private func poll() async {
         guard monitoringEnabled, !isPolling, !Task.isCancelled else { return }
         isPolling = true
         defer { isPolling = false }
-        var best: NowPlaying?
+        var snapshots: [NowPlaying] = []
         for provider in availableProviders {
             guard let snapshot = await provider.fetch(), provider.isAvailable, !snapshot.isIdle else { continue }
             guard !Task.isCancelled else { return }
-            if best == nil || (snapshot.state == .playing && best?.state != .playing) {
-                best = snapshot
-            }
+            snapshots.append(snapshot)
         }
+        let best = Self.choose(from: snapshots, current: nowPlaying.sourceID)
 
         guard !Task.isCancelled else { return }
         let resolved = best ?? .idle

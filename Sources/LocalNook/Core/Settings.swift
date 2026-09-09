@@ -230,6 +230,16 @@ final class Settings: ObservableObject {
     }
 
     /// Widgets shown side by side on the Dashboard, in order.
+    // MARK: Media
+
+    /// Whether LocalNook may read what a browser is playing.
+    ///
+    /// Off by default and deliberately so: reading tabs needs Automation
+    /// consent for that browser, and macOS prompts on first use. Opening the
+    /// dashboard must never be the reason a permission dialog appears, so this
+    /// is an explicit choice made in Settings.
+    @Pref("media.browserEnabled", false) var browserMediaEnabled: Bool
+
     // MARK: Sessions
 
     /// How much of a transcript the sessions widget may read.
