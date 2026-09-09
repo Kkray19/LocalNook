@@ -442,6 +442,38 @@ This section is written after the run it describes, so it is necessarily a
 commit later than the candidate's own `LocalNookCommit`. The binary is
 identified by its hash, not by `HEAD`.
 
+## Current candidate — 2026-09-08
+
+| | |
+|---|---|
+| Shipped binary | `107f25874b7d89b344c88f44cbe9e48243150889a4ad027f3b0d3dbc890001dc` |
+| Disk image | `4b42282227951a7bed966f7a2614967ec17d83ed12260a4473fee18b41182287` |
+| Source commit | `8199f60b75c8e1084c480b19c5b78a8ec0d24555` |
+| **Displays connected** | **2** (built-in + G274QPF E2) |
+
+```
+deterministic: 10/10 clean, 0 unverified, 0 defects   (324 checks per run)
+integration:   12/12 clean, 0 unverified, 0 defects
+VERDICT: every run clean, nothing unverified.
+```
+
+Plus, against that same binary: installer failure paths 36/36, self-test
+isolation 23/23 across completion / SIGTERM / SIGKILL, release gates 6/6.
+
+Every integration run reported a delivered crossing:
+`enters=1 handled=1 (containment=0) opened-by: trackingArea`. One run showed
+`enters=3` — the harness retrying its stimulus, which is what the retry loop is
+for; the forwarded count stayed at 1, so nothing was double-handled.
+
+### An unexplained count, stated rather than smoothed over
+
+Six runs on a debug build shortly before this candidate reported **326** checks;
+the candidate and a fresh rebuild of its exact source both report **324**, with
+an identical set of check *names*. So two checks ran twice, or ran at all, under
+a runtime state that no longer reproduces. Nothing failed in either case, and
+the current figure is stable across thirteen runs — but the discrepancy is not
+accounted for, and is recorded here rather than rounded away.
+
 ## What must be repeated if anything changes
 
 Not every change invalidates every result. This says which.
