@@ -28,10 +28,17 @@ enum PreviewRenderer {
         )
 
         // Cover every widget so each one can be reviewed at its real size.
+        // A chosen width implies a throwaway defaults suite, so this neither
+        // reads nor writes the width the user actually set.
+        if let width = AppInfo.previewWidth { Settings.shared.openWidth = width }
+
         var scenes: [(name: String, open: Bool, widget: WidgetKind)] = [
             ("closed", false, .media),
             ("closed-activity", false, .media),
             ("dashboard-populated", true, .media),
+            ("dashboard-browser-audio", true, .media),
+            ("dashboard-browser-ambiguous", true, .media),
+            ("dashboard-browser-page", true, .media),
             ("tray-populated", true, .shelf),
             ("tools", true, .timers),
             ("tray-drag-target", true, .shelf),
@@ -49,6 +56,39 @@ enum PreviewRenderer {
                     title: "Fourth of July", artist: "Sufjan Stevens",
                     album: "Carrie & Lowell", duration: 292, position: 96,
                     positionSampledAt: Date(), artworkKey: "preview"
+                ))
+                model.page = .dashboard
+            } else if scene.name == "dashboard-browser-audio" {
+                // Tier 1, one player tab: the browser is audibly playing, and
+                // which tab that is cannot be established. Staged, not observed.
+                MediaManager.shared.previewInject(NowPlaying(
+                    sourceID: "browser.chrome", sourceName: "Google Chrome",
+                    state: .unknown, title: "Ludovico Einaudi — Nuvole Bianche",
+                    artist: "YouTube", album: "", duration: 0, position: 0,
+                    positionSampledAt: Date(), artworkKey: "",
+                    capabilities: .titleOnly, durationIsUnknown: true
+                ))
+                model.page = .dashboard
+            } else if scene.name == "dashboard-browser-ambiguous" {
+                // Tier 1, several player tabs: no tab may be named at all.
+                MediaManager.shared.previewInject(NowPlaying(
+                    sourceID: "browser.chrome", sourceName: "Google Chrome",
+                    state: .unknown, title: "Browser audio active",
+                    artist: "Google Chrome · 3 media tabs", album: "",
+                    duration: 0, position: 0, positionSampledAt: Date(),
+                    artworkKey: "", capabilities: .titleOnly,
+                    durationIsUnknown: true, sourceIsAmbiguous: true
+                ))
+                model.page = .dashboard
+            } else if scene.name == "dashboard-browser-page" {
+                // Tier 2: the page named itself, so state, position and
+                // controls are all real.
+                MediaManager.shared.previewInject(NowPlaying(
+                    sourceID: "browser.chrome", sourceName: "Google Chrome",
+                    state: .playing, title: "Ludovico Einaudi — Nuvole Bianche",
+                    artist: "YouTube", album: "", duration: 366, position: 128,
+                    positionSampledAt: Date(), artworkKey: "",
+                    capabilities: [.playbackState, .position, .playPause, .seek]
                 ))
                 model.page = .dashboard
             } else if scene.name == "tray-populated" {

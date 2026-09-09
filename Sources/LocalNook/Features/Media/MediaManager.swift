@@ -53,8 +53,13 @@ final class MediaManager: ObservableObject {
     }
 
     /// Explicit use of the media widget enables Apple Events; launch never prompts.
+    ///
+    /// Never during a self-test or a preview render: both stage their own
+    /// snapshots, and a poll would replace them with whatever this Mac happens
+    /// to be playing — as well as sending Apple Events from a process whose
+    /// whole job is to write PNGs.
     func activate() {
-        guard !AppInfo.isSelfTest else { return }
+        guard !AppInfo.isSelfTest, !AppInfo.isPreviewRender else { return }
         monitoringEnabled = true
         reconsiderPolling()
     }
@@ -75,7 +80,7 @@ final class MediaManager: ObservableObject {
     ///
     /// Nothing here is inferred from the widget merely being visible.
     func activateIfAlreadyConsented() {
-        guard !AppInfo.isSelfTest else { return }
+        guard !AppInfo.isSelfTest, !AppInfo.isPreviewRender else { return }
         guard Settings.shared.browserMediaEnabled
             || MediaScriptBridge.lastAutomationState == .granted
         else { return }

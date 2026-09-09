@@ -50,6 +50,20 @@ enum MediaProbe {
             let running = MediaScriptBridge.isRunning(bundleID: provider.bundleID)
             print("\(provider.displayName)")
             print("  installed=\(installed) running=\(running) available=\(provider.isAvailable)")
+
+            // A browser that is unavailable is the interesting case, not the
+            // one to skip: it says which of enabled, running and permitted is
+            // missing, which is exactly what a blank widget will not tell you.
+            if let browserProvider = provider as? BrowserMediaProvider,
+               !provider.isAvailable {
+                group.enter()
+                Task {
+                    print(await browserProvider.diagnostics())
+                    print("")
+                    group.leave()
+                }
+                continue
+            }
             guard provider.isAvailable else { print(""); continue }
 
             group.enter()

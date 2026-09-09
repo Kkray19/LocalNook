@@ -225,12 +225,28 @@ enum AppInfo {
     static let isPreviewRender = CommandLine.arguments.contains("--render-preview")
     /// Contexts in which transcript content must not be read at all.
     static var forbidsTranscriptReads: Bool { isSelfTest || isPreviewRender }
+    /// Open width for an isolated preview render, in points.
+    ///
+    /// Passing it means "render as if the notch were this wide", and implies a
+    /// throwaway defaults suite: a narrow-layout screenshot must not be taken by
+    /// editing the width someone actually chose and hoping to put it back.
+    nonisolated static let previewWidth: Double? = {
+        guard let index = CommandLine.arguments.firstIndex(of: "--preview-width"),
+              index + 1 < CommandLine.arguments.count,
+              let value = Double(CommandLine.arguments[index + 1]),
+              value >= 200, value <= 2000
+        else { return nil }
+        return value
+    }()
+    /// Contexts that must never send an Apple Event, poll a media app, or touch
+    /// the real preferences domain.
+    nonisolated static var isIsolatedRun: Bool { isSelfTest || previewWidth != nil }
     static let testDirectory = FileManager.default.temporaryDirectory
         .appendingPathComponent("LocalNook-tests-\(UUID().uuidString)", isDirectory: true)
     nonisolated static let testSuiteName = "com.localnook.tests.\(UUID().uuidString)"
     // UserDefaults is thread-safe but not Sendable, so the annotation is the
     // honest form: shared, immutable reference, safe to use from any actor.
-    nonisolated(unsafe) static let defaults: UserDefaults = isSelfTest
+    nonisolated(unsafe) static let defaults: UserDefaults = isIsolatedRun
         ? UserDefaults(suiteName: testSuiteName)! : .standard
 
     /// Whether the process is running from a real `.app` bundle.
