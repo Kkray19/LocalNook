@@ -427,17 +427,35 @@ struct CompactSessionsView: View {
                     .foregroundStyle(Theme.tertiaryText)
             } else {
                 ForEach(monitor.sessions.prefix(3)) { session in
-                    HStack(spacing: 6) {
+                    HStack(alignment: .top, spacing: 6) {
                         Image(systemName: session.agent.symbol)
                             .font(.system(size: 9))
                             .foregroundStyle(Theme.quaternaryText)
                             .frame(width: 11)
-                        Text(session.projectName)
-                            .font(Theme.caption)
-                            .foregroundStyle(Theme.secondaryText)
-                            .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 1) {
+                            // The chat's own name where there is one; the
+                            // directory only as a fallback.
+                            Text(session.displayName)
+                                .font(Theme.caption)
+                                .foregroundStyle(Theme.secondaryText)
+                                .lineLimit(1)
+                            if session.isActive, let step = session.detail.activity {
+                                HStack(spacing: 4) {
+                                    SessionWorkingBar()
+                                    Text(step)
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(Theme.quaternaryText)
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                }
+                            } else if let model = session.detail.modelLabel {
+                                Text(model)
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(Theme.quaternaryText)
+                                    .lineLimit(1)
+                            }
+                        }
                         Spacer(minLength: 4)
-                        // Inferred from file timestamps only — never contents.
                         Text(session.relativeActivity)
                             .font(.system(size: 9.5))
                             .foregroundStyle(Theme.quaternaryText)
@@ -447,5 +465,32 @@ struct CompactSessionsView: View {
             Spacer(minLength: 0)
         }
         .onAppear { monitor.start() }
+    }
+}
+
+/// The marching bar shown beside a session's current step, matching the
+/// progress line the agents show while they are working. Decorative: it says
+/// "still going", not how far along.
+struct SessionWorkingBar: View {
+    @LNState private var shift: CGFloat = -1
+
+    var body: some View {
+        Capsule()
+            .fill(Theme.quaternaryText.opacity(0.4))
+            .frame(width: 14, height: 2.5)
+            .overlay(alignment: .leading) {
+                GeometryReader { geometry in
+                    Capsule()
+                        .fill(Theme.positive)
+                        .frame(width: geometry.size.width * 0.45)
+                        .offset(x: shift * geometry.size.width * 0.62)
+                }
+            }
+            .clipShape(Capsule())
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                    shift = 1
+                }
+            }
     }
 }

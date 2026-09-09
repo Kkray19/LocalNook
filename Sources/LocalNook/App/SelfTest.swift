@@ -1195,10 +1195,10 @@ enum SelfTest {
         lines.append(#"{"type":"assistant","effort":"max","message":{"model":"claude-opus-5","content":[{"type":"tool_use","name":"Bash","input":{"description":"Running the test suite"}}]}}"#)
         try? lines.joined(separator: "\n").write(to: file, atomically: true, encoding: .utf8)
 
-        let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
+        let size = ((try? FileManager.default.attributesOfItem(atPath: file.path))?[.size] as? Int) ?? 0
         check("the fixture is bigger than the tail window",
-              (size ?? 0) > SessionDetailReader.tailWindow,
-              "\(size ?? 0) bytes vs \(SessionDetailReader.tailWindow)")
+              size > SessionDetailReader.tailWindow,
+              "\(size) bytes vs \(SessionDetailReader.tailWindow)")
 
         let detail = SessionDetailReader.read(path: file.path, agent: .claudeCode)
         check("the model is read", detail.model == "Opus 5", "got \(detail.model ?? "nil")")
