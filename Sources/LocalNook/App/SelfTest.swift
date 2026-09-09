@@ -1278,6 +1278,16 @@ enum SelfTest {
         check("otherwise opening and closing use different curves",
               !NotchMotion.isAnimated || NotchMotion.expandOpening != NotchMotion.expand,
               "opening would be a forward spring again")
+
+        // Read from a view body once a frame, so building it must be free.
+        // Sampling the spring 240 times per read was tens of thousands of
+        // evaluations a second for a value that never changes.
+        let buildStart = Date()
+        for _ in 0..<20_000 { _ = NotchMotion.expandOpening }
+        let buildCost = Date().timeIntervalSince(buildStart)
+        check("reading the opening curve is cheap enough for a view body",
+              buildCost < 0.05,
+              "20,000 reads took \(Int(buildCost * 1000))ms — it is being rebuilt each time")
     }
 
     /// How a hover attempt is attributed, over the counters that produce it.

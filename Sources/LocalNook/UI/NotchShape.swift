@@ -158,9 +158,19 @@ enum NotchMotion {
     /// spring's own bounce, which is what makes the finish read as the same
     /// kind of motion rather than a decoration bolted on the end.
     static var expandOpening: Animation {
-        isAnimated ? Animation(OpeningMotion(duration: 0.52, bounce: 0.16, settleDuration: 0.40))
-                   : .linear(duration: 0.01)
+        isAnimated ? Animation(openingMotion) : .linear(duration: 0.01)
     }
+
+    /// Built once.
+    ///
+    /// `expandOpening` is read from a view body, which runs on every frame of
+    /// the animation it is describing. `OpeningMotion.init` samples the spring
+    /// 240 times to find its peak velocity, so constructing one per read meant
+    /// tens of thousands of spring evaluations a second for a value that never
+    /// changes. Immutable and derived from constants, so sharing it is safe.
+    nonisolated(unsafe) private static let openingMotion = OpeningMotion(
+        duration: 0.52, bounce: 0.16, settleDuration: 0.40
+    )
 }
 
 /// The opening curve: a spring read backwards, then a spring that lands it.
