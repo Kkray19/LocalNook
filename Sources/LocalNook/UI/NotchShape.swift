@@ -109,7 +109,11 @@ enum NotchMotion {
     ///   "very linear and not liquid, very blocky".
     ///   `.spring(response: 0.46, dampingFraction: 0.68)` — reported as
     ///   working, but wanted smoother.
-    ///   `.spring(duration: 0.52, bounce: 0.16)` — current. Awaiting a verdict.
+    ///   `.spring(duration: 0.52, bounce: 0.16)` — current. Accepted for the
+    ///   closing ("already looks right"), and accepted for the opening once
+    ///   `OpeningMotion` stopped the landing snapping: "much better, I like
+    ///   this version much more". Settled — do not tune further without a
+    ///   fresh complaint to tune against.
     ///
     /// Apple's stated guidance is that bounce above roughly 0.4 "may feel too
     /// exaggerated for a UI element" and that bounce 0 is the most versatile

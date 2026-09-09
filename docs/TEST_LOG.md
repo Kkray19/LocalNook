@@ -516,6 +516,27 @@ suppressed, and did not reproduce in five subsequent runs, three of them with
 output captured. Unexplained. It failed closed — no artifact was produced — so
 nothing shipped on the strength of it.
 
+## Motion: accepted — 2026-09-09
+
+The open/close motion is settled, by the only test that could settle it.
+
+| | verdict |
+|---|---|
+| Closing | "the closing animation already looks right" |
+| Opening, path | "looks fluid until the very end" |
+| Opening, landing | "much better, I like this version much more" |
+
+What that accepts, concretely: the closing spring at `duration 0.52, bounce
+0.16`, unchanged throughout; the opening as that spring read backwards to
+within a mean of 0.026 normalised progress; and a landing that hands over to a
+settle at the instant the reversed path stops accelerating, overshooting ~3pt
+of total width and returning by 850ms.
+
+The two things that made the difference were both found by measuring frames
+rather than reading code — a window that resized after the animation had
+already started, and a curve truncated at its steepest point. Neither was
+visible in the source.
+
 ## A deterministic check that was not — 2026-09-09
 
 The frozen batch for this pass failed on run 2 of 10:
