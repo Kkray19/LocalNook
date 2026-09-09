@@ -105,13 +105,34 @@ final class SessionMonitor: ObservableObject {
     private var running = false
     private var settingsSubscription: AnyCancellable?
 
+    /// Labels read from transcripts, held only in memory. See SessionDetailCache.
+    private let detailCache = SessionDetailCache()
+
     private init() {
         settingsSubscription = Settings.shared.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] in
-                guard let self, self.running else { return }
+                guard let self else { return }
+                // Switching the feature off must not leave labels sitting in
+                // memory, or on screen, that were read under the old setting.
+                if Settings.shared.sessionLabelDepth == .metadataOnly {
+                    self.forgetTranscriptLabels()
+                }
+                guard self.running else { return }
                 self.rescan()
             }
+    }
+
+    /// Drops every label read from a transcript, from the cache and from the
+    /// sessions already on screen.
+    func forgetTranscriptLabels() {
+        detailCache.clear()
+        guard sessions.contains(where: { !$0.detail.wasNotRead }) else { return }
+        sessions = sessions.map { session in
+            var copy = session
+            copy.detail = SessionDetail()
+            return copy
+        }
     }
 
     var activeSessions: [AgentSession] { sessions.filter(\.isActive) }
@@ -127,6 +148,10 @@ final class SessionMonitor: ObservableObject {
     // MARK: Lifecycle
 
     func start() {
+        // The suite renders real views, and a rendered sessions widget would
+        // otherwise point this at the user's actual transcript directories.
+        // Tests scan fixtures through `scan(agents:roots:)` instead.
+        guard !AppInfo.isSelfTest else { return }
         stop()
         running = true
         for agent in enabledAgents {
@@ -178,8 +203,15 @@ final class SessionMonitor: ObservableObject {
         let agents = enabledAgents
         scanGeneration += 1
         let generation = scanGeneration
+        // Reading transcript content needs an explicit choice, and stops at the
+        // lock screen — there is nothing to label for a display nobody can see,
+        // and a label read now could be shown later on a locked screen.
+        let depth: SessionLabelDepth = ScreenLock.isLocked
+            ? .metadataOnly
+            : Settings.shared.sessionLabelDepth
+        let cache = detailCache
         Task { [weak self] in
-            let found = await Self.scan(agents: agents)
+            let found = await Self.scan(agents: agents, depth: depth, cache: cache)
             guard let self, self.running, self.scanGeneration == generation else { return }
             let previous = self.previouslyActive
             self.sessions = found
@@ -203,7 +235,12 @@ final class SessionMonitor: ObservableObject {
     /// Collects transcript metadata, plus a bounded peek inside each recent
     /// transcript for the model and the current step. See SessionDetail for
     /// exactly how much is read and what is kept.
-    nonisolated static func scan(agents: [SessionAgent], roots: [SessionAgent: URL] = [:]) async -> [AgentSession] {
+    nonisolated static func scan(
+        agents: [SessionAgent],
+        roots: [SessionAgent: URL] = [:],
+        depth: SessionLabelDepth = .metadataOnly,
+        cache: SessionDetailCache? = nil
+    ) async -> [AgentSession] {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 var results: [AgentSession] = []
@@ -245,11 +282,30 @@ final class SessionMonitor: ObservableObject {
                 // only the ones recent enough to be worth describing. Reading
                 // thirty transcripts on every scan would be wasteful and would
                 // widen the read for sessions nobody is looking at.
-                for index in recent.indices.prefix(6)
-                where Date().timeIntervalSince(recent[index].lastActivity) < 3600 {
-                    recent[index].detail = SessionDetailReader.read(
-                        path: recent[index].id, agent: recent[index].agent
-                    )
+                // Only the few that could actually be shown are opened, and only
+                // those recent enough to be worth describing. Reading thirty
+                // transcripts every scan would be wasteful and would widen the
+                // read to sessions nobody is looking at.
+                if depth == .richLabels {
+                    for index in recent.indices.prefix(6)
+                    where Date().timeIntervalSince(recent[index].lastActivity) < 3600 {
+                        let session = recent[index]
+                        // An unchanged file cannot have a newer answer, so it is
+                        // not reopened.
+                        if let cached = cache?.detail(
+                            forPath: session.id, size: session.byteSize,
+                            modified: session.lastActivity
+                        ) {
+                            recent[index].detail = cached
+                            continue
+                        }
+                        let detail = SessionDetailReader.read(
+                            path: session.id, agent: session.agent, depth: depth
+                        )
+                        recent[index].detail = detail
+                        cache?.store(detail, forPath: session.id, size: session.byteSize,
+                                     modified: session.lastActivity)
+                    }
                 }
                 continuation.resume(returning: recent)
             }

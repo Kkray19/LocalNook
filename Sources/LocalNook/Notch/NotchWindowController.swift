@@ -537,8 +537,10 @@ final class NotchWindowController: NSObject {
         let width = NotchShape.totalWidth(
             forBody: model.closedSize.width, topRadius: settings.closedCornerRadius
         )
-        // A few points of slop makes the very top screen edge easier to hit.
-        let size = CGSize(width: width, height: height + 3)
+        // Slop below the notch makes the top screen edge easier to hit. Height
+        // only: a wider catcher would start swallowing menu-bar clicks, which
+        // is the defect this two-window split exists to avoid.
+        let size = CGSize(width: width, height: height + max(0, settings.hoverPadding))
         panel.setFrame(
             NSRect(
                 origin: NotchGeometry.windowOrigin(on: screen, windowSize: size),

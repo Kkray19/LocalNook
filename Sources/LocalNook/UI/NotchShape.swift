@@ -73,36 +73,49 @@ nonisolated struct NotchShape: Shape {
 
 /// Animation curves used across the app, in one place so motion feels uniform.
 enum NotchMotion {
+    /// The system's Reduce Motion preference.
+    ///
+    /// Injectable for the same reason as the pointer and the mouse buttons:
+    /// otherwise the one branch that matters — honouring it — can only be
+    /// exercised on a machine that happens to have it switched on, and reports
+    /// itself unverified everywhere else.
+    nonisolated(unsafe) static var systemReducesMotion: () -> Bool = {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
     /// Honours both the app setting and the system Reduce Motion preference.
     static var isAnimated: Bool {
         let settings = Settings.shared
         guard settings.animationsEnabled else { return false }
-        if settings.respectReducedMotion,
-           NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            return false
-        }
+        if settings.respectReducedMotion, systemReducesMotion() { return false }
         return true
     }
 
     /// The main open/close motion.
     ///
-    /// Expressed as duration and bounce, which is the parameterisation Apple
-    /// moved to in WWDC23 and the one that matches how this actually reads:
-    /// bounce is what the eye calls "springy", duration is the settle. The two
-    /// map onto the old form as roughly `bounce = 1 - dampingFraction`.
+    /// Expressed as duration and bounce, the parameterisation Apple introduced
+    /// in WWDC23.
     ///
-    /// This has been tuned twice from opposite directions. It began at damping
-    /// 0.78 — bounce 0.22 at a short response — which read as linear, because a
-    /// heavily damped spring over a short settle is perceptually an ease curve.
-    /// Overcorrecting to damping 0.68 (bounce 0.32) read as springy but not
-    /// smooth. Apple's own guidance is that bounce above about 0.4 "may feel
-    /// too exaggerated for a UI element" and that bounce 0 is the most
-    /// versatile general-purpose spring; the Dynamic-Island-style Mac apps are
-    /// described as matching iOS's spring and damping ratios, and SwiftUI's
-    /// default spring sits near bounce 0.175.
+    /// An earlier version of this comment asserted that `bounce` equals
+    /// `1 - dampingFraction`. That relationship is *not* documented for these
+    /// APIs and is withdrawn: `Spring` exposes both parameterisations and
+    /// converts between them itself, but the conversion is not published, so
+    /// nothing here should be justified by it. What is stated below are the
+    /// parameters actually passed and the result actually observed.
     ///
-    /// So: a longer settle with a small, single overshoot. Fluidity here comes
-    /// from duration and from continuity, not from bounce.
+    /// Tuning history, as parameters and observations rather than theory:
+    ///
+    ///   `.spring(response: 0.42, dampingFraction: 0.78)` — reported as
+    ///   "very linear and not liquid, very blocky".
+    ///   `.spring(response: 0.46, dampingFraction: 0.68)` — reported as
+    ///   working, but wanted smoother.
+    ///   `.spring(duration: 0.52, bounce: 0.16)` — current. Awaiting a verdict.
+    ///
+    /// Apple's stated guidance is that bounce above roughly 0.4 "may feel too
+    /// exaggerated for a UI element" and that bounce 0 is the most versatile
+    /// general-purpose spring. 0.16 sits well below that line deliberately: the
+    /// fluidity here is meant to come from the settle and from continuity
+    /// across interruptions, not from overshoot.
     ///
     /// **The overshoot still has a hard ceiling.** The panel window does not
     /// resize during the animation; the content animates inside a window only

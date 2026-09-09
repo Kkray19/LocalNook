@@ -439,7 +439,7 @@ struct CompactSessionsView: View {
                                 .font(Theme.caption)
                                 .foregroundStyle(Theme.secondaryText)
                                 .lineLimit(1)
-                            if session.isActive, let step = session.detail.activity {
+                            if session.detail.showsProgress, let step = session.detail.step {
                                 HStack(spacing: 4) {
                                     SessionWorkingBar()
                                     Text(step)

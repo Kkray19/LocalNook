@@ -5,73 +5,140 @@
 //  Copyright (C) 2026 Krish Kowli
 //  Licensed under the GNU General Public License v3.0 or later. See LICENSE.
 //
-//  What an agent session is *actually* doing, read from its own transcript.
+//  What an agent session is doing, read from its own transcript.
 //
-//  Until now a session was described entirely by file metadata, so the notch
-//  showed a directory name — often a workspace hash like "3274fa", which tells
-//  you nothing. The transcript itself carries the model, the effort, the name
-//  you gave the chat and what the agent is working on right now.
+//  ── This reads content, and is treated as such ──────────────────────────────
 //
-//  Privacy, deliberately narrow:
+//  A chat title and a tool description are written by a person, or by a model
+//  reasoning about that person's work. They can name a client, a repository, a
+//  medical question, an unreleased product. Truncating them to ninety
+//  characters makes them shorter, not safer. So they are handled as *content*,
+//  not as metadata that happens to live in a file:
 //
-//    * Reads are bounded. Transcripts reach tens of megabytes; this reads at
-//      most a 256 KB tail and, once per file, a 512 KB head. It never reads a
-//      whole file and never holds one in memory.
-//    * Only four short strings are extracted, each truncated. Message bodies,
-//      tool inputs, file contents and command output are not retained.
-//    * Nothing is written anywhere. The strings live in memory for as long as
-//      the widget shows them and are never persisted, logged or sent.
+//    * Off by default. `Settings.sessionLabelDepth` starts at `.metadataOnly`,
+//      in which not one byte of any transcript body is read. Switching the
+//      sessions widget on is not consent to read inside transcripts.
+//    * Strictly extracted. Four named fields and nothing else. There is no
+//      fallback to message text, assistant prose or user input — if the named
+//      field is absent then the value is absent, and the UI says so.
+//    * Never printed. Not logged, not written to diagnostics, not included in
+//      `--render-preview` output, never persisted. The only cache is in memory
+//      and is dropped the moment the feature is switched off.
+//    * Not shown on a locked screen, and not even read while locked.
 //
-//  This is a real widening of what LocalNook reads — it was previously metadata
-//  only — so it is stated here rather than left to be discovered. It stays on
-//  this Mac, like everything else.
+//  ── Reads are bounded, and the bound is a real limitation ──────────────────
+//
+//  Transcripts on this machine reach 40 MB. The reader takes a 256 KB tail and,
+//  only when the title has not already been seen, a 512 KB head. That is a
+//  *sample*, and sampling has consequences worth stating rather than hiding:
+//
+//    * A title set unusually late — past the head window but before the tail
+//      window — is not found, and the session shows its directory name instead.
+//      That is a miss, and it is reported as an absent title rather than filled
+//      in with a guess.
+//    * A session whose last 256 KB holds no assistant record yields no step. A
+//      single very large record can cause this.
+//    * The head and the tail can come from far apart in a long conversation.
+//      Nothing is inferred across that gap: the model, the effort and the step
+//      are all taken from one record, so they cannot describe different turns.
 //
 
 import Foundation
 
-/// The parts of a session worth showing. Every field is optional: an
-/// unrecognised transcript degrades to the old metadata-only behaviour rather
-/// than guessing.
-nonisolated struct SessionDetail: Equatable, Sendable {
-    /// Display name of the model, e.g. "Opus 5".
-    var model: String?
-    /// Reasoning effort, when the transcript records one, e.g. "max".
-    var effort: String?
-    /// The name given to the chat, when there is one.
-    var title: String?
-    /// A short description of the current step, e.g. "Running the test suite".
-    var activity: String?
+/// How much of a transcript the sessions widget may read.
+nonisolated enum SessionLabelDepth: String, CaseIterable, Identifiable, Sendable {
+    /// File metadata only. No transcript body is opened.
+    case metadataOnly
+    /// The four named fields, read from the transcript.
+    case richLabels
 
-    var isEmpty: Bool {
-        model == nil && effort == nil && title == nil && activity == nil
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .metadataOnly: "Metadata only"
+        case .richLabels: "Read labels from session files"
+        }
     }
 
-    /// "Opus 5 max" — what the collapsed live activity shows instead of a
-    /// directory name.
+    var explanation: String {
+        switch self {
+        case .metadataOnly:
+            "Sessions are described by file name and timestamp only. No "
+                + "transcript content is read."
+        case .richLabels:
+            "LocalNook reads four fields from your local session files — the "
+                + "model, the effort, the name you gave the chat, and the current "
+                + "step — and uses them as labels. Those fields can contain "
+                + "anything you or the agent wrote. They stay on this Mac, are "
+                + "never saved or logged, and are not shown on the lock screen."
+        }
+    }
+}
+
+/// How confident we are that a session is doing something *now*.
+nonisolated enum SessionActivityState: String, Equatable, Sendable {
+    /// A record timestamped inside the working window. The step is current.
+    case working
+    /// Recent enough to list, but the newest record is too old to claim its
+    /// step still describes what is happening.
+    case recent
+    /// No authoritative timestamp — the transcript did not provide one.
+    case unknown
+}
+
+/// The parts of a session worth showing. Every field is optional, and absent
+/// means absent: nothing here is guessed or substituted.
+nonisolated struct SessionDetail: Equatable, Sendable {
+    var model: String?
+    var effort: String?
+    var title: String?
+    /// The current step. Only ever populated when `activity == .working`.
+    var step: String?
+    var activity: SessionActivityState = .unknown
+    /// True when the reader was not permitted to look, as distinct from looking
+    /// and finding nothing. Keeps "switched off" distinguishable from "empty".
+    var wasNotRead = true
+
+    var isEmpty: Bool { model == nil && effort == nil && title == nil && step == nil }
+
+    /// "Opus 5 max". Absent when the model is unknown — never a placeholder.
     var modelLabel: String? {
         guard let model else { return nil }
         guard let effort else { return model }
         return "\(model) \(effort)"
     }
+
+    /// Whether the marching indicator should run. It must not imply work is in
+    /// progress on the strength of a stale tool description.
+    var showsProgress: Bool { activity == .working && step != nil }
 }
 
 /// Reads `SessionDetail` from a transcript without ever reading all of it.
 nonisolated enum SessionDetailReader {
-    /// Enough tail to hold the last few exchanges. Measured against a 40 MB
-    /// transcript: model, effort and the current step were all recovered.
     static let tailWindow = 256 * 1024
-    /// The chat name is written early — 0.4% into that same 40 MB file — so a
-    /// head window finds it without touching the rest.
     static let headWindow = 512 * 1024
-    /// Activity strings are labels, not content. Anything longer is a message
-    /// body that has no business here.
-    static let maxActivityLength = 90
+    /// Labels are labels. Anything longer is a body, and is cut.
+    static let maxLabelLength = 90
+    /// How fresh the newest record must be for its step to count as current.
+    static let workingWindow: TimeInterval = 120
 
-    static func read(path: String, agent: SessionAgent) -> SessionDetail {
+    /// Reads a transcript, or declines to.
+    ///
+    /// Declines — returning `wasNotRead` — when the feature is off or the screen
+    /// is locked. Both are checked here rather than at the call sites, so a
+    /// caller added later cannot bypass them by forgetting.
+    static func read(path: String, agent: SessionAgent, depth: SessionLabelDepth) -> SessionDetail {
+        guard depth == .richLabels else { return SessionDetail() }
+        guard !ScreenLock.isLocked else { return SessionDetail() }
+
+        var detail: SessionDetail
         switch agent {
-        case .claudeCode: readClaudeCode(path: path)
-        case .codex: readCodex(path: path)
+        case .claudeCode: detail = readClaudeCode(path: path)
+        case .codex: detail = readCodex(path: path)
         }
+        detail.wasNotRead = false
+        return detail
     }
 
     // MARK: Claude Code
@@ -79,101 +146,119 @@ nonisolated enum SessionDetailReader {
     private static func readClaudeCode(path: String) -> SessionDetail {
         var detail = SessionDetail()
 
+        // The newest assistant record, kept whole, so the model, the effort and
+        // the step all describe the same turn. Taking each from wherever it last
+        // appeared would let a model name from one turn sit beside a step from
+        // another and read as a single coherent statement.
+        var newestAssistant: [String: Any]?
+
         for line in lines(atPath: path, window: tailWindow, fromEnd: true) {
             guard let object = json(line) else { continue }
-
-            if let message = object["message"] as? [String: Any],
-               let model = message["model"] as? String,
-               !model.hasPrefix("<") {                      // "<synthetic>"
-                detail.model = displayName(forModel: model)
-            }
-            if let effort = object["effort"] as? String, !effort.isEmpty {
-                detail.effort = effort
-            }
-            if object["type"] as? String == "custom-title",
-               let title = object["customTitle"] as? String {
-                detail.title = trimmed(title)
-            }
-            if object["type"] as? String == "assistant",
-               let message = object["message"] as? [String: Any],
-               let step = currentStep(inClaudeContent: message["content"]) {
-                detail.activity = step
+            switch object["type"] as? String {
+            case "assistant":
+                newestAssistant = object
+            case "custom-title":
+                if let title = object["customTitle"] as? String { detail.title = label(title) }
+            default:
+                break
             }
         }
 
-        // The title is set near the start, so it is usually outside the tail.
+        if let record = newestAssistant {
+            let message = record["message"] as? [String: Any]
+            if let model = message?["model"] as? String {
+                detail.model = displayName(forModel: model)
+            }
+            if let effort = record["effort"] as? String, !effort.isEmpty {
+                detail.effort = label(effort)
+            }
+            detail.activity = state(forTimestamp: record["timestamp"] as? String)
+            // The step only means anything while the turn is current.
+            if detail.activity == .working {
+                detail.step = currentStep(inClaudeContent: message?["content"])
+            }
+        }
+
         if detail.title == nil {
             for line in lines(atPath: path, window: headWindow, fromEnd: false) {
                 guard let object = json(line),
                       object["type"] as? String == "custom-title",
                       let title = object["customTitle"] as? String
                 else { continue }
-                detail.title = trimmed(title)
+                detail.title = label(title)
             }
         }
         return detail
     }
 
-    /// What the agent is doing, from the newest assistant message.
+    /// The step, from named fields only.
     ///
-    /// A tool call's own `description` is the same short label the agent's UI
-    /// shows on its progress line, which is exactly what belongs here. Falling
-    /// back to the tool's name keeps it to a verb. Prose is a last resort and
-    /// is cut to one line.
+    /// A tool call's `description` is the label the agent's own progress line
+    /// shows, and the tool's `name` is a verb. There is deliberately no third
+    /// case: falling back to assistant prose would put arbitrary generated text
+    /// on the menu bar, which is exactly what this boundary exists to prevent.
     private static func currentStep(inClaudeContent content: Any?) -> String? {
         guard let blocks = content as? [[String: Any]] else { return nil }
-        var step: String?
-        for block in blocks {
-            switch block["type"] as? String {
-            case "tool_use":
-                let input = block["input"] as? [String: Any]
-                if let description = input?["description"] as? String, !description.isEmpty {
-                    step = trimmed(description)
-                } else if let name = block["name"] as? String {
-                    step = trimmed(name)
-                }
-            case "text":
-                if let text = block["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    step = trimmed(text)
-                }
-            default:
-                break
+        for block in blocks.reversed() where block["type"] as? String == "tool_use" {
+            if let description = (block["input"] as? [String: Any])?["description"] as? String,
+               let text = label(description) {
+                return text
+            }
+            if let name = block["name"] as? String, let text = label(name) {
+                return text
             }
         }
-        return step
+        return nil
     }
 
     // MARK: Codex
 
+    /// Codex records a model and a timestamp in named fields. It has no
+    /// equivalent of a tool description, and its event payloads carry raw
+    /// assistant and user text — so no step is extracted at all, rather than
+    /// scraping prose out of them.
     private static func readCodex(path: String) -> SessionDetail {
         var detail = SessionDetail()
+        var newestTimestamp: String?
         for line in lines(atPath: path, window: tailWindow, fromEnd: true) {
-            guard let object = json(line),
-                  let payload = object["payload"] as? [String: Any] else { continue }
-
-            if object["type"] as? String == "turn_context",
-               let model = payload["model"] as? String {
-                detail.model = displayName(forModel: model)
-            }
-            if object["type"] as? String == "event_msg" {
-                for key in ["text", "message", "command"] {
-                    if let value = payload[key] as? String, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        detail.activity = trimmed(value)
-                        break
-                    }
-                }
-            }
+            guard let object = json(line) else { continue }
+            if let stamp = object["timestamp"] as? String { newestTimestamp = stamp }
+            guard object["type"] as? String == "turn_context",
+                  let payload = object["payload"] as? [String: Any],
+                  let model = payload["model"] as? String
+            else { continue }
+            detail.model = displayName(forModel: model)
         }
+        detail.activity = state(forTimestamp: newestTimestamp)
+        // Never `.working`: with no step there is nothing to be working *on*,
+        // and a running indicator with no label asserts busyness without
+        // evidence for it.
+        if detail.activity == .working { detail.activity = .recent }
         return detail
     }
 
     // MARK: Shared
 
-    /// A window of complete lines from one end of a file.
-    ///
-    /// The partial line at the cut is discarded — from the front when reading
-    /// the tail, from the back when reading the head — so a half-written record
-    /// is never parsed.
+    /// Freshness from the transcript's own timestamp, which is authoritative in
+    /// a way the file's modification date is not: a file can be touched by a
+    /// backup, a search index or an editor without the session doing anything.
+    static func state(forTimestamp raw: String?) -> SessionActivityState {
+        guard let raw, let date = parseTimestamp(raw) else { return .unknown }
+        let age = Date().timeIntervalSince(date)
+        // A timestamp in the future is a clock problem, not freshness.
+        guard age >= -60 else { return .unknown }
+        return age < workingWindow ? .working : .recent
+    }
+
+    /// Formatters are not Sendable and the reader runs off the main actor, so
+    /// each parse builds its own rather than sharing one across threads.
+    private static func parseTimestamp(_ raw: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: raw) { return date }
+        return ISO8601DateFormatter().date(from: raw)
+    }
+
     private static func lines(atPath path: String, window: Int, fromEnd: Bool) -> [Substring] {
         guard let handle = FileHandle(forReadingAtPath: path) else { return [] }
         defer { try? handle.close() }
@@ -182,19 +267,19 @@ nonisolated enum SessionDetailReader {
         guard size > 0 else { return [] }
         let length = min(window, size)
 
-        let data: Data?
         if fromEnd {
             try? handle.seek(toOffset: UInt64(size - length))
-            data = try? handle.read(upToCount: length)
         } else {
             try? handle.seek(toOffset: 0)
-            data = try? handle.read(upToCount: length)
         }
-        guard let data, let text = String(data: data, encoding: .utf8) else { return [] }
+        guard let data = try? handle.read(upToCount: length),
+              let text = String(data: data, encoding: .utf8)
+        else { return [] }
 
         var pieces = text.split(separator: "\n", omittingEmptySubsequences: true)
         guard !pieces.isEmpty else { return [] }
-        // Drop the piece that the window cut in half.
+        // Drop whichever piece the window cut in half, so a partially written
+        // record is never parsed as though it were complete.
         if fromEnd, length < size { pieces.removeFirst() }
         if !fromEnd, length < size { pieces.removeLast() }
         return pieces
@@ -205,40 +290,93 @@ nonisolated enum SessionDetailReader {
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
-    private static func trimmed(_ text: String) -> String? {
-        let firstLine = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: "\n").first.map(String.init) ?? ""
-        guard !firstLine.isEmpty else { return nil }
-        guard firstLine.count > maxActivityLength else { return firstLine }
-        return String(firstLine.prefix(maxActivityLength - 1)) + "…"
+    /// Normalises a field into something displayable, or into nothing.
+    ///
+    /// Control characters are stripped: a transcript is machine-written, and a
+    /// stray newline or escape sequence in a menu-bar label is a rendering
+    /// problem at best.
+    static func label(_ text: String) -> String? {
+        let firstLine = text.components(separatedBy: .newlines).first ?? ""
+        let scalars = firstLine.unicodeScalars.filter {
+            !CharacterSet.controlCharacters.contains($0)
+                && !$0.properties.isDefaultIgnorableCodePoint
+        }
+        let stripped = String(String.UnicodeScalarView(scalars))
+            .trimmingCharacters(in: .whitespaces)
+        guard !stripped.isEmpty else { return nil }
+        guard stripped.count > maxLabelLength else { return stripped }
+        return String(stripped.prefix(maxLabelLength - 1)) + "…"
     }
 
-    /// "claude-opus-5" → "Opus 5". Unknown identifiers are prettified rather
-    /// than shown raw, and never invented: if it cannot be read, it is dropped.
+    /// "claude-opus-5" → "Opus 5". Identifiers only: this maps a machine name
+    /// and refuses anything that does not look like one, so it can never become
+    /// a channel for free text.
     static func displayName(forModel identifier: String) -> String? {
         let id = identifier.lowercased()
-        guard !id.isEmpty, !id.hasPrefix("<") else { return nil }
+        guard !id.isEmpty, !id.hasPrefix("<"), id.count <= 60 else { return nil }
+        guard id.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "." || $0 == "_" })
+        else { return nil }
 
-        var parts = id.split(separator: "-").map(String.init)
-        // Vendor prefixes carry no information for the reader.
-        if let first = parts.first, ["claude", "anthropic"].contains(first) {
-            parts.removeFirst()
-        }
-        // Trailing date stamps, e.g. haiku-4-5-20251001.
-        if let last = parts.last, last.count == 8, Int(last) != nil {
-            parts.removeLast()
-        }
+        var parts = id.split(whereSeparator: { $0 == "-" || $0 == "_" }).map(String.init)
+        if let first = parts.first, ["claude", "anthropic"].contains(first) { parts.removeFirst() }
+        if let last = parts.last, last.count == 8, Int(last) != nil { parts.removeLast() }
         guard !parts.isEmpty else { return nil }
 
-        // Version segments join with a dot: 4, 5 → "4.5". A lone number stays.
         var name = parts.removeFirst()
         name = name == "gpt" ? "GPT" : name.capitalized
         let numbers = parts.filter { Int($0) != nil }
         let words = parts.filter { Int($0) == nil }
-        var label = name
-        if !numbers.isEmpty { label += " " + numbers.joined(separator: ".") }
-        if !words.isEmpty { label += " " + words.map(\.capitalized).joined(separator: " ") }
-        return label
+        var result = name
+        if !numbers.isEmpty { result += " " + numbers.joined(separator: ".") }
+        if !words.isEmpty { result += " " + words.map(\.capitalized).joined(separator: " ") }
+        return result
     }
 }
 
+/// Remembers what was read from each transcript, so an unchanged file is not
+/// reopened on every scan.
+///
+/// In memory only, and deliberately so. Writing these strings to disk would
+/// turn a transient label into a persistent copy of someone's chat titles,
+/// which is precisely the thing the boundary above exists to avoid. The cache
+/// is dropped whole when the feature is switched off.
+final class SessionDetailCache: @unchecked Sendable {
+    private struct Key: Hashable {
+        let path: String
+        let size: Int
+        let modified: TimeInterval
+    }
+
+    private var entries: [Key: SessionDetail] = [:]
+    private let lock = NSLock()
+
+    func detail(forPath path: String, size: Int, modified: Date) -> SessionDetail? {
+        lock.lock()
+        defer { lock.unlock() }
+        return entries[Key(path: path, size: size, modified: modified.timeIntervalSince1970)]
+    }
+
+    func store(_ detail: SessionDetail, forPath path: String, size: Int, modified: Date) {
+        lock.lock()
+        defer { lock.unlock() }
+        // A session that changes constantly would otherwise accumulate an entry
+        // per write. Bounded, and the bound is small because only a handful of
+        // sessions are ever read.
+        if entries.count > 64 { entries.removeAll() }
+        entries[Key(path: path, size: size, modified: modified.timeIntervalSince1970)] = detail
+    }
+
+    /// Forgets everything. Called when the feature is switched off, so no label
+    /// outlives the permission that produced it.
+    func clear() {
+        lock.lock()
+        entries.removeAll()
+        lock.unlock()
+    }
+
+    var isEmpty: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return entries.isEmpty
+    }
+}

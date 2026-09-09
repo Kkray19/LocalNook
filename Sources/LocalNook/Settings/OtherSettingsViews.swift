@@ -18,7 +18,7 @@ struct WidgetSettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsSection(
                 title: "Dashboard",
-                footer: "These appear side by side when the notch opens. If the panel is too narrow for all of them, the ones at the end are left out rather than everything being shrunk."
+                footer: "Pinned widgets appear side by side when the notch opens, in this order. Anything you unpin still works — it moves to Tools. If the panel is too narrow for everything pinned, the ones at the end move into the “More” control at the right of the dashboard, which takes you to them rather than hiding them."
             ) {
                 ForEach(WidgetKind.allCases.filter(\.suitsDashboard)) { kind in
                     HStack(spacing: 10) {
@@ -50,6 +50,25 @@ struct WidgetSettingsView: View {
                         }
                     }
                 }
+            }
+
+            SettingsSection(
+                title: "AI session labels",
+                footer: "Session files live on this Mac and nothing here is ever sent anywhere. This choice is separate from switching the AI Sessions widget on: the widget works either way."
+            ) {
+                Picker("Labels", selection: Binding(
+                    get: { settings.sessionLabelDepth },
+                    set: { settings.sessionLabelDepth = $0 }
+                )) {
+                    ForEach(SessionLabelDepth.allCases) { depth in
+                        Text(depth.label).tag(depth)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                Text(settings.sessionLabelDepth.explanation)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             SettingsSection(

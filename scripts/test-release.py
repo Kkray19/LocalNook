@@ -49,6 +49,7 @@ for scenario in BLOCKING:
         shutil.copy(source, root / "scripts/build-release.sh")
         (root / "scripts/test-release.py").write_text("# Recursion disabled in fixture\n")
         (root / "scripts/test-install.py").write_text("# Recursion disabled in fixture\n")
+        (root / "scripts/test-isolation.py").write_text("# Recursion disabled in fixture\n")
         (root / "scripts/make-icon.swift").write_text("")
         (root / "VERSION").write_text("0.1.0")
         (root / "LICENSE").write_text("test")
@@ -101,6 +102,7 @@ with tempfile.TemporaryDirectory(prefix="localnook-release-test-") as root:
     shutil.copy(source, root / "scripts/build-release.sh")
     (root / "scripts/test-release.py").write_text("# Recursion disabled in fixture\n")
     (root / "scripts/test-install.py").write_text("# Recursion disabled in fixture\n")
+    (root / "scripts/test-isolation.py").write_text("# Recursion disabled in fixture\n")
     (root / "scripts/make-icon.swift").write_text("")
     (root / "VERSION").write_text("0.1.0")
     for name in ("LICENSE", "MPL-2.0.txt", "THIRD_PARTY_LICENSES.md"):

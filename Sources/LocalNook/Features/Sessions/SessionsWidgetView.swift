@@ -88,7 +88,7 @@ private struct SessionRow: View {
                     .lineLimit(1)
                     .foregroundStyle(.white.opacity(0.9))
 
-                if session.isActive, let step = session.detail.activity {
+                if session.detail.showsProgress, let step = session.detail.step {
                     // What it is doing right now, with the same pulsing bar the
                     // agents' own progress lines use.
                     HStack(spacing: 5) {

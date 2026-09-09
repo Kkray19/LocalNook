@@ -463,38 +463,92 @@ is not re-derivable from an automated run.
 
 ## What the sessions widget reads
 
-This changed deliberately and is worth stating plainly, because it widened.
+**Off by default.** `Settings → Widgets → AI session labels` offers two modes,
+and the shipped default is **Metadata only**, in which no transcript body is
+opened at all. Switching the AI Sessions widget on is *not* consent to read
+inside transcripts; that is a separate, explicit choice under its own
+preference key, so an existing choice is never overwritten by an update.
 
-**Before:** file metadata only — path, modification date, size. The notch showed
-a directory name, which for a scratch workspace is a hash like `3274fa`.
+| Mode | What is read |
+|---|---|
+| **Metadata only** (default) | File name, size, modification date. No transcript content. |
+| **Read labels from session files** | The four fields below, and nothing else. |
 
-**Now:** the same metadata, plus a bounded read *inside* the transcript for four
-short strings:
-
-| Field | Example | Where it comes from |
+| Field | Example | Source, exactly |
 |---|---|---|
-| model | `Opus 5` | `message.model`, mapped to a readable name |
-| effort | `max` | the record's `effort` |
-| chat title | `LocalNook foundation audit` | the `custom-title` record |
-| current step | `Running the test suite` | the newest assistant message's tool `description` |
+| model | `Opus 5` | `message.model`, mapped through an identifier table; free text in that field is refused |
+| effort | `max` | the same record's `effort` |
+| chat title | `LocalNook foundation audit` | a `custom-title` record's `customTitle` |
+| current step | `Running the test suite` | the newest assistant record's `tool_use.input.description`, else its tool `name` |
 
-**The bounds, which are the point:**
+### The rules, and why each exists
 
-- At most a **256 KB tail** and, only when the title is not already found, a
-  **512 KB head**. Transcripts on this machine reach **40 MB**; the title sits
-  0.4% in and the tail recovers everything else, so the reader never touches the
-  middle and never holds a file in memory.
-- At most **six** sessions are opened per scan, and only those touched in the
-  last hour. Thirty were listed; the rest are never opened.
-- Each string is **truncated** to 90 characters. A step longer than that is a
-  message body, not a label, and is cut.
-- Nothing is **written**: not persisted, not logged, not sent. The strings live
-  only as long as the widget shows them.
-- An unrecognised transcript yields **nothing** rather than a guess, and the
-  widget falls back to the previous metadata-only presentation.
+- **Strict extraction.** There is no fallback to assistant prose or user input.
+  If the named field is absent the value is absent. A test asserts that a
+  transcript whose only content is a message body yields nothing at all.
+- **One turn.** Model, effort and step all come from the *same* assistant
+  record, so they cannot be assembled from different turns into a sentence that
+  was never true.
+- **Freshness is authoritative.** Activity comes from the record's own
+  timestamp, not the file's modification date — a file can be touched by a
+  backup or a search index without the session doing anything. A step older
+  than 120 seconds is dropped rather than shown, and the marching indicator
+  stops. No timestamp means `unknown`, which also stops it.
+- **Never persisted, never printed.** Not logged, not in diagnostics, not in
+  `--render-preview` output. The only cache is in memory, keyed on path + size +
+  modification date so an unchanged file is not reopened, and it is cleared the
+  moment the feature is switched off — along with the labels already on screen.
+- **Not on the lock screen.** While locked, the reader declines to read at all
+  and the widget falls back to metadata-only.
 
-All of that is asserted in the "Session detail" section of the deterministic
-suite, against transcripts the test writes — never the user's own.
+### The bounds are a real limitation, not a formality
+
+At most a **256 KB tail**, plus a **512 KB head** only when the title has not
+already been seen. Transcripts here reach **40 MB**, and at most **six**
+sessions are opened per scan, only those touched within the hour.
+
+That is a *sample*, and it can miss:
+
+- A title set unusually late — past the head window, before the tail window —
+  is not found, and the session shows its directory name. Reported as an absent
+  title, never filled in with a guess.
+- A session whose last 256 KB holds no assistant record yields no step.
+- Head and tail can come from far apart in one conversation. Nothing is inferred
+  across that gap.
+
+Forty-eight assertions cover the extraction, the freshness rule, every bound,
+and the malformed cases: half-written trailing records, unparseable lines,
+unknown schemas, missing fields, future timestamps, multi-line and control
+characters, and sensitive-looking strings that must not escape. All of them run
+against fixtures the test writes; the user's own transcripts are never opened.
+
+## Self-test isolation
+
+The suite runs against a **disposable preferences domain and a disposable
+support directory**, chosen from the command line before any singleton can
+observe them (`AppInfo.isSelfTest`). Production is not touched and therefore
+does not need restoring.
+
+An earlier version snapshotted the production domain and restored it via
+`atexit`. That was removed: it was unnecessary, since `@Pref` already wrote to
+the disposable suite, and unsafe, since restoring a snapshot would overwrite
+whatever the running app changed meanwhile — and `atexit` does not run on a
+crash or a `SIGKILL` anyway.
+
+`scripts/test-isolation.py` proves the property rather than the restore. It
+writes a sentinel into the production domain and into the production support
+directory, then samples both **while the suite is still running** and again
+afterwards, across three endings:
+
+| Ending | Result |
+|---|---|
+| Completion | 25 samples during the run, all unchanged |
+| `SIGTERM` part-way through | unchanged during and after |
+| `SIGKILL` part-way through | unchanged during and after |
+
+Twenty-three assertions. The only cleanup it performs is removing the
+disposable directories and disposable domains a killed run could not remove
+itself.
 
 ## Known gaps in coverage
 

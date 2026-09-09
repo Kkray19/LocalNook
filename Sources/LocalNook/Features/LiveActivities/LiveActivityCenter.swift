@@ -216,23 +216,28 @@ final class LiveActivityCenter: ObservableObject {
 
         let active = SessionMonitor.shared.activeSessions
         if settings.activitySessions, !active.isEmpty {
-            // The model, not the directory. A workspace hash like "3274fa" is
-            // the least informative thing the transcript knows about itself;
-            // "Opus 5 max" is what the session actually is. The current step
-            // goes on the trailing side, so the collapsed notch reads as
-            // "Opus 5 max — Running the test suite".
+            // The model rather than the directory, when the reader was
+            // allowed to look. The step only appears while the turn is actually
+            // current — a stale tool description must not read as "working on
+            // this right now". Everything falls back to the metadata-only
+            // presentation, which is also what a locked screen gets, because
+            // the reader declines to read at all while locked.
             let leading: String
             let trailing: String
             if active.count == 1 {
                 let session = active[0]
                 leading = session.detail.modelLabel ?? session.displayName
-                trailing = session.detail.activity ?? session.relativeActivity
+                if session.detail.showsProgress, let step = session.detail.step {
+                    trailing = step
+                } else {
+                    trailing = session.relativeActivity
+                }
             } else {
                 let models = Set(active.compactMap(\.detail.model))
                 leading = models.count == 1
                     ? "\(active.count) × \(models.first!)"
                     : "\(active.count) agents"
-                trailing = "working"
+                trailing = "active recently"
             }
             return LiveActivity(
                 id: "sessions.active", symbol: "brain.head.profile", tint: .green,

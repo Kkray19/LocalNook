@@ -45,6 +45,10 @@ struct GeneralSettingsView: View {
                     title: "Close delay", value: settings.binding(\.closeDelay),
                     range: 0...2.0, step: 0.02, unit: " s", format: "%.2f"
                 )
+                SettingsSlider(
+                    title: "Hover target padding", value: settings.binding(\.hoverPadding),
+                    range: 0...20, step: 1, unit: " pt", format: "%.0f"
+                )
                 Toggle("Collapse when Escape is pressed", isOn: settings.binding(\.closeOnEscape))
             }
 

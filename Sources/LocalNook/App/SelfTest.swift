@@ -59,18 +59,20 @@ enum SelfTest {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
 
-        // Several checks change real settings — which widgets are enabled, the
-        // open delay, the dashboard list — and restore them when they finish.
-        // That is fine until a run does not finish: a failure exit, or the run
-        // being killed, leaves the user's preferences as the test left them.
-        // Batches were killed repeatedly during this project's own acceptance,
-        // so this is observed exposure, not a hypothetical.
+        // No snapshot-and-restore of the production domain here, deliberately.
         //
-        // The whole domain is snapshotted here and put back on the way out,
-        // including via atexit so an unexpected exit is covered too.
-        snapshotUserDefaults()
-        atexit { SelfTest.restoreUserDefaults() }
-
+        // An earlier version of this file did exactly that, and it was both
+        // unnecessary and unsafe. Unnecessary because `@Pref` already writes
+        // through `AppInfo.defaults`, which is a disposable suite whenever
+        // `--self-test` is present — the production domain was never being
+        // touched. Unsafe because restoring a snapshot would *overwrite*
+        // anything the running app changed while the suite was executing, and
+        // because atexit does not run on a crash or a SIGKILL, so it could only
+        // ever have been a partial guarantee for a problem that did not exist.
+        //
+        // Isolation is established by construction instead: see
+        // AppInfo.isSelfTest, which is derived from the command line and so is
+        // correct before any singleton can observe it.
         print("LocalNook self-test — suite: \(suite.rawValue)")
         print("displays connected: \(NSScreen.screens.count)\n")
         if suite != .integration {
@@ -98,6 +100,7 @@ enum SelfTest {
             testLiquidGlass()
             testPrivacyBoundaries()
             testTrayWithRealFiles()
+            testMotion()
             testSessionDetail()
             testClearingTheTrayNeedsConfirming()
             testEveryWidgetIsReachable()
@@ -148,7 +151,6 @@ enum SelfTest {
             print("A required check that could not run remains an explicit limitation.")
             for name in unverifiedNames { print("  unverified: \(name)") }
         }
-        restoreUserDefaults()
         exit(Int32(ExitCode.forResults(failed: failed, unverified: unverified).rawValue))
     }
 
@@ -176,23 +178,6 @@ enum SelfTest {
             if unverified > 0 { return .unverified }
             return .clean
         }
-    }
-
-    /// The user's preferences as they were before the run.
-    private nonisolated(unsafe) static var defaultsSnapshot: [String: Any]?
-    private nonisolated(unsafe) static var defaultsDomain: String?
-
-    private static func snapshotUserDefaults() {
-        guard let domain = Bundle.main.bundleIdentifier else { return }
-        defaultsDomain = domain
-        defaultsSnapshot = UserDefaults.standard.persistentDomain(forName: domain) ?? [:]
-    }
-
-    nonisolated static func restoreUserDefaults() {
-        guard let domain = defaultsDomain, let snapshot = defaultsSnapshot else { return }
-        UserDefaults.standard.setPersistentDomain(snapshot, forName: domain)
-        UserDefaults.standard.synchronize()
-        defaultsSnapshot = nil
     }
 
     private struct Tally {
@@ -1153,93 +1138,291 @@ enum SelfTest {
         settings.openDelay = originalDelay
     }
 
-    /// What a session says about itself, and how little of the file it reads.
+    /// Motion honours Reduce Motion, and survives interruption.
     ///
-    /// Runs against transcripts this test writes, never the user's own. The
-    /// bounds matter as much as the extraction: these files reach tens of
-    /// megabytes, and the point of the reader is that it stays out of almost
-    /// all of it.
-    private static func testSessionDetail() {
-        section("Session detail")
+    /// Deliberately asserts behaviour, not taste. The spring values themselves
+    /// are a judgement call awaiting the user's verdict; what must hold
+    /// regardless is that the animation can be switched off, that the system
+    /// accessibility preference is obeyed, and that an interrupted open does
+    /// not leave the notch stranded between states.
+    private static func testMotion() {
+        section("Motion")
+        let settings = Settings.shared
+        let originalAnimations = settings.animationsEnabled
+        let originalRespect = settings.respectReducedMotion
+        defer {
+            settings.animationsEnabled = originalAnimations
+            settings.respectReducedMotion = originalRespect
+        }
 
-        // Model names, including ones this build has never heard of.
-        check("a model identifier becomes a readable name",
-              SessionDetailReader.displayName(forModel: "claude-opus-5") == "Opus 5",
-              "got \(String(describing: SessionDetailReader.displayName(forModel: "claude-opus-5")))")
-        check("a dotted version reads as one number",
-              SessionDetailReader.displayName(forModel: "claude-haiku-4-5-20251001") == "Haiku 4.5",
-              "got \(String(describing: SessionDetailReader.displayName(forModel: "claude-haiku-4-5-20251001")))")
-        check("another vendor's model is still readable",
-              SessionDetailReader.displayName(forModel: "gpt-6-astra") == "GPT 6 Astra",
-              "got \(String(describing: SessionDetailReader.displayName(forModel: "gpt-6-astra")))")
-        check("a synthetic model is dropped rather than shown",
-              SessionDetailReader.displayName(forModel: "<synthetic>") == nil)
-        check("an empty identifier is dropped",
-              SessionDetailReader.displayName(forModel: "") == nil)
+        settings.animationsEnabled = true
+        settings.respectReducedMotion = false
+        check("animation is on when enabled", NotchMotion.isAnimated)
+
+        settings.animationsEnabled = false
+        check("switching animation off disables it", !NotchMotion.isAnimated)
+
+        // With animation off every curve must be effectively instant, so a
+        // disabled animation cannot leave a view mid-transition.
+        settings.animationsEnabled = false
+        check("a disabled open/close curve is instant",
+              NotchMotion.expand == .linear(duration: 0.01))
+        check("a disabled content curve is instant",
+              NotchMotion.content == .linear(duration: 0.01))
+        check("a disabled incidental curve is instant",
+              NotchMotion.quick == .linear(duration: 0.01))
+
+        // The system preference is injected, so both branches run on any
+        // machine rather than only on one with Reduce Motion switched on.
+        let realReduce = NotchMotion.systemReducesMotion
+        defer { NotchMotion.systemReducesMotion = realReduce }
+
+        settings.animationsEnabled = true
+        settings.respectReducedMotion = true
+        NotchMotion.systemReducesMotion = { true }
+        check("system Reduce Motion is honoured", !NotchMotion.isAnimated)
+        check("and it makes every curve instant",
+              NotchMotion.expand == .linear(duration: 0.01))
+
+        settings.respectReducedMotion = false
+        check("Reduce Motion is ignored when the app opts out", NotchMotion.isAnimated)
+
+        NotchMotion.systemReducesMotion = { false }
+        settings.respectReducedMotion = true
+        check("animation continues when the system does not reduce motion",
+              NotchMotion.isAnimated)
+        NotchMotion.systemReducesMotion = realReduce
+
+        // Interruption continuity, at the level this can be asserted without a
+        // human: an open interrupted by a close, repeatedly and fast, must
+        // always settle in a definite state rather than somewhere between.
+        settings.animationsEnabled = true
+        settings.respectReducedMotion = false
+        let model = NotchViewModel(screenID: NSScreen.main?.stableID)
+        for _ in 0..<40 {
+            model.open()
+            model.close()
+        }
+        pumpEvents(for: 0.3)
+        check("rapid open/close interruption settles in a definite state",
+              model.state == .closed || model.state == .open,
+              "ended in \(model.state)")
+        model.allowHoverToReopen()
+        model.open()
+        pumpEvents(for: 0.1)
+        model.close()
+        model.allowHoverToReopen()
+        model.open()
+        pumpEvents(for: 0.4)
+        check("an interrupted close still ends open when reopened",
+              model.state == .open, "ended in \(model.state)")
+        model.close()
+    }
+
+    /// The sessions content boundary, its freshness rule, and its bounds.
+    ///
+    /// Every fixture here is written by this test. The user's own transcripts
+    /// are never opened — not even to check that they parse.
+    private static func testSessionDetail() {
+        section("Session labels — boundary")
+        let settings = Settings.shared
+        let originalDepth = settings.sessionLabelDepthID
+        defer { settings.sessionLabelDepthID = originalDepth }
 
         let dir = AppInfo.testDirectory.appendingPathComponent("sessions", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        // A transcript shaped like Claude Code's, with the title near the front
-        // and the interesting part at the end — as a real one is.
-        let file = dir.appendingPathComponent("fixture.jsonl")
-        var lines: [String] = [
-            #"{"type":"custom-title","customTitle":"LocalNook foundation audit"}"#
-        ]
-        // Padding, so the title lands outside the tail window and the head read
-        // is the only thing that can find it. This is the real layout.
-        let filler = String(repeating: "x", count: 900)
-        for index in 0..<600 {
-            lines.append(#"{"type":"user","message":{"content":"\#(filler)\#(index)"}}"#)
+        func write(_ name: String, _ lines: [String]) -> String {
+            let url = dir.appendingPathComponent(name)
+            try? lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+            return url.path
         }
-        lines.append(#"{"type":"assistant","effort":"max","message":{"model":"claude-opus-5","content":[{"type":"tool_use","name":"Bash","input":{"description":"Running the test suite"}}]}}"#)
-        try? lines.joined(separator: "\n").write(to: file, atomically: true, encoding: .utf8)
+        func stamp(_ secondsAgo: TimeInterval) -> String {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return formatter.string(from: Date().addingTimeInterval(-secondsAgo))
+        }
 
-        let size = ((try? FileManager.default.attributesOfItem(atPath: file.path))?[.size] as? Int) ?? 0
-        check("the fixture is bigger than the tail window",
-              size > SessionDetailReader.tailWindow,
-              "\(size) bytes vs \(SessionDetailReader.tailWindow)")
+        let secret = "Acme merger diligence — do not disclose"
+        let current = write("current.jsonl", [
+            #"{"type":"custom-title","customTitle":"\#(secret)"}"#,
+            #"{"type":"assistant","timestamp":"\#(stamp(5))","effort":"max","message":{"model":"claude-opus-5","content":[{"type":"tool_use","name":"Bash","input":{"description":"Running the test suite"}}]}}"#
+        ])
 
-        let detail = SessionDetailReader.read(path: file.path, agent: .claudeCode)
-        check("the model is read", detail.model == "Opus 5", "got \(detail.model ?? "nil")")
-        check("the effort is read", detail.effort == "max", "got \(detail.effort ?? "nil")")
-        check("the chat name is found ahead of the tail window",
-              detail.title == "LocalNook foundation audit", "got \(detail.title ?? "nil")")
-        check("the current step is read",
-              detail.activity == "Running the test suite", "got \(detail.activity ?? "nil")")
-        check("the collapsed label is the model, not the directory",
-              detail.modelLabel == "Opus 5 max", "got \(detail.modelLabel ?? "nil")")
+        // ── The default is metadata only, and it reads nothing ──────────────
+        check("metadata only is the default depth",
+              SessionLabelDepth(rawValue: Settings.defaultSessionLabelDepth) == .metadataOnly,
+              "default is \(Settings.defaultSessionLabelDepth)")
+        let offDetail = SessionDetailReader.read(path: current, agent: .claudeCode,
+                                                 depth: .metadataOnly)
+        check("metadata-only reads nothing at all", offDetail.isEmpty)
+        check("metadata-only says it did not read", offDetail.wasNotRead)
+        check("a private title never appears in metadata-only mode",
+              offDetail.title == nil && offDetail.step == nil)
 
-        // A long step is a message body, not a label. It must be cut.
-        let longFile = dir.appendingPathComponent("long.jsonl")
-        let essay = String(repeating: "word ", count: 300)
-        try? #"{"type":"assistant","message":{"model":"claude-sonnet-5","content":[{"type":"text","text":"\#(essay)"}]}}"#
-            .write(to: longFile, atomically: true, encoding: .utf8)
-        let long = SessionDetailReader.read(path: longFile.path, agent: .claudeCode)
-        check("a long step is truncated rather than shown whole",
-              (long.activity?.count ?? 0) <= SessionDetailReader.maxActivityLength,
-              "kept \(long.activity?.count ?? 0) characters")
+        // ── Enabled: the four named fields, all from one record ─────────────
+        let on = SessionDetailReader.read(path: current, agent: .claudeCode, depth: .richLabels)
+        check("the model is read", on.model == "Opus 5", "got \(on.model ?? "nil")")
+        check("the effort is read", on.effort == "max", "got \(on.effort ?? "nil")")
+        check("the chat name is read", on.title == secret, "got \(on.title ?? "nil")")
+        check("the current step is read", on.step == "Running the test suite",
+              "got \(on.step ?? "nil")")
+        check("a fresh record counts as working", on.activity == .working)
+        check("the progress indicator runs only with a current step", on.showsProgress)
 
-        // Anything unrecognised degrades instead of guessing.
-        let junk = dir.appendingPathComponent("junk.jsonl")
-        try? "not json at all\nneither is this\n".write(to: junk, atomically: true, encoding: .utf8)
-        check("an unreadable transcript yields nothing rather than nonsense",
-              SessionDetailReader.read(path: junk.path, agent: .claudeCode).isEmpty)
+        // ── Freshness: an old step must not claim the agent is working ──────
+        let stale = write("stale.jsonl", [
+            #"{"type":"assistant","timestamp":"\#(stamp(3600))","effort":"max","message":{"model":"claude-opus-5","content":[{"type":"tool_use","name":"Bash","input":{"description":"Running the test suite"}}]}}"#
+        ])
+        let staleDetail = SessionDetailReader.read(path: stale, agent: .claudeCode, depth: .richLabels)
+        check("an hour-old record is not 'working'", staleDetail.activity == .recent,
+              "got \(staleDetail.activity.rawValue)")
+        check("a stale step is dropped rather than shown as current",
+              staleDetail.step == nil, "kept \(staleDetail.step ?? "nil")")
+        check("the progress indicator stops when the step is stale",
+              !staleDetail.showsProgress)
+        check("the model still reads from a stale record", staleDetail.model == "Opus 5")
+
+        // ── No timestamp at all: unknown, and no claim of activity ──────────
+        let undated = write("undated.jsonl", [
+            #"{"type":"assistant","message":{"model":"claude-opus-5","content":[{"type":"tool_use","name":"Bash","input":{"description":"Something"}}]}}"#
+        ])
+        let undatedDetail = SessionDetailReader.read(path: undated, agent: .claudeCode, depth: .richLabels)
+        check("a record with no timestamp is unknown, not working",
+              undatedDetail.activity == .unknown, "got \(undatedDetail.activity.rawValue)")
+        check("no step is claimed without a timestamp", undatedDetail.step == nil)
+        check("the progress indicator stops when freshness is unknown",
+              !undatedDetail.showsProgress)
+
+        let future = write("future.jsonl", [
+            #"{"type":"assistant","timestamp":"\#(stamp(-7200))","message":{"model":"claude-opus-5","content":[]}}"#
+        ])
+        check("a future timestamp is treated as unknown",
+              SessionDetailReader.read(path: future, agent: .claudeCode, depth: .richLabels)
+                  .activity == .unknown)
+
+        // ── Fields come from one record, never mixed across turns ───────────
+        let mixed = write("mixed.jsonl", [
+            #"{"type":"assistant","timestamp":"\#(stamp(9000))","effort":"low","message":{"model":"claude-haiku-4-5","content":[{"type":"tool_use","name":"Old","input":{"description":"An old step"}}]}}"#,
+            #"{"type":"assistant","timestamp":"\#(stamp(3))","effort":"max","message":{"model":"claude-opus-5","content":[{"type":"tool_use","name":"New","input":{"description":"The new step"}}]}}"#
+        ])
+        let mixedDetail = SessionDetailReader.read(path: mixed, agent: .claudeCode, depth: .richLabels)
+        check("the model comes from the newest turn", mixedDetail.model == "Opus 5")
+        check("the effort comes from that same turn", mixedDetail.effort == "max")
+        check("the step comes from that same turn", mixedDetail.step == "The new step",
+              "got \(mixedDetail.step ?? "nil")")
+
+        // ── Strict extraction: prose is never a step ────────────────────────
+        let prose = write("prose.jsonl", [
+            #"{"type":"assistant","timestamp":"\#(stamp(2))","message":{"model":"claude-opus-5","content":[{"type":"text","text":"The patient results suggest we should"}]}}"#
+        ])
+        let proseDetail = SessionDetailReader.read(path: prose, agent: .claudeCode, depth: .richLabels)
+        check("assistant prose is never used as a step", proseDetail.step == nil,
+              "leaked: \(proseDetail.step ?? "nil")")
+        let userText = write("user.jsonl", [
+            #"{"type":"user","timestamp":"\#(stamp(2))","message":{"content":"my bank password is hunter2"}}"#
+        ])
+        check("user input is never used as a label",
+              SessionDetailReader.read(path: userText, agent: .claudeCode, depth: .richLabels).isEmpty,
+              "something leaked from a user record")
+
+        // ── Malformed, partial and unknown shapes ───────────────────────────
+        let partial = write("partial.jsonl", [
+            #"{"type":"custom-title","customTitle":"Fine"}"#,
+            #"{"type":"assistant","timestamp":"x","message":{"model":"claude-opus"#
+        ])
+        let partialDetail = SessionDetailReader.read(path: partial, agent: .claudeCode, depth: .richLabels)
+        check("a half-written last record is ignored", partialDetail.step == nil)
+        check("intact records around it still read", partialDetail.title == "Fine")
+
+        let malformed = write("malformed.jsonl", ["{{{not json", "[1,2,3]", "null"])
+        check("malformed records yield nothing rather than nonsense",
+              SessionDetailReader.read(path: malformed, agent: .claudeCode, depth: .richLabels).isEmpty)
+
+        let unknownSchema = write("unknown.jsonl", [
+            #"{"kind":"something-else","body":{"secret":"should not appear"}}"#
+        ])
+        check("an unknown schema yields nothing",
+              SessionDetailReader.read(path: unknownSchema, agent: .claudeCode, depth: .richLabels).isEmpty)
+
+        let missingFields = write("missing.jsonl", [
+            #"{"type":"assistant","timestamp":"\#(stamp(1))","message":{}}"#
+        ])
+        let missingDetail = SessionDetailReader.read(path: missingFields, agent: .claudeCode, depth: .richLabels)
+        check("a record with no model reports no model", missingDetail.model == nil)
+        check("a record with no step reports no step", missingDetail.step == nil)
+
+        // ── Labels are sanitised and bounded ────────────────────────────────
+        let nasty = write("nasty.jsonl", [
+            #"{"type":"custom-title","customTitle":"line one\nline two\\u0007"}"#
+        ])
+        let nastyTitle = SessionDetailReader.read(path: nasty, agent: .claudeCode, depth: .richLabels).title
+        check("a multi-line title becomes one line", nastyTitle == "line one",
+              "got \(nastyTitle ?? "nil")")
+        check("control characters are stripped from labels",
+              SessionDetailReader.label("ok\u{7}\u{1b}") == "ok",
+              "got \(SessionDetailReader.label("ok\u{7}\u{1b}") ?? "nil")")
+
+        let longTitle = String(repeating: "secret ", count: 60)
+        let long = write("long.jsonl", [#"{"type":"custom-title","customTitle":"\#(longTitle)"}"#])
+        let cut = SessionDetailReader.read(path: long, agent: .claudeCode, depth: .richLabels).title
+        check("a long title is truncated",
+              (cut?.count ?? 0) <= SessionDetailReader.maxLabelLength,
+              "kept \(cut?.count ?? 0) characters")
+
+        // ── Model identifiers are identifiers, not a text channel ───────────
+        check("a model identifier becomes a readable name",
+              SessionDetailReader.displayName(forModel: "claude-opus-5") == "Opus 5")
+        check("a dotted version reads as one number",
+              SessionDetailReader.displayName(forModel: "claude-haiku-4-5-20251001") == "Haiku 4.5")
+        check("another vendor's model is readable",
+              SessionDetailReader.displayName(forModel: "gpt-6-astra") == "GPT 6 Astra")
+        check("a synthetic model is dropped",
+              SessionDetailReader.displayName(forModel: "<synthetic>") == nil)
+        check("free text in a model field is refused, not displayed",
+              SessionDetailReader.displayName(forModel: "my private project notes") == nil)
+        check("an over-long model field is refused",
+              SessionDetailReader.displayName(forModel: String(repeating: "a", count: 200)) == nil)
+
+        // ── Codex: model only, and never claimed to be working ──────────────
+        let codex = write("codex.jsonl", [
+            #"{"type":"turn_context","timestamp":"\#(stamp(2))","payload":{"model":"gpt-6-astra"}}"#,
+            #"{"type":"event_msg","timestamp":"\#(stamp(1))","payload":{"type":"agent_message","message":"private reasoning text"}}"#
+        ])
+        let codexDetail = SessionDetailReader.read(path: codex, agent: .codex, depth: .richLabels)
+        check("codex yields its model", codexDetail.model == "GPT 6 Astra")
+        check("codex event text is never used as a step", codexDetail.step == nil,
+              "leaked: \(codexDetail.step ?? "nil")")
+        check("codex is never reported as working", codexDetail.activity != .working)
+
         check("a missing transcript is safe",
               SessionDetailReader.read(path: dir.appendingPathComponent("nope.jsonl").path,
-                                       agent: .claudeCode).isEmpty)
+                                       agent: .claudeCode, depth: .richLabels).isEmpty)
 
-        // A session with no detail still has something to call itself.
+        // ── Fallbacks in the session itself ─────────────────────────────────
         let bare = AgentSession(id: "/tmp/x.jsonl", agent: .claudeCode,
                                 projectName: "scratch-3274fa", lastActivity: Date(), byteSize: 0)
         check("a session with no detail falls back to the directory",
               bare.displayName == "scratch-3274fa")
         var named = bare
-        named.detail.title = "LocalNook foundation audit"
-        check("a titled session prefers its own name",
-              named.displayName == "LocalNook foundation audit")
+        named.detail.title = "A chat name"
+        check("a titled session prefers its own name", named.displayName == "A chat name")
+
+        // ── The cache is in memory, keyed on the file, and clearable ────────
+        let cache = SessionDetailCache()
+        check("a new cache is empty", cache.isEmpty)
+        cache.store(on, forPath: current, size: 10, modified: Date(timeIntervalSince1970: 1))
+        check("a stored entry is found again",
+              cache.detail(forPath: current, size: 10,
+                           modified: Date(timeIntervalSince1970: 1)) == on)
+        check("a changed file misses the cache",
+              cache.detail(forPath: current, size: 11,
+                           modified: Date(timeIntervalSince1970: 1)) == nil)
+        cache.clear()
+        check("clearing the cache forgets every label", cache.isEmpty)
     }
 
+    /// Clearing the Tray must take two deliberate presses.
     /// Clearing the Tray must take two deliberate presses.
     ///
     /// Found in acceptance: one unguarded click on a trash icon — sitting

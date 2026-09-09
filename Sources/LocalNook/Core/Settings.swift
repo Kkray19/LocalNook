@@ -157,6 +157,15 @@ final class Settings: ObservableObject {
     /// physical notch this puts a translucent smudge over the camera housing.
     @Pref("appearance.glassWhenCollapsed", false) var glassWhenCollapsed: Bool
 
+    /// Opacity of the solid material when the notch is **expanded**.
+    ///
+    /// Applies to the expanded panel only, never to the collapsed notch. A
+    /// collapsed notch sits over the physical camera housing on a notched Mac
+    /// and has to match it exactly; letting the desktop show through there
+    /// would draw a translucent rectangle around the housing, which is the one
+    /// thing the surface must never do.
+    @Pref("appearance.expandedOpacity", 1.0) var expandedOpacity: Double
+
     /// Whether Liquid Glass should actually be used right now.
     var usesLiquidGlass: Bool {
         notchMaterial == .liquidGlass && notchMaterial.isAvailable
@@ -178,6 +187,15 @@ final class Settings: ObservableObject {
     @Pref("notch.showOnAllDisplays", true) var showOnAllDisplays: Bool
     @Pref("notch.preferredScreenID", String?.none) var preferredScreenID: String?
     @Pref("notch.hideInFullscreen", true) var hideInFullscreen: Bool
+
+    /// Extra height on the invisible catcher that opens the notch on hover.
+    ///
+    /// The catcher is otherwise exactly the size of the visible notch, which
+    /// makes it accurate and slightly unforgiving: a pointer thrown at the top
+    /// of the screen can arrive a couple of points below the target and glance
+    /// off it. This adds a margin *below* the notch only — never wider, because
+    /// width is what would start eating clicks meant for the menu bar.
+    @Pref("notch.hoverPadding", 3.0) var hoverPadding: Double
     /// Opt-in private-API window placement. See ARCHITECTURE.md § Private APIs.
     @Pref("notch.useElevatedSpace", false) var useElevatedSpace: Bool
 
@@ -212,6 +230,26 @@ final class Settings: ObservableObject {
     }
 
     /// Widgets shown side by side on the Dashboard, in order.
+    // MARK: Sessions
+
+    /// How much of a transcript the sessions widget may read.
+    ///
+    /// Deliberately defaults to metadata only. Enabling the sessions widget is
+    /// not consent to read inside transcript files; that is a separate,
+    /// explicit choice, and an existing choice is never overwritten because
+    /// this is stored under its own key. See SessionDetail.
+    /// Exposed so a test can assert the shipped default without reading the
+    /// user's stored choice, which may legitimately differ.
+    static let defaultSessionLabelDepth = SessionLabelDepth.metadataOnly.rawValue
+
+    @Pref("sessions.labelDepth", Settings.defaultSessionLabelDepth)
+    var sessionLabelDepthID: String
+
+    var sessionLabelDepth: SessionLabelDepth {
+        get { SessionLabelDepth(rawValue: sessionLabelDepthID) ?? .metadataOnly }
+        set { sessionLabelDepthID = newValue.rawValue }
+    }
+
     @Pref("widgets.dashboard", ["media", "calendar", "timers"]) var dashboardWidgetIDs: [String]
 
     /// Dashboard widgets that are both chosen *and* enabled.

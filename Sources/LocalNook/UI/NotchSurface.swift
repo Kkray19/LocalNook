@@ -58,7 +58,11 @@ struct NotchSurface: View {
         } else {
             // Deliberately unadorned: no border, no gradient, no glow. The
             // silhouette and the shadow do the work.
-            shape.fill(Color.black)
+            //
+            // Transparency applies to the expanded panel only. Collapsed, this
+            // is the camera housing's twin and must be indistinguishable from
+            // it — see Settings.expandedOpacity.
+            shape.fill(Color.black.opacity(isOpen ? settings.expandedOpacity : 1))
         }
     }
 

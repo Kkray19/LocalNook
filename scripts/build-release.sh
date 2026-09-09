@@ -170,6 +170,12 @@ if true; then
       ;;
   esac
 
+  # Isolation is a property of the built bundle, so it is checked against the
+  # bundle rather than the source: the suite must never touch the real
+  # preferences domain or the real support files, including when it is killed.
+  step "Testing self-test isolation…"
+  python3 "$ROOT/scripts/test-isolation.py" "$CONTENTS/MacOS/$APP_NAME" | sed 's/^/    /'
+
   # The live integration half gates on defects and not on the environment.
   #
   # "Advisory by definition" is the wrong policy: it means a demonstrated
