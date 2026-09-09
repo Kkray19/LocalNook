@@ -21,6 +21,31 @@ import AppKit
 import Foundation
 
 enum MediaProbe {
+    /// Says whose consent these answers actually describe.
+    ///
+    /// Learned the hard way: run from a shell, this probe reported Chrome as
+    /// "Connected" while the app's own dashboard said "Google Chrome isn't
+    /// connected" — and the dashboard was right. Automation consent is granted
+    /// to a *client*, and macOS attributes a process launched from a terminal
+    /// to the terminal that launched it. So a probe run this way can report the
+    /// terminal's permissions wearing LocalNook's name.
+    ///
+    /// Rather than quietly mislead, it names its parent and says what that
+    /// means. The authoritative answer is the one the running app shows.
+    private static func printAttributionCaveat() {
+        var parentName = "unknown"
+        var buffer = [CChar](repeating: 0, count: 4096)
+        if proc_pidpath(getppid(), &buffer, UInt32(buffer.count)) > 0 {
+            parentName = (String(cString: buffer) as NSString).lastPathComponent
+        }
+        print("  launched by: \(parentName) (pid \(getppid()))")
+        guard parentName != "launchd" else { return }
+        print("  NOTE: consent is per client, and macOS attributes a process")
+        print("        launched from a terminal to that terminal. These answers")
+        print("        may be \(parentName)'s, not the running app's. What the")
+        print("        app itself has is what its dashboard shows.")
+    }
+
     static func run() -> Never {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
@@ -35,6 +60,7 @@ enum MediaProbe {
             print("  \(bundleID): \(AutomationPermission.status(forBundleID: bundleID).label)"
                   + " (running=\(running))")
         }
+        printAttributionCaveat()
         print("")
 
         let providers: [any MediaProvider] = [
