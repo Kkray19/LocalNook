@@ -92,7 +92,7 @@ Covered:
 | Notes / To-Do | Create, edit, title-from-first-line, search hit and miss, delete; to-do trim, complete, sort, archive; blank input rejected |
 | Timers | Full duration shown before start; formatting; run/pause; stopwatch has no total; pomodoro phases; countdown clamps |
 | Media | Starts idle; progress maths; position interpolates while playing and not while paused; zero duration cannot divide by zero; availability checks never launch an app |
-| Sessions | Scan completes; ids are file paths and no content is retained |
+| Sessions | Scan completes; ids are file paths. A **bounded** peek inside recent transcripts extracts four short strings — model, effort, chat title, current step — each truncated, none persisted. See "What the sessions widget reads" below. |
 | Permissions | Every permission has a readable state and a Settings link; managers behave with access denied; notification APIs guarded when unbundled |
 | Shortcuts | System tool present; a hostile name stays a single argv entry |
 | **Hover (end to end)** | Builds the real `NotchPanel` + `NotchRootView`, slides it under the stationary cursor, and asserts the notch opens and then collapses — **with `AXIsProcessTrusted() == false`** |
@@ -460,6 +460,41 @@ Not every change invalidates every result. This says which.
 
 Anything requiring a human is listed separately in **docs/MANUAL_CHECKS.md** and
 is not re-derivable from an automated run.
+
+## What the sessions widget reads
+
+This changed deliberately and is worth stating plainly, because it widened.
+
+**Before:** file metadata only — path, modification date, size. The notch showed
+a directory name, which for a scratch workspace is a hash like `3274fa`.
+
+**Now:** the same metadata, plus a bounded read *inside* the transcript for four
+short strings:
+
+| Field | Example | Where it comes from |
+|---|---|---|
+| model | `Opus 5` | `message.model`, mapped to a readable name |
+| effort | `max` | the record's `effort` |
+| chat title | `LocalNook foundation audit` | the `custom-title` record |
+| current step | `Running the test suite` | the newest assistant message's tool `description` |
+
+**The bounds, which are the point:**
+
+- At most a **256 KB tail** and, only when the title is not already found, a
+  **512 KB head**. Transcripts on this machine reach **40 MB**; the title sits
+  0.4% in and the tail recovers everything else, so the reader never touches the
+  middle and never holds a file in memory.
+- At most **six** sessions are opened per scan, and only those touched in the
+  last hour. Thirty were listed; the rest are never opened.
+- Each string is **truncated** to 90 characters. A step longer than that is a
+  message body, not a label, and is cut.
+- Nothing is **written**: not persisted, not logged, not sent. The strings live
+  only as long as the widget shows them.
+- An unrecognised transcript yields **nothing** rather than a guess, and the
+  widget falls back to the previous metadata-only presentation.
+
+All of that is asserted in the "Session detail" section of the deterministic
+suite, against transcripts the test writes — never the user's own.
 
 ## Known gaps in coverage
 

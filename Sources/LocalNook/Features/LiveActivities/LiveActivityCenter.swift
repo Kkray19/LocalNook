@@ -216,10 +216,27 @@ final class LiveActivityCenter: ObservableObject {
 
         let active = SessionMonitor.shared.activeSessions
         if settings.activitySessions, !active.isEmpty {
+            // The model, not the directory. A workspace hash like "3274fa" is
+            // the least informative thing the transcript knows about itself;
+            // "Opus 5 max" is what the session actually is. The current step
+            // goes on the trailing side, so the collapsed notch reads as
+            // "Opus 5 max — Running the test suite".
+            let leading: String
+            let trailing: String
+            if active.count == 1 {
+                let session = active[0]
+                leading = session.detail.modelLabel ?? session.displayName
+                trailing = session.detail.activity ?? session.relativeActivity
+            } else {
+                let models = Set(active.compactMap(\.detail.model))
+                leading = models.count == 1
+                    ? "\(active.count) × \(models.first!)"
+                    : "\(active.count) agents"
+                trailing = "working"
+            }
             return LiveActivity(
                 id: "sessions.active", symbol: "brain.head.profile", tint: .green,
-                leading: active.count == 1 ? active[0].projectName : "\(active.count) agents",
-                trailing: "active recently",
+                leading: leading, trailing: trailing,
                 style: .persistent, progress: nil, priority: 30
             )
         }

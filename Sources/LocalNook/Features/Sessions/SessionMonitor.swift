@@ -55,6 +55,14 @@ struct AgentSession: Identifiable, Equatable, Sendable {
     let projectName: String
     let lastActivity: Date
     let byteSize: Int
+    /// Model, effort, chat name and current step, read from the transcript.
+    /// Empty when the format is not recognised, in which case everything falls
+    /// back to the metadata-only presentation. See SessionDetail.
+    var detail: SessionDetail = SessionDetail()
+
+    /// What to call this session. The name you gave the chat if there is one,
+    /// otherwise the directory, which is often a workspace hash.
+    var displayName: String { detail.title ?? projectName }
 
     /// Anything touched in the last 90 seconds counts as live.
     var isActive: Bool { Date().timeIntervalSince(lastActivity) < 90 }
@@ -192,7 +200,9 @@ final class SessionMonitor: ObservableObject {
         }
     }
 
-    /// Collects transcript metadata. Never opens a file.
+    /// Collects transcript metadata, plus a bounded peek inside each recent
+    /// transcript for the model and the current step. See SessionDetail for
+    /// exactly how much is read and what is kept.
     nonisolated static func scan(agents: [SessionAgent], roots: [SessionAgent: URL] = [:]) async -> [AgentSession] {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
@@ -229,7 +239,19 @@ final class SessionMonitor: ObservableObject {
                 }
 
                 results.sort { $0.lastActivity > $1.lastActivity }
-                continuation.resume(returning: Array(results.prefix(30)))
+                var recent = Array(results.prefix(30))
+
+                // Only the handful that could actually be shown are opened, and
+                // only the ones recent enough to be worth describing. Reading
+                // thirty transcripts on every scan would be wasteful and would
+                // widen the read for sessions nobody is looking at.
+                for index in recent.indices.prefix(6)
+                where Date().timeIntervalSince(recent[index].lastActivity) < 3600 {
+                    recent[index].detail = SessionDetailReader.read(
+                        path: recent[index].id, agent: recent[index].agent
+                    )
+                }
+                continuation.resume(returning: recent)
             }
         }
     }

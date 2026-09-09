@@ -84,47 +84,54 @@ enum NotchMotion {
         return true
     }
 
-    /// The main open/close spring.
+    /// The main open/close motion.
     ///
-    /// Softer and longer-settling than a merely fast animation: the notch
-    /// should read as a body relaxing into shape, not a box being resized.
-    /// `dampingFraction` below 1 gives a single visible overshoot, which is
-    /// what separates "liquid" from "linear" — a heavily damped spring at a
-    /// short response is perceptually indistinguishable from an ease curve.
+    /// Expressed as duration and bounce, which is the parameterisation Apple
+    /// moved to in WWDC23 and the one that matches how this actually reads:
+    /// bounce is what the eye calls "springy", duration is the settle. The two
+    /// map onto the old form as roughly `bounce = 1 - dampingFraction`.
     ///
-    /// **The overshoot has a hard ceiling.** The panel window does not resize
-    /// during the animation; the content animates inside a window that is
+    /// This has been tuned twice from opposite directions. It began at damping
+    /// 0.78 — bounce 0.22 at a short response — which read as linear, because a
+    /// heavily damped spring over a short settle is perceptually an ease curve.
+    /// Overcorrecting to damping 0.68 (bounce 0.32) read as springy but not
+    /// smooth. Apple's own guidance is that bounce above about 0.4 "may feel
+    /// too exaggerated for a UI element" and that bounce 0 is the most
+    /// versatile general-purpose spring; the Dynamic-Island-style Mac apps are
+    /// described as matching iOS's spring and damping ratios, and SwiftUI's
+    /// default spring sits near bounce 0.175.
+    ///
+    /// So: a longer settle with a small, single overshoot. Fluidity here comes
+    /// from duration and from continuity, not from bounce.
+    ///
+    /// **The overshoot still has a hard ceiling.** The panel window does not
+    /// resize during the animation; the content animates inside a window only
     /// `NotchGeometry.shadowPadding` (24pt) taller than the open state and
-    /// about 32pt wider on each side. Anything that overshoots past that is
-    /// clipped by the window edge and looks broken rather than springy. At
-    /// damping 0.68 the overshoot is roughly 5–6% of travel — about 8pt
-    /// vertically and 14pt per side horizontally — which stays inside it.
-    /// Lowering this further means enlarging the window first.
+    /// about 32pt wider each side. Bounce 0.16 stays well inside that.
     static var expand: Animation {
         isAnimated
-            ? .spring(response: 0.46, dampingFraction: 0.68, blendDuration: 0.15)
+            ? .spring(duration: 0.52, bounce: 0.16)
             : .linear(duration: 0.01)
     }
 
     /// Small, frequent changes — a live activity appearing, the closed width
-    /// tracking a geometry change. Springy for consistency, but tighter: these
-    /// fire often and an overshoot on every one would read as instability.
+    /// tracking a geometry change. Same family, tighter, and no overshoot:
+    /// these fire often and a bounce on every one reads as instability.
     static var quick: Animation {
         isAnimated
-            ? .spring(response: 0.3, dampingFraction: 0.8)
+            ? .spring(duration: 0.34, bounce: 0)
             : .linear(duration: 0.01)
     }
 
     /// Content inside the panel — page changes, sections appearing.
     ///
-    /// Also a spring rather than the ease curve it used to be. With the shell
-    /// springing and the contents easing, the two arrived on different
-    /// schedules and the panel read as a box with a separate animation playing
-    /// inside it. Slightly quicker than `expand` so the contents settle just
-    /// after the shape rather than fighting it.
+    /// Bounce 0 deliberately, on the same settle as `expand`. The shell may
+    /// have a hint of overshoot; text and controls wobbling inside it is what
+    /// reads as cheap. Matching the duration is what makes the two move as one
+    /// body rather than as a box with a separate animation playing inside it.
     static var content: Animation {
         isAnimated
-            ? .spring(response: 0.34, dampingFraction: 0.82)
+            ? .spring(duration: 0.52, bounce: 0)
             : .linear(duration: 0.01)
     }
 }

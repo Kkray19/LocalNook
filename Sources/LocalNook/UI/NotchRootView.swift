@@ -246,10 +246,14 @@ struct NotchRootView: View {
                 // scale is anchored at the top so the content appears to be
                 // drawn down out of the closed shape, which is what makes the
                 // open read as one movement instead of two.
+                // Subtler than it was: the content should look like it is
+                // being drawn out of the notch, not thrown into place. A large
+                // scale delta plus a large offset reads as a pop, which fights
+                // the smoothness the shell is trying to have.
                 .transition(
                     .opacity
-                        .combined(with: .scale(scale: 0.93, anchor: .top))
-                        .combined(with: .offset(y: -10))
+                        .combined(with: .scale(scale: 0.97, anchor: .top))
+                        .combined(with: .offset(y: -5))
                 )
         }
     }

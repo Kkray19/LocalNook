@@ -59,9 +59,20 @@ enum SelfTest {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
 
+        // Several checks change real settings — which widgets are enabled, the
+        // open delay, the dashboard list — and restore them when they finish.
+        // That is fine until a run does not finish: a failure exit, or the run
+        // being killed, leaves the user's preferences as the test left them.
+        // Batches were killed repeatedly during this project's own acceptance,
+        // so this is observed exposure, not a hypothetical.
+        //
+        // The whole domain is snapshotted here and put back on the way out,
+        // including via atexit so an unexpected exit is covered too.
+        snapshotUserDefaults()
+        atexit { SelfTest.restoreUserDefaults() }
+
         print("LocalNook self-test — suite: \(suite.rawValue)")
         print("displays connected: \(NSScreen.screens.count)\n")
-
         if suite != .integration {
             print("== DETERMINISTIC ==")
             // Close the two live-input doors for the whole deterministic half.
@@ -87,6 +98,7 @@ enum SelfTest {
             testLiquidGlass()
             testPrivacyBoundaries()
             testTrayWithRealFiles()
+            testSessionDetail()
             testClearingTheTrayNeedsConfirming()
             testEveryWidgetIsReachable()
             testInteractionOwnership()
@@ -136,6 +148,7 @@ enum SelfTest {
             print("A required check that could not run remains an explicit limitation.")
             for name in unverifiedNames { print("  unverified: \(name)") }
         }
+        restoreUserDefaults()
         exit(Int32(ExitCode.forResults(failed: failed, unverified: unverified).rawValue))
     }
 
@@ -163,6 +176,23 @@ enum SelfTest {
             if unverified > 0 { return .unverified }
             return .clean
         }
+    }
+
+    /// The user's preferences as they were before the run.
+    private nonisolated(unsafe) static var defaultsSnapshot: [String: Any]?
+    private nonisolated(unsafe) static var defaultsDomain: String?
+
+    private static func snapshotUserDefaults() {
+        guard let domain = Bundle.main.bundleIdentifier else { return }
+        defaultsDomain = domain
+        defaultsSnapshot = UserDefaults.standard.persistentDomain(forName: domain) ?? [:]
+    }
+
+    nonisolated static func restoreUserDefaults() {
+        guard let domain = defaultsDomain, let snapshot = defaultsSnapshot else { return }
+        UserDefaults.standard.setPersistentDomain(snapshot, forName: domain)
+        UserDefaults.standard.synchronize()
+        defaultsSnapshot = nil
     }
 
     private struct Tally {
@@ -1121,6 +1151,93 @@ enum SelfTest {
         panel.orderOut(nil)
         panel.close()
         settings.openDelay = originalDelay
+    }
+
+    /// What a session says about itself, and how little of the file it reads.
+    ///
+    /// Runs against transcripts this test writes, never the user's own. The
+    /// bounds matter as much as the extraction: these files reach tens of
+    /// megabytes, and the point of the reader is that it stays out of almost
+    /// all of it.
+    private static func testSessionDetail() {
+        section("Session detail")
+
+        // Model names, including ones this build has never heard of.
+        check("a model identifier becomes a readable name",
+              SessionDetailReader.displayName(forModel: "claude-opus-5") == "Opus 5",
+              "got \(String(describing: SessionDetailReader.displayName(forModel: "claude-opus-5")))")
+        check("a dotted version reads as one number",
+              SessionDetailReader.displayName(forModel: "claude-haiku-4-5-20251001") == "Haiku 4.5",
+              "got \(String(describing: SessionDetailReader.displayName(forModel: "claude-haiku-4-5-20251001")))")
+        check("another vendor's model is still readable",
+              SessionDetailReader.displayName(forModel: "gpt-6-astra") == "GPT 6 Astra",
+              "got \(String(describing: SessionDetailReader.displayName(forModel: "gpt-6-astra")))")
+        check("a synthetic model is dropped rather than shown",
+              SessionDetailReader.displayName(forModel: "<synthetic>") == nil)
+        check("an empty identifier is dropped",
+              SessionDetailReader.displayName(forModel: "") == nil)
+
+        let dir = AppInfo.testDirectory.appendingPathComponent("sessions", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        // A transcript shaped like Claude Code's, with the title near the front
+        // and the interesting part at the end — as a real one is.
+        let file = dir.appendingPathComponent("fixture.jsonl")
+        var lines: [String] = [
+            #"{"type":"custom-title","customTitle":"LocalNook foundation audit"}"#
+        ]
+        // Padding, so the title lands outside the tail window and the head read
+        // is the only thing that can find it. This is the real layout.
+        let filler = String(repeating: "x", count: 900)
+        for index in 0..<600 {
+            lines.append(#"{"type":"user","message":{"content":"\#(filler)\#(index)"}}"#)
+        }
+        lines.append(#"{"type":"assistant","effort":"max","message":{"model":"claude-opus-5","content":[{"type":"tool_use","name":"Bash","input":{"description":"Running the test suite"}}]}}"#)
+        try? lines.joined(separator: "\n").write(to: file, atomically: true, encoding: .utf8)
+
+        let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
+        check("the fixture is bigger than the tail window",
+              (size ?? 0) > SessionDetailReader.tailWindow,
+              "\(size ?? 0) bytes vs \(SessionDetailReader.tailWindow)")
+
+        let detail = SessionDetailReader.read(path: file.path, agent: .claudeCode)
+        check("the model is read", detail.model == "Opus 5", "got \(detail.model ?? "nil")")
+        check("the effort is read", detail.effort == "max", "got \(detail.effort ?? "nil")")
+        check("the chat name is found ahead of the tail window",
+              detail.title == "LocalNook foundation audit", "got \(detail.title ?? "nil")")
+        check("the current step is read",
+              detail.activity == "Running the test suite", "got \(detail.activity ?? "nil")")
+        check("the collapsed label is the model, not the directory",
+              detail.modelLabel == "Opus 5 max", "got \(detail.modelLabel ?? "nil")")
+
+        // A long step is a message body, not a label. It must be cut.
+        let longFile = dir.appendingPathComponent("long.jsonl")
+        let essay = String(repeating: "word ", count: 300)
+        try? #"{"type":"assistant","message":{"model":"claude-sonnet-5","content":[{"type":"text","text":"\#(essay)"}]}}"#
+            .write(to: longFile, atomically: true, encoding: .utf8)
+        let long = SessionDetailReader.read(path: longFile.path, agent: .claudeCode)
+        check("a long step is truncated rather than shown whole",
+              (long.activity?.count ?? 0) <= SessionDetailReader.maxActivityLength,
+              "kept \(long.activity?.count ?? 0) characters")
+
+        // Anything unrecognised degrades instead of guessing.
+        let junk = dir.appendingPathComponent("junk.jsonl")
+        try? "not json at all\nneither is this\n".write(to: junk, atomically: true, encoding: .utf8)
+        check("an unreadable transcript yields nothing rather than nonsense",
+              SessionDetailReader.read(path: junk.path, agent: .claudeCode).isEmpty)
+        check("a missing transcript is safe",
+              SessionDetailReader.read(path: dir.appendingPathComponent("nope.jsonl").path,
+                                       agent: .claudeCode).isEmpty)
+
+        // A session with no detail still has something to call itself.
+        let bare = AgentSession(id: "/tmp/x.jsonl", agent: .claudeCode,
+                                projectName: "scratch-3274fa", lastActivity: Date(), byteSize: 0)
+        check("a session with no detail falls back to the directory",
+              bare.displayName == "scratch-3274fa")
+        var named = bare
+        named.detail.title = "LocalNook foundation audit"
+        check("a titled session prefers its own name",
+              named.displayName == "LocalNook foundation audit")
     }
 
     /// Clearing the Tray must take two deliberate presses.
