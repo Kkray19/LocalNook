@@ -174,8 +174,12 @@ enum NotchGeometry {
         )
     }
 
-    static func collapsedWindowSize(closed: CGSize, hasActivity: Bool) -> CGSize {
-        let body = hasActivity ? ClosedActivityView.totalBodyWidth(notchWidth: closed.width) : closed.width
+    static func collapsedWindowSize(
+        closed: CGSize, hasActivity: Bool, expandedActivity: Bool = false
+    ) -> CGSize {
+        let body = hasActivity
+            ? ClosedActivityView.totalBodyWidth(notchWidth: closed.width, expanded: expandedActivity)
+            : closed.width
         return CGSize(width: body + 2 * Settings.shared.closedCornerRadius,
                       height: max(4, closed.height) + 3)
     }

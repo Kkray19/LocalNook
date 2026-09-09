@@ -213,28 +213,118 @@ nonisolated enum SessionDetailReader {
 
     // MARK: Codex
 
-    /// Codex records a model and a timestamp in named fields. It has no
-    /// equivalent of a tool description, and its event payloads carry raw
-    /// assistant and user text — so no step is extracted at all, rather than
-    /// scraping prose out of them.
+    /// Codex records everything in named fields, and this reads six of them.
+    ///
+    /// An earlier version of this function read only the model, on the stated
+    /// grounds that Codex "has no equivalent of a tool description" and that
+    /// its payloads "carry raw assistant and user text". The second half is
+    /// true and is why `Reasoning`, `AgentMessage` and `UserMessage` items are
+    /// skipped below. The first half was wrong: `item_completed` carries a
+    /// structured `item`, and both of its tool-shaped kinds expose named
+    /// identifiers — `McpToolCall.tool` and `CommandExecution.parsed_cmd[].type`
+    /// — which are the same sort of thing as Claude's tool name.
+    ///
+    /// The consequence of that mistake was that a Codex session could never
+    /// report what it was doing, and never showed as working. It appeared in
+    /// the list as a bare timestamp.
+    ///
+    /// Codex is also more definite than Claude about whether a turn is running:
+    /// `task_started` and `task_complete` carry a `turn_id`, so an unmatched
+    /// start means a turn is genuinely in flight. That is still combined with
+    /// transcript freshness, because a killed process leaves its last turn open
+    /// forever and the file simply stops.
     private static func readCodex(path: String) -> SessionDetail {
         var detail = SessionDetail()
         var newestTimestamp: String?
+        var openTurns: Set<String> = []
+        var newestStep: String?
+
         for line in lines(atPath: path, window: tailWindow, fromEnd: true) {
             guard let object = json(line) else { continue }
             if let stamp = object["timestamp"] as? String { newestTimestamp = stamp }
-            guard object["type"] as? String == "turn_context",
-                  let payload = object["payload"] as? [String: Any],
-                  let model = payload["model"] as? String
-            else { continue }
-            detail.model = displayName(forModel: model)
+            guard let payload = object["payload"] as? [String: Any] else { continue }
+
+            switch object["type"] as? String {
+            case "turn_context":
+                if let model = payload["model"] as? String {
+                    detail.model = displayName(forModel: model)
+                }
+                // "high" / "medium" / "low" — the same short token Claude writes.
+                if let effort = payload["effort"] as? String { detail.effort = label(effort) }
+                // The working directory, which is what Claude sessions already
+                // show. Claude's comes free from the path; Codex files are
+                // grouped by date instead, so without this a session is called
+                // "2026-09-08T00". Behind the same consent as every other field
+                // read from inside a transcript.
+                if let cwd = payload["cwd"] as? String { detail.title = projectLabel(forPath: cwd) }
+            case "event_msg":
+                switch payload["type"] as? String {
+                case "task_started":
+                    if let turn = payload["turn_id"] as? String { openTurns.insert(turn) }
+                case "task_complete":
+                    if let turn = payload["turn_id"] as? String { openTurns.remove(turn) }
+                case "item_completed":
+                    if let item = payload["item"] as? [String: Any],
+                       let step = codexStep(forItem: item) {
+                        newestStep = step
+                    }
+                default:
+                    break
+                }
+            default:
+                break
+            }
         }
+
         detail.activity = state(forTimestamp: newestTimestamp)
-        // Never `.working`: with no step there is nothing to be working *on*,
-        // and a running indicator with no label asserts busyness without
-        // evidence for it.
-        if detail.activity == .working { detail.activity = .recent }
+        // Both, deliberately. An open turn says Codex believes it is working; a
+        // fresh timestamp says the transcript agrees. One without the other is
+        // a transcript that stopped mid-turn.
+        if detail.activity == .working, openTurns.isEmpty { detail.activity = .recent }
+        if detail.activity == .working { detail.step = newestStep }
         return detail
+    }
+
+    /// The step for one Codex item, from named identifiers only.
+    ///
+    /// Nothing here can carry free text. A command's own text is deliberately
+    /// not used — a command line is full of paths, filenames and search terms —
+    /// so `CommandExecution` contributes only the verb Codex itself parsed out
+    /// of it, rendered in LocalNook's words rather than the transcript's.
+    static func codexStep(forItem item: [String: Any]) -> String? {
+        switch item["type"] as? String {
+        case "McpToolCall":
+            // An identifier such as "sites.get_deployment_status", not arguments.
+            if let tool = item["tool"] as? String, let text = label(tool) { return text }
+            if let action = item["actionName"] as? String, let text = label(action) { return text }
+            return nil
+        case "CommandExecution":
+            guard let parsed = item["parsed_cmd"] as? [[String: Any]] else { return nil }
+            for entry in parsed.reversed() {
+                switch entry["type"] as? String {
+                case "read": return "Reading a file"
+                case "list_files": return "Listing files"
+                case "search": return "Searching"
+                case "unknown": return "Running a command"
+                default: continue
+                }
+            }
+            return nil
+        default:
+            // Reasoning, AgentMessage, UserMessage. All prose.
+            return nil
+        }
+    }
+
+    /// The last component of a working directory, as a label.
+    ///
+    /// A path, reduced to the folder name — the same thing a Claude session
+    /// shows. Anything that is not a plain directory name is refused rather
+    /// than passed through.
+    static func projectLabel(forPath path: String) -> String? {
+        let trimmed = path.hasSuffix("/") ? String(path.dropLast()) : path
+        guard let last = trimmed.split(separator: "/").last else { return nil }
+        return label(String(last))
     }
 
     // MARK: Shared

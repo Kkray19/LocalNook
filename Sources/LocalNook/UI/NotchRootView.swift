@@ -58,7 +58,9 @@ struct NotchRootView: View {
         if isOpen { return NotchGeometry.openSize.width }
         // Widen the collapsed notch to make room for a live activity.
         if closedActivity != nil {
-            return ClosedActivityView.totalBodyWidth(notchWidth: model.closedSize.width)
+            return ClosedActivityView.totalBodyWidth(
+                notchWidth: model.closedSize.width, expanded: activities.trailingExpanded
+            )
         }
         return model.closedSize.width
     }
@@ -101,6 +103,7 @@ struct NotchRootView: View {
                            value: isOpen)
                 .animation(NotchMotion.quick, value: model.closedSize)
                 .animation(NotchMotion.expand, value: closedActivity?.id)
+                .animation(NotchMotion.quick, value: activities.trailingExpanded)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .opacity(model.isSuppressed && !isOpen ? 0 : 1)
@@ -236,7 +239,11 @@ struct NotchRootView: View {
     @ViewBuilder
     private var content: some View {
         if !isOpen, let activity = closedActivity {
-            ClosedActivityView(activity: activity, notchWidth: model.closedSize.width)
+            ClosedActivityView(
+                activity: activity,
+                notchWidth: model.closedSize.width,
+                isExpanded: activities.trailingExpanded
+            )
                 .frame(
                     width: NotchShape.totalWidth(forBody: bodyWidth, topRadius: topRadius),
                     height: bodyHeight

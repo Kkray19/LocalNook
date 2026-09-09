@@ -35,6 +35,10 @@ enum PreviewRenderer {
         var scenes: [(name: String, open: Bool, widget: WidgetKind)] = [
             ("closed", false, .media),
             ("closed-activity", false, .media),
+            ("closed-agent-claude", false, .media),
+            ("closed-agent-openai", false, .media),
+            ("closed-agent-mixed", false, .media),
+            ("closed-agent-expanded", false, .media),
             ("dashboard-populated", true, .media),
             ("dashboard-browser-audio", true, .media),
             ("dashboard-browser-ambiguous", true, .media),
@@ -103,13 +107,40 @@ enum PreviewRenderer {
             } else {
                 MediaManager.shared.previewInject(nil)
             }
-            if scene.name == "closed-activity" {
+            // The agent badge and the trailing indicator, staged rather than
+            // read: the renderer is forbidden from opening a transcript, and
+            // these names are invented for exactly that reason.
+            if scene.name.hasPrefix("closed-agent") {
+                let provider: SessionProvider? = switch scene.name {
+                case "closed-agent-openai": .openAI
+                case "closed-agent-mixed": nil
+                default: .anthropic
+                }
+                LiveActivityCenter.shared.previewInject(LiveActivity(
+                    id: "preview.agents",
+                    symbol: provider?.symbol ?? SessionProvider.mixedSymbol,
+                    tint: provider.map(LiveActivityCenter.tint(for:)) ?? .green,
+                    leading: provider == nil ? "3 agents" : "Opus 5 xhigh",
+                    trailing: "", style: .persistent, progress: nil, priority: 30,
+                    isBusy: true,
+                    details: [
+                        LiveActivityDetail(id: "1", symbol: SessionAgent.claudeCode.symbol,
+                                           name: "LedgerApp", step: "Running the test suite"),
+                        LiveActivityDetail(id: "2", symbol: SessionAgent.codex.symbol,
+                                           name: "Site", step: "Reading a file"),
+                    ]
+                ))
+                LiveActivityCenter.shared.setTrailingExpanded(
+                    scene.name == "closed-agent-expanded"
+                )
+            } else if scene.name == "closed-activity" {
                 LiveActivityCenter.shared.previewInject(LiveActivity(
                     id: "preview", symbol: "waveform", tint: .white,
                     leading: "Midnight City", trailing: "M83",
                     style: .persistent, progress: 0.42, priority: 40
                 ))
             } else {
+                LiveActivityCenter.shared.setTrailingExpanded(false)
                 LiveActivityCenter.shared.previewInject(nil)
             }
             model.selectedWidget = scene.widget

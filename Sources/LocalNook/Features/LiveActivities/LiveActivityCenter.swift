@@ -15,6 +15,15 @@ import Combine
 import SwiftUI
 
 /// One thing worth flashing beside the notch.
+/// One line of the expanded trailing indicator: which session, and what it is
+/// doing. Only ever built from fields the sessions reader was allowed to read.
+struct LiveActivityDetail: Identifiable, Equatable {
+    let id: String
+    var symbol: String
+    var name: String
+    var step: String
+}
+
 struct LiveActivity: Identifiable, Equatable {
     enum Style: Equatable {
         /// A short banner that fades away by itself.
@@ -34,6 +43,14 @@ struct LiveActivity: Identifiable, Equatable {
     /// 0…1 for a progress ring, when relevant.
     var progress: Double?
     var priority: Int
+    /// Something is mid-task. The trailing side shows a running indicator
+    /// rather than naming the task: what an agent is working on is the part
+    /// someone may not want sitting on their menu bar, and a spinner says
+    /// "working" without saying what about.
+    var isBusy = false
+    /// What that indicator expands to when the pointer rests on it. Empty when
+    /// there is nothing to add beyond `trailing`.
+    var details: [LiveActivityDetail] = []
 }
 
 final class LiveActivityCenter: ObservableObject {
@@ -41,6 +58,10 @@ final class LiveActivityCenter: ObservableObject {
 
     /// The activity currently on screen, if any.
     @Published private(set) var current: LiveActivity?
+    /// The pointer is resting on the trailing indicator. Driven by the
+    /// controller, which is the only thing that knows where the wings are
+    /// drawn on screen.
+    @Published private(set) var trailingExpanded = false
 
     private var transient: LiveActivity?
     private var dismissTask: Task<Void, Never>?
@@ -223,30 +244,89 @@ final class LiveActivityCenter: ObservableObject {
             // presentation, which is also what a locked screen gets, because
             // the reader declines to read at all while locked.
             let leading: String
-            let trailing: String
             if active.count == 1 {
-                let session = active[0]
-                leading = session.detail.modelLabel ?? session.displayName
-                if session.detail.showsProgress, let step = session.detail.step {
-                    trailing = step
-                } else {
-                    trailing = session.relativeActivity
-                }
+                leading = active[0].detail.modelLabel ?? active[0].displayName
             } else {
                 let models = Set(active.compactMap(\.detail.model))
                 leading = models.count == 1
                     ? "\(active.count) × \(models.first!)"
                     : "\(active.count) agents"
-                trailing = "active recently"
             }
+
+            // The badge is about the maker, not the count. Everything running
+            // is Claude, or everything is OpenAI, and it says so; a mix falls
+            // back to the generic mark because no single one would be true.
+            let badge = Self.badge(for: active)
+
+            // "Working" means a turn is genuinely in flight and the transcript
+            // says so — the same bar the widget uses for its own indicator.
+            let working = active.filter(\.detail.showsProgress)
+            let trailing: String
+            if working.isEmpty {
+                trailing = active.count == 1 ? active[0].relativeActivity : "active recently"
+            } else {
+                // Deliberately empty: the spinner is the message.
+                trailing = ""
+            }
+
             return LiveActivity(
-                id: "sessions.active", symbol: "brain.head.profile", tint: .green,
+                id: "sessions.active",
+                symbol: badge.symbol,
+                tint: badge.tint,
                 leading: leading, trailing: trailing,
-                style: .persistent, progress: nil, priority: 30
+                style: .persistent, progress: nil, priority: 30,
+                isBusy: !working.isEmpty,
+                details: Self.details(for: active)
             )
         }
 
         return nil
+    }
+
+    /// Which mark to show for a set of running sessions.
+    ///
+    /// The badge is about the maker, not the count: everything running is
+    /// Claude, or everything is OpenAI, and it says so. A mix falls back to the
+    /// generic mark, because no single maker's mark would be true of it.
+    static func badge(for sessions: [AgentSession]) -> (symbol: String, tint: Color) {
+        let providers = Set(sessions.map(\.agent.provider))
+        guard providers.count == 1, let only = providers.first else {
+            return (SessionProvider.mixedSymbol, .green)
+        }
+        return (only.symbol, tint(for: only))
+    }
+
+    /// Brand-ish colours, which are not the same thing as brand artwork: a hue
+    /// distinguishes the two makers without bundling anyone's mark.
+    static func tint(for provider: SessionProvider) -> Color {
+        switch provider {
+        case .anthropic: Color(red: 0.85, green: 0.47, blue: 0.30)
+        case .openAI: Color(red: 0.29, green: 0.78, blue: 0.66)
+        }
+    }
+
+    /// One line per session, newest first, capped.
+    ///
+    /// A session with no step contributes when it happened instead, so the
+    /// expansion is never a list of names with nothing beside them.
+    static func details(for sessions: [AgentSession]) -> [LiveActivityDetail] {
+        sessions.prefix(4).map { session in
+            LiveActivityDetail(
+                id: session.id,
+                symbol: session.agent.symbol,
+                name: session.displayName,
+                step: session.detail.step ?? session.relativeActivity
+            )
+        }
+    }
+
+    /// Set from the controller's pointer poll. Refuses to expand an activity
+    /// that has nothing to expand into, so the width can never grow for an
+    /// indicator that would show a blank strip.
+    func setTrailingExpanded(_ expanded: Bool) {
+        let allowed = expanded && current.map(ClosedActivityView.canExpand) == true
+        guard allowed != trailingExpanded else { return }
+        withAnimation(NotchMotion.quick) { trailingExpanded = allowed }
     }
 
     /// Used only by `--render-preview` to stage an activity for a screenshot.

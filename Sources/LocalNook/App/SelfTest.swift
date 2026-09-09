@@ -100,6 +100,7 @@ enum SelfTest {
             testLiquidGlass()
             testPrivacyBoundaries()
             testTrayWithRealFiles()
+            testCodexSessions()
             testOpeningMotion()
             testHoverAttribution()
             testBrowserMedia()
@@ -1152,6 +1153,169 @@ enum SelfTest {
         panel.orderOut(nil)
         panel.close()
         settings.openDelay = originalDelay
+    }
+
+    /// Codex sessions, the provider badge, and the trailing indicator.
+    ///
+    /// Fixtures throughout: a synthetic Codex transcript, not the machine's own.
+    private static func testCodexSessions() {
+        section("Codex sessions")
+
+        let dir = AppInfo.testDirectory.appendingPathComponent("codex", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        func write(_ name: String, _ lines: [String]) -> String {
+            let url = dir.appendingPathComponent(name)
+            try? lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+            return url.path
+        }
+        func stamp(_ secondsAgo: TimeInterval) -> String {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return formatter.string(from: Date().addingTimeInterval(-secondsAgo))
+        }
+
+        // A command line carries paths, filenames and search terms. It must
+        // never reach a label, so the fixture puts something recognisable in one.
+        let secret = "grep -r 'acme-merger-password' /Users/someone/private"
+        func context(_ age: TimeInterval) -> String {
+            #"{"type":"turn_context","timestamp":"\#(stamp(age))","payload":{"model":"gpt-6-astra","effort":"high","cwd":"/Users/someone/Developer/LedgerApp"}}"#
+        }
+        func exec(_ age: TimeInterval, verb: String) -> String {
+            #"{"type":"event_msg","timestamp":"\#(stamp(age))","payload":{"type":"item_completed","item":{"type":"CommandExecution","command":"\#(secret)","parsed_cmd":[{"type":"\#(verb)","cmd":"\#(secret)"}]}}}"#
+        }
+        let started = #"{"type":"event_msg","timestamp":"\#(stamp(6))","payload":{"type":"task_started","turn_id":"turn-1"}}"#
+        let completed = #"{"type":"event_msg","timestamp":"\#(stamp(4))","payload":{"type":"task_complete","turn_id":"turn-1"}}"#
+
+        let running = write("running.jsonl", [context(9), started, exec(5, verb: "read")])
+
+        // ── The boundary still holds ────────────────────────────────────────
+        let off = SessionDetailReader.read(path: running, agent: .codex, depth: .metadataOnly)
+        check("metadata-only reads nothing from a Codex transcript",
+              off.isEmpty && off.wasNotRead)
+
+        // ── What it now reads, which before was only the model ─────────────
+        let live = SessionDetailReader.read(path: running, agent: .codex, depth: .richLabels)
+        check("a Codex session reports its model", live.model == "GPT 6 Astra",
+              "got \(live.model ?? "nil")")
+        check("a Codex session reports its effort", live.effort == "high",
+              "got \(live.effort ?? "nil")")
+        check("a Codex session is named after its project, not its timestamp",
+              live.title == "LedgerApp", "got \(live.title ?? "nil")")
+        check("a Codex session with an open turn is working",
+              live.activity == .working, "activity is \(live.activity.rawValue)")
+        check("and it says what it is doing", live.step == "Reading a file",
+              "got \(live.step ?? "nil")")
+        check("which is enough for the widget's running indicator", live.showsProgress)
+
+        // ── The command line itself is never the label ──────────────────────
+        check("a command's own text never becomes a label",
+              live.step != nil && !live.step!.contains("acme")
+                  && live.title?.contains("acme") != true,
+              "a command line reached a label")
+
+        // ── A finished turn is not a working one ───────────────────────────
+        let done = SessionDetailReader.read(
+            path: write("done.jsonl", [context(9), started, exec(5, verb: "read"), completed]),
+            agent: .codex, depth: .richLabels
+        )
+        check("a completed turn is not reported as working", done.activity != .working)
+        check("and a finished session claims no step", done.step == nil)
+        check("it still reports its model and project",
+              done.model == "GPT 6 Astra" && done.title == "LedgerApp")
+
+        // ── An abandoned turn is not a working one either ───────────────────
+        let stale = SessionDetailReader.read(
+            path: write("stale.jsonl", [context(4000), started, exec(3600, verb: "read")]),
+            agent: .codex, depth: .richLabels
+        )
+        check("an open turn on a stale transcript is not working",
+              stale.activity != .working,
+              "a killed process would have shown as working forever")
+
+        // ── Prose contributes nothing ──────────────────────────────────────
+        let prose = SessionDetailReader.read(
+            path: write("prose.jsonl", [
+                context(9), started,
+                #"{"type":"event_msg","timestamp":"\#(stamp(5))","payload":{"type":"item_completed","item":{"type":"Reasoning","summary_text":"\#(secret)","raw_content":"\#(secret)"}}}"#,
+                #"{"type":"event_msg","timestamp":"\#(stamp(5))","payload":{"type":"item_completed","item":{"type":"AgentMessage","content":"\#(secret)"}}}"#,
+                #"{"type":"event_msg","timestamp":"\#(stamp(5))","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"\#(secret)"}}}"#,
+            ]),
+            agent: .codex, depth: .richLabels
+        )
+        check("reasoning, assistant and user text yield no step at all",
+              prose.step == nil, "got \(prose.step ?? "nil")")
+
+        // ── The step vocabulary, item by item ───────────────────────────────
+        check("an MCP call is named by its tool",
+              SessionDetailReader.codexStep(forItem: [
+                  "type": "McpToolCall", "server": "codex_apps", "tool": "sites.get_site",
+                  "arguments": secret,
+              ]) == "sites.get_site")
+        for (verb, expected) in [("read", "Reading a file"), ("list_files", "Listing files"),
+                                 ("search", "Searching"), ("unknown", "Running a command")] {
+            check("a parsed \(verb) command reads as \"\(expected)\"",
+                  SessionDetailReader.codexStep(forItem: [
+                      "type": "CommandExecution", "command": secret,
+                      "parsed_cmd": [["type": verb, "cmd": secret]],
+                  ]) == expected)
+        }
+        check("an unrecognised item yields nothing",
+              SessionDetailReader.codexStep(forItem: ["type": "Extension"]) == nil)
+        check("a project label is the folder, not the path",
+              SessionDetailReader.projectLabel(forPath: "/Users/someone/Developer/LedgerApp/")
+                  == "LedgerApp")
+
+        // ── The badge names the maker, not the count ───────────────────────
+        func session(_ agent: SessionAgent, _ id: String) -> AgentSession {
+            AgentSession(id: id, agent: agent, projectName: id,
+                         lastActivity: Date(), byteSize: 1)
+        }
+        let claudeOnly = [session(.claudeCode, "a"), session(.claudeCode, "b"),
+                          session(.claudeCode, "c")]
+        check("three Claude sessions still show Claude's mark",
+              LiveActivityCenter.badge(for: claudeOnly).symbol == SessionProvider.anthropic.symbol)
+        check("two Codex sessions show OpenAI's mark",
+              LiveActivityCenter.badge(for: [session(.codex, "a"), session(.codex, "b")]).symbol
+                  == SessionProvider.openAI.symbol)
+        check("a mix falls back to the generic mark",
+              LiveActivityCenter.badge(for: [session(.claudeCode, "a"), session(.codex, "b")]).symbol
+                  == SessionProvider.mixedSymbol)
+        check("the generic mark is not either maker's",
+              SessionProvider.mixedSymbol != SessionProvider.anthropic.symbol
+                  && SessionProvider.mixedSymbol != SessionProvider.openAI.symbol)
+
+        // Every symbol has to be a real one, or it draws as nothing at all.
+        for name in [SessionProvider.mixedSymbol, SessionProvider.anthropic.symbol,
+                     SessionProvider.openAI.symbol] + SessionAgent.allCases.map(\.symbol) {
+            check("\"\(name)\" is a symbol this system has",
+                  NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil)
+        }
+
+        // ── The trailing indicator ─────────────────────────────────────────
+        var busy = LiveActivity(
+            id: "t", symbol: "x", tint: .green, leading: "l", trailing: "",
+            style: .persistent, progress: nil, priority: 1, isBusy: true,
+            details: [LiveActivityDetail(id: "a", symbol: "sparkle", name: "LedgerApp",
+                                         step: "Reading a file")]
+        )
+        check("a busy indicator with something to say can expand",
+              ClosedActivityView.canExpand(busy))
+        busy.details = []
+        check("but not with nothing to say", !ClosedActivityView.canExpand(busy))
+        busy.details = [LiveActivityDetail(id: "a", symbol: "sparkle", name: "n", step: "s")]
+        busy.isBusy = false
+        check("and not when nothing is working", !ClosedActivityView.canExpand(busy))
+
+        check("expanding makes room rather than truncating",
+              ClosedActivityView.totalBodyWidth(notchWidth: 185, expanded: true)
+                  > ClosedActivityView.totalBodyWidth(notchWidth: 185) + 100)
+
+        let many = (0..<9).map { session(.codex, "s\($0)") }
+        check("the expansion lists a few sessions, not all of them",
+              LiveActivityCenter.details(for: many).count == 4)
+        check("a session with no step says when it last moved instead",
+              LiveActivityCenter.details(for: [session(.claudeCode, "x")]).first?.step.isEmpty
+                  == false)
     }
 
     /// The opening curve: a reversed approach that lands on a settle.

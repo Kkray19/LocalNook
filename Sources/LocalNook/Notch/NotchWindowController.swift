@@ -116,6 +116,11 @@ final class NotchWindowController: NSObject {
         installEventMonitors()
         observeSystemEvents()
         LiveActivityCenter.shared.$current.receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.syncPanelExtents()
+                self?.syncWingHover()
+            }.store(in: &cancellables)
+        LiveActivityCenter.shared.$trailingExpanded.receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.syncPanelExtents() }.store(in: &cancellables)
         HUDController.shared.$state.receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.syncPanelExtents() }.store(in: &cancellables)
@@ -125,6 +130,8 @@ final class NotchWindowController: NSObject {
 
     func stop() {
         started = false
+        wingHoverTimer?.invalidate()
+        wingHoverTimer = nil
         cancellables.removeAll()
         // Stop means stop. A recovery task left running against torn-down state
         // keeps polling after the controller is finished with, and — because it
@@ -361,6 +368,7 @@ final class NotchWindowController: NSObject {
                         self?.syncPanelExtents()
                         self?.syncInteractivity()
                         self?.updatePointerSafetyNet()
+                        self?.syncWingHover()
                     }
                 }
                 .store(in: &stateObservers)
@@ -832,8 +840,11 @@ final class NotchWindowController: NSObject {
         if model.state == .open || shrinkTasks[id] != nil || expandingCanvas.contains(id) {
             return NotchGeometry.windowSize(for: screen)
         }
-        return NotchGeometry.collapsedWindowSize(closed: model.closedSize,
-            hasActivity: LiveActivityCenter.shared.current != nil || HUDController.shared.state != nil)
+        return NotchGeometry.collapsedWindowSize(
+            closed: model.closedSize,
+            hasActivity: LiveActivityCenter.shared.current != nil || HUDController.shared.state != nil,
+            expandedActivity: LiveActivityCenter.shared.trailingExpanded
+        )
     }
 
     /// Displays whose panel has been given the open canvas ahead of the
@@ -891,6 +902,66 @@ final class NotchWindowController: NSObject {
                 position(panels[id], on: screen)
             }
         }
+    }
+
+    // MARK: The trailing indicator's hover
+
+    /// Polled, not tracked.
+    ///
+    /// The activity wings are drawn in the wide panel, which ignores mouse
+    /// events by design: it spans menu-bar space, and anything it accepts is a
+    /// click the menu bar does not get. That is the whole reason for the
+    /// two-window split, so putting a tracking area on the wing would undo it.
+    /// Reading the pointer's position asks nothing of the window server and
+    /// changes no window's behaviour. It runs only while there is an indicator
+    /// to expand, and stops the moment there is not.
+    private var wingHoverTimer: Timer?
+
+    private func syncWingHover() {
+        let wanted = !AppInfo.isSelfTest && !ignoresLiveInput
+            && LiveActivityCenter.shared.current.map(ClosedActivityView.canExpand) == true
+            && models.values.contains { $0.state == .closed }
+        if wanted, wingHoverTimer == nil {
+            let timer = Timer(timeInterval: 1.0 / 12, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateWingHover() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            wingHoverTimer = timer
+        } else if !wanted, wingHoverTimer != nil {
+            wingHoverTimer?.invalidate()
+            wingHoverTimer = nil
+            LiveActivityCenter.shared.setTrailingExpanded(false)
+        }
+    }
+
+    private func updateWingHover() {
+        guard !ignoresLiveInput else { return }
+        let mouse = pointerLocation()
+        let inside = models.contains { id, model in
+            guard model.state == .closed,
+                  let screen = NSScreen.screen(withStableID: id) else { return false }
+            return trailingWingRect(for: model, on: screen).contains(mouse)
+        }
+        LiveActivityCenter.shared.setTrailingExpanded(inside)
+    }
+
+    /// Where the trailing wing is drawn, in screen coordinates.
+    ///
+    /// Grows once expanded, so the pointer does not fall off the thing it just
+    /// opened and set off a flicker between the two widths.
+    func trailingWingRect(for model: NotchViewModel, on screen: NSScreen) -> CGRect {
+        let width = LiveActivityCenter.shared.trailingExpanded
+            ? ClosedActivityView.expandedTrailingWidth
+            : ClosedActivityView.trailingWidth
+        // The same couple of points of slop the notch's own hover region uses.
+        let height = max(model.effectiveClosedHeight, 4) + 3
+        let frame = screen.frame
+        return CGRect(
+            x: frame.midX + model.closedSize.width / 2,
+            y: frame.maxY - height,
+            width: width,
+            height: height
+        )
     }
 
     var panelFrames: [CGRect] { panels.values.map(\.frame) }

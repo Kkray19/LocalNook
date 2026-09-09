@@ -17,6 +17,37 @@
 import Combine
 import Foundation
 
+/// Who makes an agent.
+///
+/// Separate from the agent itself because the badge is about the maker: two
+/// Claude sessions are still "Claude", and the generic mark is for a mix.
+///
+/// The symbols are SF Symbols chosen to *evoke* each maker, not their logos.
+/// Shipping a company's actual mark would mean bundling someone else's
+/// trademarked artwork in a GPL-3.0 app, which is a licensing question rather
+/// than a design one.
+nonisolated enum SessionProvider: String, CaseIterable, Equatable, Sendable {
+    case anthropic
+    case openAI
+
+    var label: String {
+        switch self {
+        case .anthropic: "Claude"
+        case .openAI: "OpenAI"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .anthropic: "asterisk"
+        case .openAI: "circle.hexagonpath"
+        }
+    }
+
+    /// Shown when sessions from more than one maker are running at once.
+    static let mixedSymbol = "brain.head.profile"
+}
+
 /// Pure value type with no shared state, so it is safe off the main actor —
 /// the background scan needs `rootDirectory`.
 nonisolated enum SessionAgent: String, CaseIterable, Identifiable {
@@ -36,6 +67,13 @@ nonisolated enum SessionAgent: String, CaseIterable, Identifiable {
         switch self {
         case .claudeCode: "sparkle"
         case .codex: "chevron.left.forwardslash.chevron.right"
+        }
+    }
+
+    var provider: SessionProvider {
+        switch self {
+        case .claudeCode: .anthropic
+        case .codex: .openAI
         }
     }
 
