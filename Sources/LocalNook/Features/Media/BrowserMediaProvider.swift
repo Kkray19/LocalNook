@@ -47,16 +47,19 @@ nonisolated final class BrowserMediaProvider: MediaProvider, @unchecked Sendable
             && MediaScriptBridge.isRunning(bundleID: browser.bundleID)
     }
 
-    /// Settings lives on the main actor; availability is asked for from both
-    /// sides, so the read is hopped rather than the property being duplicated.
+    /// Reads the stored preference directly rather than through `Settings`.
+    ///
+    /// `Settings` is main-actor isolated and this provider is not: `fetch()` is
+    /// nonisolated and async, so it runs off the main actor, and reaching for
+    /// main-actor state from there with `assumeIsolated` traps at runtime. The
+    /// preference is a single Bool under a known key, so it is read from the
+    /// same defaults store `@Pref` writes to — which is also the disposable
+    /// suite during a self-test, so isolation is preserved.
     private static func browserMediaEnabled() -> Bool {
-        MainActor.assumeIsolated { Settings.shared.browserMediaEnabled }
+        AppInfo.defaults.bool(forKey: "media.browserEnabled")
     }
 
-    /// Where the browser is installed, for attributing its helper processes.
-    private var bundlePath: String? {
-        NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID)?.path
-    }
+
 
     // MARK: Reading
 
@@ -69,7 +72,7 @@ nonisolated final class BrowserMediaProvider: MediaProvider, @unchecked Sendable
         // page access, and it stays authoritative *with* it — a tab can be
         // playing while muted, in which case the page knows and CoreAudio does
         // not, so the page's own answer wins when there is one.
-        let emittingAudio = bundlePath.map(BrowserAudioMonitor.isOutputtingAudio) ?? false
+        let emittingAudio = BrowserAudioMonitor.isOutputtingAudio(bundleID: browser.bundleID)
         let isPlaying = tab.isPaused.map { !$0 } ?? emittingAudio
 
         var capabilities: MediaCapabilities = .playbackState

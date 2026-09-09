@@ -32,23 +32,41 @@
 //  `com.apple.WebKit.GPU` and future helper renames.
 //
 
+import AppKit
 import AudioToolbox
 import CoreAudio
 import Foundation
 
 nonisolated enum BrowserAudioMonitor {
-    /// Whether any process belonging to the app at `bundlePath` is outputting
-    /// audio.
+    /// Whether any process belonging to the running app with `bundleID` is
+    /// outputting audio.
+    ///
+    /// Matched against where the app is *running from*, not where it is
+    /// installed. Those differ more often than one would expect: Chrome on this
+    /// machine runs under App Translocation, so its helpers live at
+    ///
+    ///     /private/var/folders/…/AppTranslocation/<uuid>/d/Google Chrome.app/…
+    ///
+    /// while `NSWorkspace` reports the bundle at `/Applications/Google
+    /// Chrome.app`. Prefix-matching the installed path found nothing while a
+    /// video was audibly playing, and the widget said "paused". Asking
+    /// `NSRunningApplication` for the bundle it actually launched from is
+    /// correct for translocated, quarantined and relocated copies alike.
     ///
     /// Returns false when the API is unavailable rather than guessing, so an
     /// older system degrades to "not playing" rather than to a false positive.
-    static func isOutputtingAudio(bundlePath: String) -> Bool {
-        guard !bundlePath.isEmpty else { return false }
+    static func isOutputtingAudio(bundleID: String) -> Bool {
+        guard !bundleID.isEmpty else { return false }
+        let roots = NSRunningApplication
+            .runningApplications(withBundleIdentifier: bundleID)
+            .compactMap { $0.bundleURL?.path }
+        guard !roots.isEmpty else { return false }
+
         for pid in outputtingProcessIDs() {
             guard let path = executablePath(forPID: pid) else { continue }
             // Helpers live inside the parent bundle, so a prefix match catches
             // them all without naming any of them.
-            if path.hasPrefix(bundlePath) { return true }
+            if roots.contains(where: { path.hasPrefix($0) }) { return true }
         }
         return false
     }

@@ -43,6 +43,10 @@ struct CompactMediaView: View {
                 player
             }
         }
+        // Not `activate()`: that would prompt for consent because the pointer
+        // opened the notch. This starts polling only where consent already
+        // exists — see MediaManager.activateIfAlreadyConsented.
+        .onAppear { media.activateIfAlreadyConsented() }
         .onReceive(ticker) { now in
             if media.nowPlaying.state == .playing { tick = now }
         }

@@ -59,6 +59,30 @@ final class MediaManager: ObservableObject {
         reconsiderPolling()
     }
 
+    /// Starts polling only when doing so cannot cause a new permission prompt.
+    ///
+    /// The dashboard deliberately never called `activate()`, because opening
+    /// the notch must not be the reason macOS asks for Automation consent. The
+    /// consequence was that the dashboard's media section said "Nothing
+    /// playing" permanently — it was never asking anything, for any source.
+    ///
+    /// Consent that already exists changes that. Two conditions each mean the
+    /// answer to the prompt is already known, so polling adds no dialog:
+    ///
+    ///   * the user switched browser media on, which is an explicit choice made
+    ///     in Settings with the permission consequence stated there; or
+    ///   * an Apple Event has already succeeded this session, so consent is on
+    ///     record.
+    ///
+    /// Neither is inferred from the widget merely being visible.
+    func activateIfAlreadyConsented() {
+        guard !AppInfo.isSelfTest else { return }
+        guard Settings.shared.browserMediaEnabled
+            || MediaScriptBridge.lastAutomationState == .granted
+        else { return }
+        activate()
+    }
+
     deinit { pollTask?.cancel() }
 
     // MARK: Availability

@@ -1275,10 +1275,10 @@ enum SelfTest {
         }())
 
         // ── The audio monitor answers, and does not guess ──────────────────
-        check("an unknown bundle path is not reported as playing",
-              !BrowserAudioMonitor.isOutputtingAudio(bundlePath: "/no/such/app.app"))
-        check("an empty bundle path is not reported as playing",
-              !BrowserAudioMonitor.isOutputtingAudio(bundlePath: ""))
+        check("an app that is not running is not reported as playing",
+              !BrowserAudioMonitor.isOutputtingAudio(bundleID: "com.example.nothing"))
+        check("an empty bundle identifier is not reported as playing",
+              !BrowserAudioMonitor.isOutputtingAudio(bundleID: ""))
 
         // ── Browsers are never launched, and stay off until switched on ────
         let chrome = BrowserMediaProvider(browser: .chrome)

@@ -44,6 +44,16 @@ if CommandLine.arguments.contains("--transitions") {
 }
 
 // Built-in test harness. See SelfTest.swift.
+// Development aid: ask every media provider once and print what it said.
+//
+// Runs as the installed bundle, so it sees the same Automation consent the app
+// does — which is the only way to tell "the browser said nothing" apart from
+// "macOS refused to let us ask". Prints source names and playback state only,
+// never a tab title, so it cannot leak what someone is watching into a log.
+if CommandLine.arguments.contains("--media-probe") {
+    MediaProbe.run()
+}
+
 if CommandLine.arguments.contains("--self-test") {
     SelfTest.run()
 }

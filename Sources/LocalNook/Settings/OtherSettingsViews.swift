@@ -216,7 +216,10 @@ struct AboutSettingsView: View {
 }
 
 enum AppInfo {
-    static let isSelfTest = CommandLine.arguments.contains("--self-test")
+    // These are immutable and derived from the command line, so they are safe
+    // to read from any actor — and must be, because the media providers run off
+    // the main actor and still need to know which defaults store to use.
+    nonisolated static let isSelfTest = CommandLine.arguments.contains("--self-test")
     /// Offscreen PNG rendering. Writes images to disk automatically, so it must
     /// never render anything read out of a transcript.
     static let isPreviewRender = CommandLine.arguments.contains("--render-preview")
@@ -224,8 +227,10 @@ enum AppInfo {
     static var forbidsTranscriptReads: Bool { isSelfTest || isPreviewRender }
     static let testDirectory = FileManager.default.temporaryDirectory
         .appendingPathComponent("LocalNook-tests-\(UUID().uuidString)", isDirectory: true)
-    static let testSuiteName = "com.localnook.tests.\(UUID().uuidString)"
-    static let defaults: UserDefaults = isSelfTest
+    nonisolated static let testSuiteName = "com.localnook.tests.\(UUID().uuidString)"
+    // UserDefaults is thread-safe but not Sendable, so the annotation is the
+    // honest form: shared, immutable reference, safe to use from any actor.
+    nonisolated(unsafe) static let defaults: UserDefaults = isSelfTest
         ? UserDefaults(suiteName: testSuiteName)! : .standard
 
     /// Whether the process is running from a real `.app` bundle.
