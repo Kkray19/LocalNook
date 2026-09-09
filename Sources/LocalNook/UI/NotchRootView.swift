@@ -97,7 +97,7 @@ struct NotchRootView: View {
                 // Opening runs the closing curve backwards; closing is
                 // untouched. Evaluated with the new value of `isOpen`, so the
                 // direction being animated picks its own curve.
-                .animation(isOpen ? NotchMotion.expandReversed : NotchMotion.expand,
+                .animation(isOpen ? NotchMotion.expandOpening : NotchMotion.expand,
                            value: isOpen)
                 .animation(NotchMotion.quick, value: model.closedSize)
                 .animation(NotchMotion.expand, value: closedActivity?.id)

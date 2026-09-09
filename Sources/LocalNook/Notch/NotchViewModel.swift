@@ -124,10 +124,9 @@ final class NotchViewModel: ObservableObject {
         // Posting synchronously here puts the resize in the same commit as the
         // first animation frame.
         willOpen?(self)
-        // `expandReversed`, not `expand`: the opening is meant to be the
-        // closing played backwards, and a spring run forwards in both
-        // directions is not that. `close()` keeps `expand` unchanged.
-        withAnimation(NotchMotion.expandReversed) { state = .open }
+        // `expandOpening`, not `expand`: the opening is the closing read
+        // backwards, landing on a settle. `close()` keeps `expand` unchanged.
+        withAnimation(NotchMotion.expandOpening) { state = .open }
         NotchTransitionLog.record(
             opened: true, source: source, displayID: screenID, windowNumber: loggedWindowNumber
         )

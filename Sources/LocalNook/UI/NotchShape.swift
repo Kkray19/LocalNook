@@ -127,77 +127,141 @@ enum NotchMotion {
             : .linear(duration: 0.01)
     }
 
-    /// `expand`, played backwards — the opening motion.
+    /// The opening motion: the closing spring read backwards, landing on a settle.
     ///
     /// Measured, not assumed. A recording of the installed app, sampled frame
     /// by frame, put the opening and the closing side by side as normalised
-    /// progress:
+    /// progress. With the same spring run forwards in both directions they were
+    /// a mean of 0.19 apart; reading the closing backwards brought that to
+    /// 0.026. A spring is fast then slow, so run forwards in both directions it
+    /// gives an open that leaps and a close that glides — and no choice of
+    /// parameters fixes that, because the asymmetry *is* the spring.
     ///
-    ///     elapsed   opening   closing reversed
-    ///      0.25      0.242        0.091
-    ///      0.50      0.566        0.255
-    ///      0.75      0.862        0.593
+    /// But a pure reversal lands badly, and for two reasons that were also
+    /// measured rather than guessed:
     ///
-    /// Same spring, opposite shapes. A spring is fast then slow, so running it
-    /// forwards in both directions gives an open that leaps and a close that
-    /// glides — and read backwards, the close is slow then fast. They are not
-    /// the same trajectory and cannot be made so by tuning the parameters,
-    /// which is why this exists.
+    ///   * **It brakes.** The reversed curve stops accelerating at 83% of the
+    ///     duration and falls from 4.97/s to 0.02/s over the last 90ms,
+    ///     arriving at exactly 1.0 with no velocity left. That is a stop, not a
+    ///     settle: the mirror image of a spring's launch, which is abrupt by
+    ///     nature because nothing is meant to be watching it.
+    ///   * **It was then truncated.** Ending the animation at the nominal
+    ///     duration cut the last 60fps frame from 0.9819 straight to 1.0 — a
+    ///     1.8% jump in one frame, about 10pt of width, at precisely the moment
+    ///     the eye is on the edge that has stopped moving.
     ///
-    /// `1 - s(T - t)` is the definition of "played backwards": progress at time
-    /// t is one minus the spring's own progress at the mirrored time. At t = T
-    /// that is `1 - s(0)` = 1 exactly, so it lands on the target rather than
-    /// approaching it. At t = 0 it is `1 - s(T)`, which for a spring with
-    /// bounce is fractionally off zero — the mirror image of the settle at the
-    /// end of the close, which is the point.
-    static var expandReversed: Animation {
-        isAnimated ? Animation(ReversedSpring(duration: 0.52, bounce: 0.16))
+    /// So the approach is kept exactly as it was, and only the landing changes:
+    /// at the instant the reversed path stops accelerating, it hands over to a
+    /// spring that inherits its position *and* its speed. Continuous in both,
+    /// so there is no seam — the shell carries its momentum through the full
+    /// size, overshoots by about 1%, and settles. The settle uses the closing
+    /// spring's own bounce, which is what makes the finish read as the same
+    /// kind of motion rather than a decoration bolted on the end.
+    static var expandOpening: Animation {
+        isAnimated ? Animation(OpeningMotion(duration: 0.52, bounce: 0.16, settleDuration: 0.40))
                    : .linear(duration: 0.01)
     }
 }
 
-/// Plays a spring backwards, so an opening can be a closing in reverse.
+/// The opening curve: a spring read backwards, then a spring that lands it.
 ///
-/// `Animation.spring` cannot express this: springs are asymmetric in time by
-/// construction. `CustomAnimation` can, by sampling the spring at the mirrored
-/// instant.
-nonisolated struct ReversedSpring: CustomAnimation {
+/// `Animation.spring` can express neither half. Springs are asymmetric in time,
+/// so reading one backwards needs sampling at the mirrored instant; and handing
+/// over between two curves without a seam needs the second to start from the
+/// first's velocity, which only a custom animation can arrange.
+nonisolated struct OpeningMotion: CustomAnimation {
+    /// The closing spring, whose reversal is the approach.
     let duration: TimeInterval
     let bounce: Double
+    /// The settle that lands it. Same bounce as the closing spring, on purpose.
+    let settleDuration: TimeInterval
 
-    private var spring: Spring { Spring(duration: duration, bounce: bounce) }
+    /// The instant the reversed approach stops accelerating, with the value and
+    /// speed it has there. Computed once when the animation is created — the
+    /// closed form of a spring's peak velocity is not published, and sampling
+    /// 240 points costs less than a frame.
+    private let handoverTime: TimeInterval
 
-    /// One minus the spring's progress at the mirrored time.
-    ///
-    /// Not private: this is the whole of the curve, and it is the thing worth
-    /// asserting. The `animate` wrapper around it is bookkeeping.
+    private let handoverValue: Double
+    private let handoverVelocity: Double
+
+    init(duration: TimeInterval, bounce: Double, settleDuration: TimeInterval) {
+        self.duration = duration
+        self.bounce = bounce
+        self.settleDuration = settleDuration
+
+        let spring = Spring(duration: duration, bounce: bounce)
+        func forward(_ time: TimeInterval) -> Double {
+            spring.value(target: 1.0, time: max(0, time))
+        }
+        let step = 0.0005
+        var peakTime = 0.0
+        var peakVelocity = 0.0
+        for sample in 0...240 {
+            let time = duration * Double(sample) / 240
+            let velocity = (forward(time + step) - forward(time - step)) / (2 * step)
+            if velocity > peakVelocity {
+                peakVelocity = velocity
+                peakTime = time
+            }
+        }
+        // Reversal maps the spring's peak velocity to the mirrored instant, and
+        // the reversed curve's speed there is that same peak.
+        handoverTime = duration - peakTime
+        handoverValue = 1 - forward(peakTime)
+        handoverVelocity = peakVelocity
+    }
+
+    /// The handover instant, for the checks that assert the seam is smooth.
+    var handoverTimeForTesting: TimeInterval { handoverTime }
+
+    private var closing: Spring { Spring(duration: duration, bounce: bounce) }
+    private var settle: Spring { Spring(duration: settleDuration, bounce: bounce) }
+
+    /// How long the whole thing runs. Not the nominal duration: ending on that
+    /// is what produced the one-frame jump this exists to remove.
+    var totalDuration: TimeInterval { handoverTime + settle.settlingDuration }
+
+    /// Fraction of the travel covered at `time`.
     func progress(at time: TimeInterval) -> Double {
-        let clamped = min(max(0, time), duration)
-        return 1 - spring.value(target: 1.0, time: duration - clamped)
+        let clock = max(0, time)
+        guard clock >= handoverTime else {
+            return 1 - closing.value(target: 1.0, time: duration - clock)
+        }
+        return settle.value(
+            fromValue: handoverValue, toValue: 1.0,
+            initialVelocity: handoverVelocity, time: clock - handoverTime
+        )
     }
 
     func animate<V: VectorArithmetic>(
         value: V, time: TimeInterval, context: inout AnimationContext<V>
     ) -> V? {
-        guard time < duration else { return nil }
+        guard time < totalDuration else { return nil }
         return value.scaled(by: progress(at: time))
     }
 
     /// Reported so an interrupted open hands its speed to whatever interrupts
-    /// it, rather than stopping dead and starting again. Differentiated
-    /// numerically: the closed form of a reversed spring is not worth deriving
-    /// for a value only used at the moment of an interruption.
+    /// it, rather than stopping dead and starting again.
     func velocity<V: VectorArithmetic>(
         value: V, time: TimeInterval, context: AnimationContext<V>
     ) -> V? {
-        let step = 1.0 / 240.0
-        let before = max(0, time - step), after = min(duration, time + step)
-        guard after > before else { return nil }
-        return value.scaled(by: (progress(at: after) - progress(at: before)) / (after - before))
+        value.scaled(by: speed(at: time))
+    }
+
+    /// Rate of change of `progress`, differentiated numerically. Also what the
+    /// handover is checked against: the two halves must agree here, or the seam
+    /// is visible however well the positions line up.
+    func speed(at time: TimeInterval) -> Double {
+        let step = 1.0 / 2000
+        let before = max(0, time - step)
+        let after = time + step
+        return (progress(at: after) - progress(at: before)) / (after - before)
     }
 }
 
 extension NotchMotion {
+
     /// Small, frequent changes — a live activity appearing, the closed width
     /// tracking a geometry change. Same family, tighter, and no overshoot:
     /// these fire often and a bounce on every one reads as instability.

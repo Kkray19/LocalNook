@@ -100,7 +100,7 @@ enum SelfTest {
             testLiquidGlass()
             testPrivacyBoundaries()
             testTrayWithRealFiles()
-            testReversedMotion()
+            testOpeningMotion()
             testHoverAttribution()
             testBrowserMedia()
             testMotion()
@@ -1154,72 +1154,130 @@ enum SelfTest {
         settings.openDelay = originalDelay
     }
 
-    /// The opening curve is the closing curve, backwards.
+    /// The opening curve: a reversed approach that lands on a settle.
     ///
-    /// Pure arithmetic over the two springs, so what is asserted is the mirror
-    /// relationship itself rather than a screenshot of it. Whether the result
-    /// *looks* right is a separate question, answered by watching it.
-    private static func testReversedMotion() {
-        section("Opening as the closing reversed")
+    /// Arithmetic over the two springs, so what is asserted is the shape of the
+    /// motion rather than a screenshot of it. Whether the finish *looks* right
+    /// is a separate question, answered by watching it.
+    private static func testOpeningMotion() {
+        section("Opening motion")
 
         let duration = 0.52, bounce = 0.16
-        let forward = Spring(duration: duration, bounce: bounce)
-        let reversed = ReversedSpring(duration: duration, bounce: bounce)
-
-        func s(_ t: Double) -> Double { forward.value(target: 1.0, time: t) }
-
-        check("the reversed curve lands exactly on the target",
-              abs(reversed.progress(at: duration) - 1) < 1e-9,
-              "ended at \(reversed.progress(at: duration))")
-        check("the reversed curve starts where the forward one finished",
-              abs(reversed.progress(at: 0) - (1 - s(duration))) < 1e-9)
-
-        // The identity that makes it a reversal: progress at t is one minus the
-        // spring's progress at the mirrored instant, at every instant.
-        var worst = 0.0
-        for step in 0...52 {
-            let t = duration * Double(step) / 52
-            worst = max(worst, abs(reversed.progress(at: t) + s(duration - t) - 1))
+        let closing = Spring(duration: duration, bounce: bounce)
+        let opening = OpeningMotion(duration: duration, bounce: bounce, settleDuration: 0.40)
+        func reversed(_ t: Double) -> Double {
+            1 - closing.value(target: 1.0, time: duration - min(max(0, t), duration))
         }
-        check("it mirrors the forward spring at every sampled instant",
-              worst < 1e-9, "largest departure \(worst)")
 
-        // A spring is fast then slow. Its reversal must therefore be slow then
-        // fast — this is the difference that reusing the same spring cannot
-        // produce, and the reason this type exists.
-        check("the forward spring is front-loaded", s(duration / 2) > 0.5,
-              "half-way progress \(s(duration / 2))")
-        check("the reversed curve is back-loaded",
-              reversed.progress(at: duration / 2) < 0.5,
-              "half-way progress \(reversed.progress(at: duration / 2))")
-        check("the two are not the same trajectory",
-              abs(reversed.progress(at: duration / 2) - s(duration / 2)) > 0.2)
+        // ── The approach is the closing spring, backwards, untouched ───────
+        var worstApproach = 0.0
+        var sampled = 0
+        for step in 0...200 {
+            let t = duration * Double(step) / 200
+            guard t < opening.handoverTimeForTesting else { continue }
+            sampled += 1
+            worstApproach = max(worstApproach, abs(opening.progress(at: t) - reversed(t)))
+        }
+        check("the approach still mirrors the closing spring exactly",
+              sampled > 100 && worstApproach < 1e-9,
+              "\(sampled) samples, largest departure \(worstApproach)")
+        check("and it is still back-loaded, which is the feel being preserved",
+              opening.progress(at: opening.handoverTimeForTesting / 2) < 0.5)
 
-        // Clamped rather than extrapolated, so a late frame cannot overshoot
-        // past the target or a negative time run the spring backwards.
-        check("time past the end stays at the target",
-              abs(reversed.progress(at: duration * 2) - 1) < 1e-9)
+        // ── The handover has no seam ───────────────────────────────────────
+        let hand = opening.handoverTimeForTesting
+        let gap = abs(opening.progress(at: hand + 1e-6) - opening.progress(at: hand - 1e-6))
+        check("position is continuous across the handover", gap < 1e-4,
+              "position jumped \(gap)")
+        let speedBefore = opening.speed(at: hand - 0.004)
+        let speedAfter = opening.speed(at: hand + 0.004)
+        check("speed is continuous across the handover too",
+              abs(speedBefore - speedAfter) / max(speedBefore, 1e-9) < 0.08,
+              "\(speedBefore)/s before, \(speedAfter)/s after — a seam would be visible")
+        check("and it is still moving quickly there, rather than braking",
+              speedAfter > 3, "\(speedAfter)/s")
+
+        // ── It lands with a small bounce, and settles ──────────────────────
+        var peak = 0.0
+        var peakAt = 0.0
+        var t = 0.0
+        while t < opening.totalDuration {
+            let p = opening.progress(at: t)
+            if p > peak { peak = p; peakAt = t }
+            t += 1.0 / 600
+        }
+        check("the shell overshoots its final size", peak > 1.0,
+              "peak \(peak) — it stops dead instead of settling")
+        check("the overshoot is small", peak - 1 < 0.02,
+              "overshot by \(String(format: "%.2f", (peak - 1) * 100))%")
+        check("and large enough to read as a settle rather than a stop",
+              peak - 1 > 0.004,
+              "overshot by only \(String(format: "%.2f", (peak - 1) * 100))%")
+        check("the overshoot happens after the shell reaches full size",
+              peakAt > hand, "peaked at \(peakAt)s, handover at \(hand)s")
+        check("it comes back to the target and stays",
+              abs(opening.progress(at: opening.totalDuration) - 1) < 0.001,
+              "ended at \(opening.progress(at: opening.totalDuration))")
+
+        // ── Nothing is forced to finish early ──────────────────────────────
+        //
+        // The previous curve ended at the nominal duration, which cut the last
+        // 60fps frame from 0.982 straight to 1.0 — a jump of nearly 2% of the
+        // travel in a single frame, exactly at the landing.
+        check("the animation outlives the nominal duration",
+              opening.totalDuration > duration,
+              "it would be truncated at \(duration)s again")
+        var worstFrameStep = 0.0
+        var previous = opening.progress(at: 0)
+        var frame = 1.0 / 60
+        while frame <= opening.totalDuration + 1.0 / 60 {
+            let current = frame > opening.totalDuration ? 1.0 : opening.progress(at: frame)
+            worstFrameStep = max(worstFrameStep, abs(current - previous))
+            previous = current
+            frame += 1.0 / 60
+        }
+        check("no single frame jumps more than the motion itself does",
+              worstFrameStep < 0.12,
+              "largest one-frame step \(String(format: "%.3f", worstFrameStep))")
+        let lastStep = abs(1 - opening.progress(at: opening.totalDuration - 1.0 / 60))
+        check("the final frame arrives rather than snapping",
+              lastStep < 0.002,
+              "the last frame would jump \(String(format: "%.3f", lastStep))")
+
+        // ── The window has room for the overshoot ──────────────────────────
+        //
+        // Worst case on purpose: a notch collapsing from nothing, so the travel
+        // is the whole open size. If it fits then, it fits.
+        let openWidth = NotchShape.totalWidth(
+            forBody: NotchGeometry.openSize.width,
+            topRadius: Settings.shared.openCornerRadius
+        )
+        let overshoot = peak - 1
+        check("the overshoot fits inside the window's side padding",
+              overshoot * openWidth / 2 <= NotchGeometry.shadowPadding,
+              "needs \(overshoot * openWidth / 2)pt a side, has \(NotchGeometry.shadowPadding)pt")
+        check("the overshoot fits inside the window's bottom padding",
+              overshoot * NotchGeometry.openSize.height <= NotchGeometry.shadowPadding,
+              "needs \(overshoot * NotchGeometry.openSize.height)pt, has \(NotchGeometry.shadowPadding)pt")
+
+        // ── Clamped rather than extrapolated ───────────────────────────────
         check("negative time stays at the start",
-              abs(reversed.progress(at: -1) - reversed.progress(at: 0)) < 1e-9)
+              abs(opening.progress(at: -1) - opening.progress(at: 0)) < 1e-9)
 
-        // Velocity is reported so an interruption inherits the speed.
-        let mid = reversed.progress(at: duration * 0.55) - reversed.progress(at: duration * 0.45)
-        check("the curve is still moving in the middle", mid > 0)
-
-        // Reduce Motion outranks all of it, in both directions.
+        // ── Reduce Motion outranks all of it, in both directions ───────────
         let realReducer = NotchMotion.systemReducesMotion
         NotchMotion.systemReducesMotion = { true }
         let reduced = Settings.shared.respectReducedMotion
         Settings.shared.respectReducedMotion = true
         check("Reduce Motion collapses the opening curve too",
-              NotchMotion.expandReversed == NotchMotion.expand,
-              "the reversed curve escaped Reduce Motion")
+              NotchMotion.expandOpening == NotchMotion.expand,
+              "the opening curve escaped Reduce Motion")
         Settings.shared.respectReducedMotion = reduced
         NotchMotion.systemReducesMotion = realReducer
 
         check("otherwise opening and closing use different curves",
-              !NotchMotion.isAnimated || NotchMotion.expandReversed != NotchMotion.expand,
-              "opening would still be a forward spring")
+              !NotchMotion.isAnimated || NotchMotion.expandOpening != NotchMotion.expand,
+              "opening would be a forward spring again")
     }
 
     /// How a hover attempt is attributed, over the counters that produce it.
