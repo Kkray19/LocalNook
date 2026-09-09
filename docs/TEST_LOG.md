@@ -554,6 +554,71 @@ unknown schemas, missing fields, future timestamps, multi-line and control
 characters, and sensitive-looking strings that must not escape. All of them run
 against fixtures the test writes; the user's own transcripts are never opened.
 
+## Browser media: what is possible, measured
+
+Every claim here was checked on this machine rather than inferred.
+
+### MediaRemote is not a path
+
+The private framework that would give a system-wide now-playing feed has been
+entitlement-gated since macOS 15.4. Probed on macOS 27.0:
+
+```
+framework present: true
+dlopen: ok
+symbol: found
+callback: returned
+payload: nil          ← while QuickTime was confirmed playing
+```
+
+`nil` with nothing playing would be ambiguous, so the probe was repeated with
+audio confirmed via AppleScript. It stays nil. No MediaRemote code ships. The
+published workarounds — a bundled Perl helper that inherits Apple's own bundle
+identifier, or code injection with SIP disabled — are a helper installation and
+a security bypass, and are out of scope.
+
+### What does work, and how much
+
+| | Tier 1 — consent only | Tier 2 — plus the browser's own toggle |
+|---|---|---|
+| Mechanism | Scripting dictionary (title, URL) + public CoreAudio (is it emitting audio) | `execute javascript` reaching the page's media element |
+| Title and source | yes | yes |
+| Playing / paused | yes, inferred from audio output | yes, authoritative |
+| Position, duration | no | yes |
+| Play/pause, seek | no | yes |
+| Artwork | no | no |
+
+Tier 2 needs "Allow JavaScript from Apple Events", which cannot be set
+programmatically and should not be — it lets any scripting client run JavaScript
+in every tab. `MediaCapabilities` carries the difference into the UI: a Tier 1
+tab shows a Playing/Paused label rather than buttons that would do nothing.
+
+### Two things measurement caught that reasoning would not
+
+**Chromium plays audio from helper processes.** With a video playing:
+`Google Chrome Helper outputting=YES`, `Google Chrome outputting=no`.
+Attributing by process name concludes the browser is silent while it plays.
+
+**Chrome runs under App Translocation.** Its helpers live at
+`/private/var/folders/…/AppTranslocation/<uuid>/d/Google Chrome.app/…` while
+`NSWorkspace` reports the bundle at `/Applications/Google Chrome.app`. Matching
+the installed path found 0 of 30 helpers; matching
+`NSRunningApplication.bundleURL` finds 30 of 30.
+
+### What has and has not been observed
+
+| Source | Observed | Result |
+|---|---|---|
+| Chrome + YouTube | yes | Title, site and `state=playing` via `--media-probe`, muted |
+| QuickTime | yes | CoreAudio output signal confirmed both ways |
+| Safari | **no** | Never running during testing |
+| Tier 2 page access | **no** | The browser toggle is off |
+| Music, Spotify | **no** | Music not running; Spotify not installed |
+
+Synthetic coverage (41 assertions) is separate and does not stand in for any of
+the above: URL matching, title cleaning, capability gating, unknown durations
+and source stickiness across twelve polls.
+
 ## Self-test isolation
 
 The suite runs against a **disposable preferences domain and a disposable
