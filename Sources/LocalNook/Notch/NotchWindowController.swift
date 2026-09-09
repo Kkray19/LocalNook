@@ -302,6 +302,7 @@ final class NotchWindowController: NSObject {
     @discardableResult
     func installSyntheticNotch(id: String, frame: CGRect) -> NotchViewModel {
         let model = NotchViewModel(screenID: id)
+        model.willOpen = { [weak self] in self?.prepareCanvasForOpen($0) }
         let panel = NotchPanel(contentRect: frame)
         panel.setFrame(frame, display: false)
         models[id] = model
@@ -400,6 +401,7 @@ final class NotchWindowController: NSObject {
             guard let id = screen.stableID else { continue }
             if panels[id] == nil {
                 let model = NotchViewModel(screenID: id)
+                model.willOpen = { [weak self] in self?.prepareCanvasForOpen($0) }
                 let panel = makePanel(for: screen, model: model)
                 panels[id] = panel
                 models[id] = model
@@ -822,11 +824,48 @@ final class NotchWindowController: NSObject {
     }
 
     private func panelSize(for model: NotchViewModel, on screen: NSScreen) -> CGSize {
-        if model.state == .open || shrinkTasks[screen.stableID ?? ""] != nil {
+        let id = screen.stableID ?? ""
+        // `expandingCanvas` is the opening counterpart of `shrinkTasks`: the
+        // former holds the wide canvas from just before the open begins, the
+        // latter holds it until well after the close ends. Between them the
+        // window is the same size for the whole of both animations.
+        if model.state == .open || shrinkTasks[id] != nil || expandingCanvas.contains(id) {
             return NotchGeometry.windowSize(for: screen)
         }
         return NotchGeometry.collapsedWindowSize(closed: model.closedSize,
             hasActivity: LiveActivityCenter.shared.current != nil || HUDController.shared.state != nil)
+    }
+
+    /// Displays whose panel has been given the open canvas ahead of the
+    /// animation, and has not shrunk back yet.
+    private var expandingCanvas: Set<String> = []
+
+    /// Gives a panel its full canvas before the opening animation starts.
+    ///
+    /// Collapsed, the window is only as wide as the notch — there is no point
+    /// owning menu-bar space nobody is using. That makes the first frames of an
+    /// open a race: the SwiftUI content starts growing towards the open size
+    /// while the window it is drawn in is still notch-sized, and the window
+    /// only catches up a runloop turn or two later, resizing *and* re-centring
+    /// in one step. On a recording the shell jumped 200pt left on the first
+    /// frame and then grew rightward from a fixed left edge.
+    ///
+    /// Closing never had this problem because it holds the wide canvas for
+    /// 550ms after the state changes. This is that arrangement, mirrored:
+    /// widen first, animate second.
+    func prepareCanvasForOpen(_ model: NotchViewModel) {
+        guard let id = model.screenID, let panel = panels[id],
+              let screen = NSScreen.screen(withStableID: id)
+        else { return }
+        shrinkTasks[id]?.cancel(); shrinkTasks[id] = nil
+        expandingCanvas.insert(id)
+        // Only the drawing panel, deliberately — not `position(_:on:)`, which
+        // also re-frames the catcher and calls `orderFrontRegardless` on it.
+        // Re-ordering windows in the same breath as starting the animation is
+        // exactly the kind of side effect this is trying to get away from.
+        let size = NotchGeometry.windowSize(for: screen)
+        if panel.frame.size != size { panel.setContentSize(size) }
+        panel.setFrameOrigin(NotchGeometry.windowOrigin(on: screen, windowSize: size))
     }
 
     /// Resize only at transition boundaries, never once per animation frame.
@@ -844,9 +883,11 @@ final class NotchWindowController: NSObject {
                     guard !Task.isCancelled, let self else { return }
                     self.shrinkTasks[id] = nil
                     guard self.models[id]?.state == .closed else { return }
+                    self.expandingCanvas.remove(id)
                     self.position(self.panels[id], on: screen)
                 }
             } else {
+                expandingCanvas.remove(id)
                 position(panels[id], on: screen)
             }
         }

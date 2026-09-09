@@ -127,6 +127,77 @@ enum NotchMotion {
             : .linear(duration: 0.01)
     }
 
+    /// `expand`, played backwards — the opening motion.
+    ///
+    /// Measured, not assumed. A recording of the installed app, sampled frame
+    /// by frame, put the opening and the closing side by side as normalised
+    /// progress:
+    ///
+    ///     elapsed   opening   closing reversed
+    ///      0.25      0.242        0.091
+    ///      0.50      0.566        0.255
+    ///      0.75      0.862        0.593
+    ///
+    /// Same spring, opposite shapes. A spring is fast then slow, so running it
+    /// forwards in both directions gives an open that leaps and a close that
+    /// glides — and read backwards, the close is slow then fast. They are not
+    /// the same trajectory and cannot be made so by tuning the parameters,
+    /// which is why this exists.
+    ///
+    /// `1 - s(T - t)` is the definition of "played backwards": progress at time
+    /// t is one minus the spring's own progress at the mirrored time. At t = T
+    /// that is `1 - s(0)` = 1 exactly, so it lands on the target rather than
+    /// approaching it. At t = 0 it is `1 - s(T)`, which for a spring with
+    /// bounce is fractionally off zero — the mirror image of the settle at the
+    /// end of the close, which is the point.
+    static var expandReversed: Animation {
+        isAnimated ? Animation(ReversedSpring(duration: 0.52, bounce: 0.16))
+                   : .linear(duration: 0.01)
+    }
+}
+
+/// Plays a spring backwards, so an opening can be a closing in reverse.
+///
+/// `Animation.spring` cannot express this: springs are asymmetric in time by
+/// construction. `CustomAnimation` can, by sampling the spring at the mirrored
+/// instant.
+nonisolated struct ReversedSpring: CustomAnimation {
+    let duration: TimeInterval
+    let bounce: Double
+
+    private var spring: Spring { Spring(duration: duration, bounce: bounce) }
+
+    /// One minus the spring's progress at the mirrored time.
+    ///
+    /// Not private: this is the whole of the curve, and it is the thing worth
+    /// asserting. The `animate` wrapper around it is bookkeeping.
+    func progress(at time: TimeInterval) -> Double {
+        let clamped = min(max(0, time), duration)
+        return 1 - spring.value(target: 1.0, time: duration - clamped)
+    }
+
+    func animate<V: VectorArithmetic>(
+        value: V, time: TimeInterval, context: inout AnimationContext<V>
+    ) -> V? {
+        guard time < duration else { return nil }
+        return value.scaled(by: progress(at: time))
+    }
+
+    /// Reported so an interrupted open hands its speed to whatever interrupts
+    /// it, rather than stopping dead and starting again. Differentiated
+    /// numerically: the closed form of a reversed spring is not worth deriving
+    /// for a value only used at the moment of an interruption.
+    func velocity<V: VectorArithmetic>(
+        value: V, time: TimeInterval, context: AnimationContext<V>
+    ) -> V? {
+        let step = 1.0 / 240.0
+        let before = max(0, time - step), after = min(duration, time + step)
+        guard after > before else { return nil }
+        return value.scaled(by: (progress(at: after) - progress(at: before)) / (after - before))
+    }
+}
+
+extension NotchMotion {
     /// Small, frequent changes — a live activity appearing, the closed width
     /// tracking a geometry change. Same family, tighter, and no overshoot:
     /// these fire often and a bounce on every one reads as instability.

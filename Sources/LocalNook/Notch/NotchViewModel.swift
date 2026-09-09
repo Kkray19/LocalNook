@@ -99,10 +99,35 @@ final class NotchViewModel: ObservableObject {
     /// Window number of the panel drawing this notch, for transition logging.
     var loggedWindowNumber: Int = 0
 
+    /// Called synchronously just before an open animates, so the controller can
+    /// give the panel its full canvas first. A closure rather than a
+    /// notification because the ordering is the entire point: this has to run
+    /// inside `open()`, not a runloop turn later. Nil for a detached model.
+    var willOpen: ((NotchViewModel) -> Void)?
+
     func open(source: NotchTransitionSource = .programmatic) {
         cancelPending()
         guard !isSuppressed, state != .open else { return }
-        withAnimation(NotchMotion.expand) { state = .open }
+        // Widen the window *before* animating into it.
+        //
+        // Closing already works this way, in the other direction: the wide
+        // canvas outlives the closing animation by 550ms, so the whole close is
+        // drawn on a canvas that never changes. Opening had no such
+        // arrangement — the panel is only a notch wide while collapsed, and the
+        // controller widened it from a `receive(on:)` plus a `Task`, which is
+        // one or two runloop turns *after* the animation had already started.
+        // Measured on a screen recording: the drawn shell jumped 200pt to the
+        // left on the first frame, then grew rightward with its left edge
+        // already at its final position. That is not a growth from the notch,
+        // it is the panel being clipped by a window that had not caught up.
+        //
+        // Posting synchronously here puts the resize in the same commit as the
+        // first animation frame.
+        willOpen?(self)
+        // `expandReversed`, not `expand`: the opening is meant to be the
+        // closing played backwards, and a spring run forwards in both
+        // directions is not that. `close()` keeps `expand` unchanged.
+        withAnimation(NotchMotion.expandReversed) { state = .open }
         NotchTransitionLog.record(
             opened: true, source: source, displayID: screenID, windowNumber: loggedWindowNumber
         )

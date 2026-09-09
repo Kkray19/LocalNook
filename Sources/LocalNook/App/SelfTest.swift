@@ -100,6 +100,7 @@ enum SelfTest {
             testLiquidGlass()
             testPrivacyBoundaries()
             testTrayWithRealFiles()
+            testReversedMotion()
             testHoverAttribution()
             testBrowserMedia()
             testMotion()
@@ -1151,6 +1152,74 @@ enum SelfTest {
         panel.orderOut(nil)
         panel.close()
         settings.openDelay = originalDelay
+    }
+
+    /// The opening curve is the closing curve, backwards.
+    ///
+    /// Pure arithmetic over the two springs, so what is asserted is the mirror
+    /// relationship itself rather than a screenshot of it. Whether the result
+    /// *looks* right is a separate question, answered by watching it.
+    private static func testReversedMotion() {
+        section("Opening as the closing reversed")
+
+        let duration = 0.52, bounce = 0.16
+        let forward = Spring(duration: duration, bounce: bounce)
+        let reversed = ReversedSpring(duration: duration, bounce: bounce)
+
+        func s(_ t: Double) -> Double { forward.value(target: 1.0, time: t) }
+
+        check("the reversed curve lands exactly on the target",
+              abs(reversed.progress(at: duration) - 1) < 1e-9,
+              "ended at \(reversed.progress(at: duration))")
+        check("the reversed curve starts where the forward one finished",
+              abs(reversed.progress(at: 0) - (1 - s(duration))) < 1e-9)
+
+        // The identity that makes it a reversal: progress at t is one minus the
+        // spring's progress at the mirrored instant, at every instant.
+        var worst = 0.0
+        for step in 0...52 {
+            let t = duration * Double(step) / 52
+            worst = max(worst, abs(reversed.progress(at: t) + s(duration - t) - 1))
+        }
+        check("it mirrors the forward spring at every sampled instant",
+              worst < 1e-9, "largest departure \(worst)")
+
+        // A spring is fast then slow. Its reversal must therefore be slow then
+        // fast — this is the difference that reusing the same spring cannot
+        // produce, and the reason this type exists.
+        check("the forward spring is front-loaded", s(duration / 2) > 0.5,
+              "half-way progress \(s(duration / 2))")
+        check("the reversed curve is back-loaded",
+              reversed.progress(at: duration / 2) < 0.5,
+              "half-way progress \(reversed.progress(at: duration / 2))")
+        check("the two are not the same trajectory",
+              abs(reversed.progress(at: duration / 2) - s(duration / 2)) > 0.2)
+
+        // Clamped rather than extrapolated, so a late frame cannot overshoot
+        // past the target or a negative time run the spring backwards.
+        check("time past the end stays at the target",
+              abs(reversed.progress(at: duration * 2) - 1) < 1e-9)
+        check("negative time stays at the start",
+              abs(reversed.progress(at: -1) - reversed.progress(at: 0)) < 1e-9)
+
+        // Velocity is reported so an interruption inherits the speed.
+        let mid = reversed.progress(at: duration * 0.55) - reversed.progress(at: duration * 0.45)
+        check("the curve is still moving in the middle", mid > 0)
+
+        // Reduce Motion outranks all of it, in both directions.
+        let realReducer = NotchMotion.systemReducesMotion
+        NotchMotion.systemReducesMotion = { true }
+        let reduced = Settings.shared.respectReducedMotion
+        Settings.shared.respectReducedMotion = true
+        check("Reduce Motion collapses the opening curve too",
+              NotchMotion.expandReversed == NotchMotion.expand,
+              "the reversed curve escaped Reduce Motion")
+        Settings.shared.respectReducedMotion = reduced
+        NotchMotion.systemReducesMotion = realReducer
+
+        check("otherwise opening and closing use different curves",
+              !NotchMotion.isAnimated || NotchMotion.expandReversed != NotchMotion.expand,
+              "opening would still be a forward spring")
     }
 
     /// How a hover attempt is attributed, over the counters that produce it.
