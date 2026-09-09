@@ -85,6 +85,11 @@ nonisolated enum AutomationPermission {
         var readAt: Date
     }
     nonisolated(unsafe) private static var cache: [String: Answer] = [:]
+    /// How many times the real system call has actually been made. The point of
+    /// the cache is that this stays near zero however often the UI asks, and a
+    /// counter says so deterministically where a stopwatch only says it
+    /// probably did.
+    nonisolated(unsafe) private static var determinations = 0
     nonisolated(unsafe) private static var refreshing: Set<String> = []
     private static let cacheLock = NSLock()
     private static let refreshQueue = DispatchQueue(
@@ -148,13 +153,27 @@ nonisolated enum AutomationPermission {
 
     /// Drops every cached answer. Used by the self-test, which must not carry
     /// state between runs.
+    ///
+    /// Waits for any refresh already in flight first. The queue is serial, so
+    /// an empty block behind the pending work is enough — without it a refresh
+    /// scheduled moments earlier would land after the cache was cleared and
+    /// repopulate it, which is exactly the sort of leftover this exists to
+    /// remove.
     static func forgetCachedAnswers() {
+        refreshQueue.sync {}
         cacheLock.lock()
         cache.removeAll()
         cacheLock.unlock()
     }
 
+    /// Real system calls made so far, for the test that the cache holds.
+    static var determinationCount: Int {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        return determinations
+    }
+
     private static func determine(bundleID: String, askUserIfNeeded: Bool) -> Status {
+        cacheLock.lock(); determinations += 1; cacheLock.unlock()
         guard !bundleID.isEmpty else { return .other(OSStatus(paramErr)) }
         // A self-test must not consult, or create, real TCC state.
         guard !AppInfo.isSelfTest else { return .targetNotRunning }

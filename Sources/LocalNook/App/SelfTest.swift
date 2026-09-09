@@ -1545,16 +1545,18 @@ enum SelfTest {
               AutomationPermission.status(forBundleID: "com.google.Chrome")
                   == .targetNotRunning,
               "the self-test read the machine's real TCC state")
-        // The real call costs ~12.6 ms, and both media views ask about both
-        // browsers while building their bodies. Asking must therefore be cheap
-        // by construction, not by luck.
+        // The real call costs ~12.6 ms — an XPC round trip to tccd, measured over
+        // 200 calls — and both media views ask about both browsers while
+        // building their bodies. So asking has to be cheap by construction.
+        // Counting the system calls says that deterministically, where a
+        // stopwatch would only say it probably held on an unloaded machine.
         AutomationPermission.forgetCachedAnswers()
-        let askStart = Date()
+        let asksBefore = AutomationPermission.determinationCount
         for _ in 0..<500 { _ = AutomationPermission.status(forBundleID: "com.google.Chrome") }
-        let askCost = Date().timeIntervalSince(askStart)
-        check("asking about consent repeatedly is cheap enough for a view body",
-              askCost < 0.1,
-              "500 reads took \(Int(askCost * 1000))ms — a blocking TCC call reached the UI")
+        let asks = AutomationPermission.determinationCount - asksBefore
+        check("500 reads of consent make at most one system call",
+              asks <= 1,
+              "made \(asks) — a 12.6ms blocking call would be reaching the UI")
 
         // ── Browsers are never launched, and stay off until switched on ────
         let chrome = BrowserMediaProvider(browser: .chrome)
