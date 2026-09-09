@@ -799,13 +799,26 @@ enum SelfTest {
         first.releaseInteraction(.textEditing, owner: owner)
         check("releasing ends the hold", !first.isInteracting)
 
-        // Text editing lasts exactly as long as key focus. The panel is not key
-        // here, so validation must drop a claim nothing is sustaining.
+        // Text editing lasts exactly as long as key focus, so key focus is
+        // injected rather than hoped for. Reading the real window made this
+        // check assert that nothing else on the Mac had taken focus.
+        check("key focus is read from the window unless a test says otherwise",
+              controller.panelHoldsKeyFocus == nil)
+        controller.panelHoldsKeyFocus = { _ in false }
         first.claimInteraction(.textEditing, owner: UUID())
         controller.validateClaimsNow()
         check("a text-editing claim ends when the panel is not key",
               !first.activeInteractions.contains(.textEditing),
               "a claim outlived its premise")
+
+        controller.panelHoldsKeyFocus = { _ in true }
+        first.claimInteraction(.textEditing, owner: UUID())
+        controller.validateClaimsNow()
+        check("a text-editing claim survives while the panel is key",
+              first.activeInteractions.contains(.textEditing),
+              "a claim was dropped while its premise held")
+        first.releaseInteractions(of: .textEditing)
+        controller.panelHoldsKeyFocus = nil
 
         // A drag cancelled off-screen: no button is held, so the claim goes.
         //
@@ -2195,6 +2208,10 @@ enum SelfTest {
             here.open()
             other.open()
             pumpEvents(for: 0.3)
+            // Somebody typing in Notes has key focus by definition. Injected,
+            // because whether the panel had actually become key by this point
+            // depended on the window server and on what else was taking focus.
+            controller.panelHoldsKeyFocus = { $0 == here.screenID }
             here.claimInteraction(.textEditing, owner: typist)
 
             controller.runPointerSafetyCheckNow()
@@ -2206,6 +2223,7 @@ enum SelfTest {
 
             // --- ending the interaction restores ordinary closing ----------
             here.releaseInteraction(.textEditing, owner: typist)
+            controller.panelHoldsKeyFocus = nil
             check("releasing the claim ends the hold", !here.isInteracting)
             controller.runPointerSafetyCheckNow()
             check("once typing ends the notch closes normally again",

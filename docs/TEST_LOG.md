@@ -474,6 +474,50 @@ a runtime state that no longer reproduces. Nothing failed in either case, and
 the current figure is stable across thirteen runs — but the discrepancy is not
 accounted for, and is recorded here rather than rounded away.
 
+## A deterministic check that was not — 2026-09-09
+
+The frozen batch for this pass failed on run 2 of 10:
+
+```
+✗ typing in Notes pins the notch being typed in
+```
+
+and the gate did what it is for: *"a demonstrated defect. This candidate must
+not ship."* The other nine runs, and every earlier batch, were clean.
+
+The cause was not the product. A `.textEditing` claim survives exactly as long
+as its display's panel holds key focus:
+
+```swift
+if !(panels[id]?.isKeyWindow ?? false) { model.releaseInteractions(of: .textEditing) }
+```
+
+The check claimed text editing, ran the pointer-safety pass, and asserted the
+notch stayed open — which requires the panel to be key. Nothing in the check
+made it key. It was reading whatever the window server happened to be doing,
+so it was really asserting that nothing else on the Mac had taken focus in the
+preceding moment. About once in ten runs, something had.
+
+Worse, a second check twenty lines earlier asserts the *opposite* — that a
+claim is dropped when the panel is not key — and it too was reading the ambient
+state. Two checks with contradictory requirements, both passing by luck.
+
+Key focus is now injected, like pointer position, button state, display
+configuration and scheduling before it: `panelHoldsKeyFocus` defaults to nil,
+meaning "ask the window", and each check supplies the answer its rule needs.
+A third check asserts the seam is nil unless a test set it, so production
+cannot be left stubbed. The suite gained one real assertion — that a claim
+*survives* while its premise holds — which nothing had covered.
+
+The same pass removed a wall-clock assertion for the same reason: a check
+asserting that 500 consent reads finish inside 100 ms was a stopwatch standing
+in for "the cache works". It failed the installer's gate once and passed on
+every rerun. Counting system calls says the same thing and cannot flake.
+
+**The rule this leaves behind:** in the deterministic half, if a check depends
+on a condition, it must establish that condition. A check that reads the
+machine's mood reports the machine's mood, and reports it as a product defect.
+
 ## What must be repeated if anything changes
 
 Not every change invalidates every result. This says which.
@@ -556,12 +600,14 @@ against fixtures the test writes; the user's own transcripts are never opened.
 
 ## Browser media: what is possible, measured
 
-Every claim here was checked on this machine rather than inferred.
+Every claim here was checked on this machine rather than inferred, and each is
+labelled with how it was established.
 
-### MediaRemote is not a path
+### MediaRemote is not a path *for this app, here*
 
 The private framework that would give a system-wide now-playing feed has been
-entitlement-gated since macOS 15.4. Probed on macOS 27.0:
+entitlement-gated since macOS 15.4. Probed from inside the LocalNook bundle on
+macOS 27.0:
 
 ```
 framework present: true
@@ -572,28 +618,107 @@ payload: nil          ← while QuickTime was confirmed playing
 ```
 
 `nil` with nothing playing would be ambiguous, so the probe was repeated with
-audio confirmed via AppleScript. It stays nil. No MediaRemote code ships. The
-published workarounds — a bundled Perl helper that inherits Apple's own bundle
+audio confirmed via AppleScript. It stays nil.
+
+**Scope.** One app without the entitlement, one machine, one OS version. That
+is consistent with Apple's documented gating, but a single nil is not evidence
+that no configuration anywhere gets an answer. The claim being made is only
+that LocalNook cannot rely on it. No MediaRemote code ships. The published
+workarounds — a bundled Perl helper that inherits Apple's own bundle
 identifier, or code injection with SIP disabled — are a helper installation and
 a security bypass, and are out of scope.
 
-### What does work, and how much
+### Tier 1 cannot say which tab is playing — structurally
+
+This was the central correction of this pass. Combining a tab title with the
+browser's audio output does **not** establish that the named tab is playing.
+Two independent facts, both read rather than assumed:
+
+**Neither browser publishes per-tab audio.** Straight out of their `.sdef`
+files:
+
+| Browser | `tab` properties |
+|---|---|
+| Chrome | `id`, `title`, `URL`, `loading` |
+| Safari | `source`, `URL`, `index`, `text`, `visible`, `name` |
+
+There is no `audible`, `playing` or `muted` property to ask for.
+
+**CoreAudio attributes output per process, and Chrome mixes every tab through
+one.** Of Chrome's 20 running processes on this machine there is exactly one
+`--utility-sub-type=audio.mojom.AudioService`. Per-tab attribution is not
+merely unimplemented; it is not expressible through this mechanism.
+
+So Tier 1 reports **"Browser audio active"** with the tab's playback state
+marked `.unknown`, never "Playing". With one player tab open it still names the
+tab; with several it names the browser and the count instead, because naming
+one of them would be a coin toss. `BrowserPlaybackResolver` holds that decision
+as a pure function, so every case is decided in one place and tested there.
+
+### What each tier can do
 
 | | Tier 1 — consent only | Tier 2 — plus the browser's own toggle |
 |---|---|---|
-| Mechanism | Scripting dictionary (title, URL) + public CoreAudio (is it emitting audio) | `execute javascript` reaching the page's media element |
+| Mechanism | Scripting dictionary (title, URL) + public CoreAudio (is the *browser* emitting audio) | `execute javascript` reaching each page's media element |
 | Title and source | yes | yes |
-| Playing / paused | yes, inferred from audio output | yes, authoritative |
+| Which tab is playing | **no** | yes |
+| Playing / paused | **no** — "Browser audio active", state unknown | yes, authoritative (muted and ended included) |
 | Position, duration | no | yes |
-| Play/pause, seek | no | yes |
-| Artwork | no | no |
+| Play/pause, seek | no | yes, on the identified tab |
+| Artwork | no — deferred, see below | no — deferred, see below |
 
-Tier 2 needs "Allow JavaScript from Apple Events", which cannot be set
-programmatically and should not be — it lets any scripting client run JavaScript
-in every tab. `MediaCapabilities` carries the difference into the UI: a Tier 1
-tab shows a Playing/Paused label rather than buttons that would do nothing.
+**Artwork is deferred, not impossible.** An earlier note said a browser cannot
+supply artwork without a third-party request; that was an overstatement. A page
+has plausible local sources — a `<video>` poster, `navigator.mediaSession`
+metadata — reachable through page access. None has been verified here, and most
+hand back a URL, which would mean a network request this app does not make. No
+network fetching was added in this pass.
+
+### Consent is read, not provoked
+
+`AutomationPermission` wraps `AEDeterminePermissionToAutomateTarget`, public
+since 10.14. With `askUserIfNeeded: false` it answers from the system's records
+without sending an event and without a dialog — verified: it returned
+immediately for a running target and raised nothing, and returned `-600` for
+every target that was not running.
+
+This replaced a claim in `Permissions.swift` that no read-only API existed and
+that consent could only be discovered by sending an event and watching it fail.
+That approach conflates refusal with never having asked, and makes discovery
+itself a thing that can raise a prompt.
+
+| OSStatus | Meaning |
+|---|---|
+| `0` | granted |
+| `-1743` | refused |
+| `-1744` | never asked — no System Settings entry yet |
+| `-600` / `-609` | target not running; says nothing about consent |
+
+**Cost: 12.6 ms per call**, measured over 200 calls — an XPC round trip to
+`tccd`, not a lookup. Both media views ask about both browsers while building
+their bodies, so answers are cached and the self-test asserts that 500 reads
+make at most one system call.
+
+### The probe reports its own attribution now
+
+Run from a shell, `--media-probe` reported Chrome as **Connected** while the
+running app's dashboard said **"Google Chrome isn't connected"**. The dashboard
+was right. Consent is granted to a *client*, and macOS attributes a process
+launched from a terminal to that terminal, so the probe was answering for the
+shell under LocalNook's name. It now prints its parent process and says so.
+**The authoritative answer is the one the running app shows.**
 
 ### Two things measurement caught that reasoning would not
+
+**`tab` inside a `tell application` block is the browser's tab class.** The tab
+listing script separated fields with the `tab` constant. Inside `tell
+application "Google Chrome"` that resolves to Chrome's `tab` *class*, and
+concatenating it yields the literal text `"tab"` — so every line came back as
+one field instead of three and the provider reported **no media tabs while a
+player sat open**. Nothing errored; the symptom was an empty widget, which is
+also what "nothing is playing" looks like. `character id 9` is the term neither
+dictionary redefines, and a check asserts the generated source keeps using it.
+Found only by running against a real browser.
 
 **Chromium plays audio from helper processes.** With a video playing:
 `Google Chrome Helper outputting=YES`, `Google Chrome outputting=no`.
@@ -607,17 +732,36 @@ the installed path found 0 of 30 helpers; matching
 
 ### What has and has not been observed
 
+Observed live, this pass, with **no audio played** — test tabs were created on
+sites that do not autoplay (a SoundCloud track page, a Vimeo video page), and
+`browserAudio=false` was confirmed at every step:
+
+| Observation | Result |
+|---|---|
+| No player tab open | `mediaTabs=0`, resolved to nothing |
+| One player tab, silent | `mediaTabs=1`, **resolved to nothing** — a media tab with no audio produces no claim |
+| Two player tabs, silent | `mediaTabs=2`, resolved to nothing |
+| Page access detection | `execute javascript` returns Chrome error `12` per tab; recorded as page access unavailable, not as "no media element" |
+| The app's own consent state | dashboard shows "Google Chrome isn't connected" with a Connect action |
+
+Test tabs were closed afterwards; a check confirmed none remained.
+
 | Source | Observed | Result |
 |---|---|---|
-| Chrome + YouTube | yes | Title, site and `state=playing` via `--media-probe`, muted |
-| QuickTime | yes | CoreAudio output signal confirmed both ways |
+| Chrome, tab listing and selection | yes | Correct after the `tab`-class fix |
+| Chrome, actual playback | **no** | Requires audible sound; deferred to the user |
+| Tier 2 page access | **no** | The browser toggle is off and must not be set by this app |
 | Safari | **no** | Never running during testing |
-| Tier 2 page access | **no** | The browser toggle is off |
 | Music, Spotify | **no** | Music not running; Spotify not installed |
+| Populated widget on screen | **rendered, not observed** | Three states rendered offscreen at 720 pt and 520 pt; a live populated widget needs playback and consent |
 
-Synthetic coverage (41 assertions) is separate and does not stand in for any of
-the above: URL matching, title cleaning, capability gating, unknown durations
-and source stickiness across twelve polls.
+Synthetic coverage — **119 assertions**, fixtures only, no browser, no audio,
+no permission — is separate and stands in for none of the above. It covers URL
+matching, title cleaning, page-reply parsing, the audio debounce, capability
+gating, source ranking and stickiness across twelve polls, and the full
+resolution matrix: two tabs with one playing, an unrelated tab making noise, a
+paused video while another plays, muted playback, buffering, ended media, page
+access that reached only some tabs, and the selected tab closing.
 
 ## Self-test isolation
 

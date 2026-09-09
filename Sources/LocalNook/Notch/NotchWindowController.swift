@@ -633,6 +633,24 @@ final class NotchWindowController: NSObject {
     /// be missed — a drag cancelled off-screen, a window that disappeared, a
     /// menu dismissed by clicking elsewhere. Nothing expires on a clock, only on
     /// its own condition going away.
+    /// Whether the panel for a display currently holds key focus.
+    ///
+    /// Injectable for the same reason pointer position, button state, display
+    /// configuration and scheduling are. A text-editing claim survives exactly
+    /// as long as its panel is key, and two checks in the suite need opposite
+    /// answers to that: one asserts a claim holds the notch open while typing,
+    /// the other asserts it is dropped once nothing sustains it. Both were
+    /// reading whatever the window server happened to be doing, so both were
+    /// really asserting that the machine was in a convenient mood — and the
+    /// first of them failed about once in ten runs, reported as a product
+    /// defect. Nil means production behaviour: ask the window.
+    var panelHoldsKeyFocus: ((String) -> Bool)?
+
+    private func panelIsKey(_ id: String) -> Bool {
+        if let panelHoldsKeyFocus { return panelHoldsKeyFocus(id) }
+        return panels[id]?.isKeyWindow ?? false
+    }
+
     private func validateInteractionClaims() {
         let menuOnScreen = isMenuOnScreen
         let buttonDown = mouseButtonsAreDown()
@@ -640,7 +658,7 @@ final class NotchWindowController: NSObject {
         for (id, model) in models {
             // Text editing lasts exactly as long as this display's panel holds
             // key focus. Another app becoming key ends it immediately.
-            if !(panels[id]?.isKeyWindow ?? false) {
+            if !panelIsKey(id) {
                 model.releaseInteractions(of: .textEditing)
             }
             // A drag needs a button held down. Releasing the mouse anywhere —

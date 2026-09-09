@@ -34,7 +34,7 @@ The widgets themselves:
 
 | Widget | What it does |
 |---|---|
-| **Media** | Now Playing from Music and Spotify: artwork, scrubbing, transport |
+| **Media** | Now Playing from Music and Spotify: artwork, scrubbing, transport. Chrome and Safari tabs too, once you connect them — with what a browser can honestly report, which is less |
 | **Shelf** | Drag files in, drag them back out. Quick Look, multi-select, persists across launches |
 | **Calendar** | Today's events via EventKit, with day navigation |
 | **Mirror** | Live camera preview, including Continuity Camera |
@@ -134,7 +134,7 @@ feature.
 | **Calendar** | The Calendar widget | Widget explains and offers a Settings link |
 | **Camera** | The Mirror widget | Same. Video is *previewed only* — never recorded or saved |
 | **Notifications** | Timer alerts | Falls back to an audible beep |
-| **Automation** | Reading/controlling Music and Spotify | Media widget explains and offers a link |
+| **Automation** | Reading Music, Spotify and browser tabs | Read before use, never provoked; a Connect button asks |
 | **Accessibility** | **Never requested** | — |
 
 Settings ▸ Privacy shows the live state of all of these, with buttons that jump
