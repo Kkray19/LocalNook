@@ -100,6 +100,7 @@ enum SelfTest {
             testLiquidGlass()
             testPrivacyBoundaries()
             testTrayWithRealFiles()
+            testSurfaceOpacity()
             testCodexSessions()
             testOpeningMotion()
             testHoverAttribution()
@@ -1153,6 +1154,73 @@ enum SelfTest {
         panel.orderOut(nil)
         panel.close()
         settings.openDelay = originalDelay
+    }
+
+    /// The surface's opacity, for both materials.
+    private static func testSurfaceOpacity() {
+        section("Panel opacity")
+
+        let settings = Settings.shared
+        let originalGlass = settings.glassOpacity
+        let originalSolid = settings.expandedOpacity
+        let originalMaterial = settings.notchMaterial
+        defer {
+            settings.glassOpacity = originalGlass
+            settings.expandedOpacity = originalSolid
+            settings.notchMaterial = originalMaterial
+        }
+
+        check("an untouched panel is fully opaque",
+              Settings.defaultGlassOpacity == 1 && Settings.defaultExpandedOpacity == 1,
+              "the default would change the panel for someone who never asked")
+
+        settings.glassOpacity = 0.5
+        settings.expandedOpacity = 0.6
+
+        // ── Collapsed is never see-through, whatever the slider says ────────
+        for glass in [true, false] {
+            check("the collapsed notch stays opaque with glass \(glass ? "on" : "off")",
+                  NotchSurface.surfaceOpacity(settings: settings, isOpen: false,
+                                              usesGlass: glass) == 1,
+                  "the desktop would show through the camera housing")
+        }
+
+        // ── Expanded uses the slider for the material in use ───────────────
+        check("the expanded glass panel uses the glass slider",
+              NotchSurface.surfaceOpacity(settings: settings, isOpen: true,
+                                          usesGlass: true) == 0.5)
+        check("the expanded solid panel uses its own slider",
+              NotchSurface.surfaceOpacity(settings: settings, isOpen: true,
+                                          usesGlass: false) == 0.6)
+        check("the two sliders do not affect each other",
+              NotchSurface.surfaceOpacity(settings: settings, isOpen: true, usesGlass: true)
+                  != NotchSurface.surfaceOpacity(settings: settings, isOpen: true,
+                                                 usesGlass: false))
+
+        // ── A stored value outside the range cannot make it invisible ──────
+        settings.glassOpacity = 0
+        check("an opacity of zero is clamped to something still visible",
+              NotchSurface.surfaceOpacity(settings: settings, isOpen: true,
+                                          usesGlass: true) >= 0.2)
+        settings.glassOpacity = 4
+        check("an opacity above one is clamped",
+              NotchSurface.surfaceOpacity(settings: settings, isOpen: true,
+                                          usesGlass: true) == 1)
+
+        // ── Glass is only ever used when it is both chosen and available ───
+        settings.notchMaterial = .solid
+        check("choosing solid means no glass, open or closed",
+              !NotchSurface.usesGlass(settings: settings, isOpen: true, hasPhysicalNotch: true)
+                  && !NotchSurface.usesGlass(settings: settings, isOpen: false,
+                                             hasPhysicalNotch: true))
+        settings.notchMaterial = .liquidGlass
+        check("choosing glass uses it when expanded",
+              NotchSurface.usesGlass(settings: settings, isOpen: true, hasPhysicalNotch: true)
+                  == NotchMaterial.liquidGlass.isAvailable)
+        check("but not over a camera housing while collapsed, unless asked",
+              settings.glassWhenCollapsed
+                  || !NotchSurface.usesGlass(settings: settings, isOpen: false,
+                                             hasPhysicalNotch: true))
     }
 
     /// Codex sessions, the provider badge, and the trailing indicator.

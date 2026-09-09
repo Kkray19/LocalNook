@@ -46,6 +46,23 @@ struct NotchSurface: View {
         return settings.glassWhenCollapsed || !hasPhysicalNotch
     }
 
+    /// How opaque the surface is drawn.
+    ///
+    /// Expanded only, for both materials, and for the same reason: a collapsed
+    /// notch sits over the physical camera housing and has to match it exactly.
+    /// Letting the desktop through there would draw a translucent rectangle
+    /// around the housing, which is the one thing this surface must never do —
+    /// so the slider stops at the collapsed state whatever it is set to.
+    static func surfaceOpacity(settings: Settings, isOpen: Bool, usesGlass: Bool) -> Double {
+        guard isOpen else { return 1 }
+        let raw = usesGlass ? settings.glassOpacity : settings.expandedOpacity
+        return min(1, max(0.2, raw))
+    }
+
+    private var opacity: Double {
+        Self.surfaceOpacity(settings: settings, isOpen: isOpen, usesGlass: usesGlass)
+    }
+
     var body: some View {
         if #available(macOS 26.0, *), usesGlass {
             glassSurface
@@ -55,6 +72,10 @@ struct NotchSurface: View {
                 .overlay {
                     shape.stroke(Color.white.opacity(0.14), lineWidth: 0.5)
                 }
+                // The whole surface together, so the scrim and the hairline
+                // fade with the glass rather than floating on top of a panel
+                // that is no longer there.
+                .opacity(opacity)
         } else {
             // Deliberately unadorned: no border, no gradient, no glow. The
             // silhouette and the shadow do the work.
@@ -62,7 +83,7 @@ struct NotchSurface: View {
             // Transparency applies to the expanded panel only. Collapsed, this
             // is the camera housing's twin and must be indistinguishable from
             // it — see Settings.expandedOpacity.
-            shape.fill(Color.black.opacity(isOpen ? settings.expandedOpacity : 1))
+            shape.fill(Color.black.opacity(opacity))
         }
     }
 

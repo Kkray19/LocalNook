@@ -157,6 +157,17 @@ final class Settings: ObservableObject {
     /// physical notch this puts a translucent smudge over the camera housing.
     @Pref("appearance.glassWhenCollapsed", false) var glassWhenCollapsed: Bool
 
+    /// Opacity of the Liquid Glass panel when the notch is **expanded**.
+    ///
+    /// Separate from `glassDimming`, which is the dark scrim *behind* the
+    /// glass and exists to keep widget text readable over a bright desktop.
+    /// This is the whole surface — scrim, glass and hairline together — so
+    /// lowering it lets more of the desktop through rather than making the
+    /// panel darker. 1.0 by default: the same panel as before unless asked
+    /// otherwise.
+    static let defaultGlassOpacity = 1.0
+    @Pref("appearance.glassOpacity", Settings.defaultGlassOpacity) var glassOpacity: Double
+
     /// Opacity of the solid material when the notch is **expanded**.
     ///
     /// Applies to the expanded panel only, never to the collapsed notch. A
@@ -164,7 +175,8 @@ final class Settings: ObservableObject {
     /// and has to match it exactly; letting the desktop show through there
     /// would draw a translucent rectangle around the housing, which is the one
     /// thing the surface must never do.
-    @Pref("appearance.expandedOpacity", 1.0) var expandedOpacity: Double
+    static let defaultExpandedOpacity = 1.0
+    @Pref("appearance.expandedOpacity", Settings.defaultExpandedOpacity) var expandedOpacity: Double
 
     /// Whether Liquid Glass should actually be used right now.
     var usesLiquidGlass: Bool {

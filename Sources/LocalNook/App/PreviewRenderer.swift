@@ -107,6 +107,13 @@ enum PreviewRenderer {
             } else {
                 MediaManager.shared.previewInject(nil)
             }
+            // No Liquid Glass scenes here. `.glassEffect` samples what is
+            // actually behind the window, and an offscreen render has nothing
+            // behind it: rendered at 100% and at 45% opacity the two came out
+            // near-identical, both with rainbow fringing along the flares. A
+            // preview that misrepresents the thing being previewed is worse
+            // than no preview, so glass is judged on screen instead.
+
             // The agent badge and the trailing indicator, staged rather than
             // read: the renderer is forbidden from opening a transcript, and
             // these names are invented for exactly that reason.

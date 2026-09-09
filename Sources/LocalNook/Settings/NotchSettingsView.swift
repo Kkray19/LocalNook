@@ -33,11 +33,32 @@ struct NotchSettingsView: View {
                         ForEach(GlassStyle.allCases) { Text($0.label).tag($0) }
                     }
                     SettingsSlider(
+                        title: "Glass opacity", value: settings.binding(\.glassOpacity),
+                        range: 0.35...1, step: 0.05, unit: "", format: "%.2f"
+                    )
+                    SettingsSlider(
                         title: "Dim behind glass", value: settings.binding(\.glassDimming),
                         range: 0...0.75, step: 0.05, unit: "", format: "%.2f"
                     )
+                    Text("Opacity is the whole panel — lower it and more of the "
+                         + "desktop shows through. Dimming is the scrim behind the "
+                         + "glass, which keeps widget text readable over a bright "
+                         + "wallpaper. Both apply to the expanded panel only.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     Toggle("Use glass for the collapsed notch too",
                            isOn: settings.binding(\.glassWhenCollapsed))
+                } else {
+                    SettingsSlider(
+                        title: "Panel opacity", value: settings.binding(\.expandedOpacity),
+                        range: 0.35...1, step: 0.05, unit: "", format: "%.2f"
+                    )
+                    Text("The expanded panel only. Collapsed, the notch stays "
+                         + "opaque so it matches the camera housing exactly.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
