@@ -1635,6 +1635,11 @@ enum SelfTest {
                     NSPoint(x: screen.frame.midX,
                             y: screen.frame.maxY - NotchGeometry.openSize.height / 2)
                 }
+                check("the pointer could be pinned to the new notch", true)
+            } else {
+                check("the pointer could be pinned to the new notch", false,
+                      "the restarted notch has no screen, so the check below "
+                      + "would be measuring the fallback instead")
             }
             fresh.open()
             pumpEvents(for: 0.4)
@@ -1703,6 +1708,13 @@ enum SelfTest {
                   controller.panelCount == controller.catcherCount
                   && controller.panelCount > 0,
                   "panels=\(controller.panelCount) catchers=\(controller.catcherCount)")
+        } else {
+            // Without this the whole display-removal group simply vanished from
+            // the run — seven assertions that neither passed nor failed and
+            // said nothing about it. A run that quietly executes fewer checks
+            // than another is missing coverage, not merely shorter.
+            check("a notch exists to remove a display from", false,
+                  "the controller had no models after restart")
         }
 
         // --- an interaction pins only its own nook -------------------------
