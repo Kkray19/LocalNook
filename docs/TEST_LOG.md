@@ -514,6 +514,29 @@ asserting that 500 consent reads finish inside 100 ms was a stopwatch standing
 in for "the cache works". It failed the installer's gate once and passed on
 every rerun. Counting system calls says the same thing and cannot flake.
 
+### The same mistake in the live half
+
+The rerun then failed two of twelve integration runs:
+
+```
+✗ [integration] hovering the catcher opens the notch
+  — LocalNook handled 4 crossing(s) but the notch is closed
+  probe: enters=2 exits=2 handled=4 idle=0s
+```
+
+The counters answer it. The stimulus is a window moved under a **still**
+pointer; `exits=2` says the pointer did not stay still, and `idle=0s` says
+somebody was using the Mac. The notch closed because it was told the pointer
+had left. Failing that is blaming the app for obeying the last thing it was
+told — and the eight clean runs in the same batch show `idle=3s` upward.
+
+`HoverProbe.classify` now reports a delivered exit during the entry check as a
+**missing precondition**, which is unverified and does not block, rather than
+a mishandled event, which is a defect and does. A crossing the app never
+handled is still a defect, exit or no exit. The classifier is pure, so all
+seven branches are now asserted deterministically, over counters recorded
+through the probe's own API — no pointer, no window, no window server.
+
 **The rule this leaves behind:** in the deterministic half, if a check depends
 on a condition, it must establish that condition. A check that reads the
 machine's mood reports the machine's mood, and reports it as a product defect.

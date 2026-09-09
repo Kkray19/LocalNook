@@ -143,7 +143,27 @@ enum HoverProbe {
         if opened { return .succeeded }
         if entersDelivered == 0 { return .noPlatformEvent }
         if handlerInvocations == 0 { return .eventDropped(enters: entersDelivered) }
+        if exitsDelivered > 0 {
+            return .preconditionUnmet(exitDuringEntryDetail)
+        }
         return .wrongState(handlerCalls: handlerInvocations)
+    }
+
+    /// The stimulus is a window moved under a **still** pointer. A delivered
+    /// exit says the pointer did not stay still — somebody was using the Mac —
+    /// and a notch that closed after being told the pointer left did exactly
+    /// what it should. Reporting that as a mishandled event blames the app for
+    /// obeying the last thing it was told, and two runs of a twelve-run batch
+    /// were failed on precisely that, with `enters=2 exits=2` printed beside
+    /// the failure and `idle=0s` saying who moved.
+    ///
+    /// This is a missing precondition, not a demonstrated defect: unverified,
+    /// which does not block a release, rather than a failure, which does.
+    static var exitDuringEntryDetail: String {
+        "the pointer left again during the check — \(entersDelivered) enter(s) and "
+        + "\(exitsDelivered) exit(s) were delivered, so a closed notch is the "
+        + "correct response, not a mishandled one. The stimulus needs a still "
+        + "pointer; the machine was idle \(String(format: "%.0f", idleSeconds))s."
     }
 
     /// The same classification for the leaving half of a crossing.

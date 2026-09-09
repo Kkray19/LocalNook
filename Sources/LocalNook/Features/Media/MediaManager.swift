@@ -75,30 +75,54 @@ final class MediaManager: ObservableObject {
     /// rather than inferred: `AutomationPermission.status` answers from the TCC
     /// database without sending an event, so a browser whose answer is already
     /// "yes" can be polled with no dialog possible. The two older conditions
-    /// remain for the scripted apps, whose consent is still only observable
-    /// through the outcome of an attempt.
+    /// remain because the scripted apps are not gated on the read-only check
+    /// the way the browsers are, so their consent is still discovered at the
+    /// moment of use.
     ///
     /// Nothing here is inferred from the widget merely being visible.
     func activateIfAlreadyConsented() {
         guard !AppInfo.isSelfTest, !AppInfo.isPreviewRender else { return }
-        guard Settings.shared.browserMediaEnabled
-            || MediaScriptBridge.lastAutomationState == .granted
-        else { return }
+        // Every provider now checks consent with a read-only call before it
+        // sends anything, so polling cannot produce a dialog and the only
+        // question left is whether there is anything to poll. The older
+        // conditions — "the user switched browser media on", "an Apple Event
+        // already succeeded this session" — were standing in for a fact that
+        // can now simply be read.
+        guard hasAnyRunningSource else { return }
         activate()
     }
 
     // MARK: Connecting a browser
 
-    /// Browsers that are switched on and running but not yet permitted.
+    /// A media app that is open but has not been connected.
+    struct PendingSource: Identifiable {
+        var id: String { bundleID }
+        let displayName: String
+        let bundleID: String
+        let status: AutomationPermission.Status
+    }
+
+    /// Sources that are running but not yet permitted.
     ///
     /// Their providers report nothing at all rather than prompting, so without
     /// this the widget would just look empty for a reason it never explains.
-    var browsersAwaitingConnection: [(browser: MediaBrowser, status: AutomationPermission.Status)] {
+    /// Only running apps: consent for an app that is not running cannot be
+    /// read, and offering to connect one would be an invitation to nothing.
+    var sourcesAwaitingConnection: [PendingSource] {
         providers.compactMap { provider in
-            guard let browserProvider = provider as? BrowserMediaProvider,
-                  let status = browserProvider.connectionStatus
-            else { return nil }
-            return (browserProvider.browser, status)
+            if let browserProvider = provider as? BrowserMediaProvider {
+                guard browserProvider.connectionStatus != nil else { return nil }
+            } else {
+                guard MediaScriptBridge.isInstalled(bundleID: provider.bundleID),
+                      MediaScriptBridge.isRunning(bundleID: provider.bundleID),
+                      !AutomationPermission.status(forBundleID: provider.bundleID).isGranted
+                else { return nil }
+            }
+            return PendingSource(
+                displayName: provider.displayName,
+                bundleID: provider.bundleID,
+                status: AutomationPermission.status(forBundleID: provider.bundleID)
+            )
         }
     }
 
@@ -112,8 +136,8 @@ final class MediaManager: ObservableObject {
     /// recoverable — the entry exists afterwards either way.
     ///
     /// Blocks while the dialog is up, so it runs off the main actor.
-    func connect(_ browser: MediaBrowser) {
-        let bundleID = browser.bundleID
+    func connect(_ source: PendingSource) {
+        let bundleID = source.bundleID
         Task.detached(priority: .userInitiated) {
             let status = AutomationPermission.request(forBundleID: bundleID)
             await MainActor.run {

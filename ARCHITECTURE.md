@@ -362,9 +362,22 @@ outranks everything, because the user just pressed a key.
 ## Permissions
 
 Nothing is requested at launch. `Permissions` reads current state without
-prompting; each feature requests its own on first use. Automation is special —
-macOS offers no read-only API for it, so its state is inferred from whether the
-last Apple Event returned error `-1743`.
+prompting; each feature requests its own on first use.
+
+Automation used to be the exception, on the grounds that macOS offered no
+read-only API and its state could only be inferred from whether the last Apple
+Event returned error `-1743`. That was wrong.
+`AEDeterminePermissionToAutomateTarget` has been public since 10.14 and, with
+`askUserIfNeeded: false`, answers from the system's records without sending an
+event or showing a dialog. `AutomationPermission` wraps it, and the difference
+is not cosmetic: inferring "denied" from a failure conflates refusal with never
+having asked, and any code that pokes a target to find out is a code path that
+can raise a prompt nobody asked for.
+
+It is per-target, so it is read per browser and shown per browser, with its own
+Connect button — the deliberate request, and the only thing that creates the
+app's entry in the Automation list. Answers are cached: the call costs 12.6 ms,
+measured, which is too much for a view body.
 
 ## Persistence
 

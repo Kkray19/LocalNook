@@ -452,7 +452,13 @@ private struct BrowserConnectionRows: View {
                 if status == .denied {
                     Button("Open Settings") { Permissions.shared.open(.automation) }
                 } else {
-                    Button("Connect") { media.connect(browser) }
+                    Button("Connect") {
+                    media.connect(MediaManager.PendingSource(
+                        displayName: browser.displayName,
+                        bundleID: browser.bundleID,
+                        status: status
+                    ))
+                }
                 }
             }
         }

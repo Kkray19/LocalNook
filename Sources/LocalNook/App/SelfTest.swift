@@ -100,6 +100,7 @@ enum SelfTest {
             testLiquidGlass()
             testPrivacyBoundaries()
             testTrayWithRealFiles()
+            testHoverAttribution()
             testBrowserMedia()
             testMotion()
             testSessionDetail()
@@ -1152,6 +1153,57 @@ enum SelfTest {
         settings.openDelay = originalDelay
     }
 
+    /// How a hover attempt is attributed, over the counters that produce it.
+    ///
+    /// Deterministic because the classifier is pure: the counters are recorded
+    /// through the probe's own API, so every branch is exercised without a
+    /// pointer, a window, or a window server.
+    private static func testHoverAttribution() {
+        section("Hover attribution")
+
+        func classify(enters: Int, exits: Int, handled: Int,
+                      placed: Bool = true, opened: Bool = false) -> HoverProbe.Outcome {
+            HoverProbe.reset()
+            for _ in 0..<enters { HoverProbe.recordEnter() }
+            for _ in 0..<exits { HoverProbe.recordExit() }
+            for _ in 0..<handled { HoverProbe.recordHandlerCall() }
+            return HoverProbe.classify(placed: placed, placementDetail: "detail", opened: opened)
+        }
+
+        check("an opened notch is a success",
+              classify(enters: 1, exits: 0, handled: 1, opened: true) == .succeeded)
+        check("a panel that never got under the pointer is a missing precondition",
+              classify(enters: 0, exits: 0, handled: 0, placed: false)
+                  == .preconditionUnmet("detail"))
+        check("no delivered crossing is the platform, not the app",
+              classify(enters: 0, exits: 0, handled: 0) == .noPlatformEvent)
+        check("a delivered crossing the app ignored is a defect",
+              classify(enters: 1, exits: 0, handled: 0) == .eventDropped(enters: 1))
+        check("a handled crossing that left the wrong state is a defect",
+              classify(enters: 1, exits: 0, handled: 1) == .wrongState(handlerCalls: 1))
+
+        // The case that failed two runs of a twelve-run batch. An exit means
+        // the pointer moved away; the stimulus requires it to stay still, so
+        // the precondition failed and the closed notch is correct.
+        let moved = classify(enters: 2, exits: 2, handled: 4)
+        check("a pointer that left again is a missing precondition, not a defect",
+              { if case .preconditionUnmet = moved { return true } else { return false } }(),
+              "got \(moved) — the app was blamed for obeying a delivered exit")
+        if case let .preconditionUnmet(detail) = moved {
+            check("and the reason names the counters that show it",
+                  detail.contains("2 enter") && detail.contains("2 exit"),
+                  "detail was: \(detail)")
+        } else {
+            check("and the reason names the counters that show it", false,
+                  "no precondition detail to inspect")
+        }
+        check("an exit does not excuse a crossing the app never handled",
+              classify(enters: 1, exits: 1, handled: 0) == .eventDropped(enters: 1),
+              "a dropped event was reclassified as an environment problem")
+
+        HoverProbe.reset()
+    }
+
     /// Browser media: parsing, capability gating and source selection.
     ///
     /// Synthetic throughout — fixtures and constructed snapshots, no browser
@@ -1579,6 +1631,18 @@ enum SelfTest {
         check("a browser provider is unavailable without automation consent",
               !chrome.isAvailable,
               "the provider would have scripted a browser it has no permission for")
+        // Not just the browsers. Requirement: opening the dashboard and polling
+        // in the background must never raise a consent dialog — which holds
+        // only if *every* provider checks consent before sending anything. In a
+        // self-test that check always answers "not running", so a provider that
+        // skipped it would show up here as available.
+        for provider in [MusicAppProvider() as any MediaProvider, SpotifyProvider(),
+                         BrowserMediaProvider(browser: .chrome),
+                         BrowserMediaProvider(browser: .safari)] {
+            check("\(provider.displayName) is not offered without consent",
+                  !provider.isAvailable,
+                  "it would have sent an Apple Event, which is what raises a prompt")
+        }
         // A term the target app's own dictionary redefines must never be used
         // bare. `tab` inside a Chrome or Safari tell block is that app's tab
         // class, and using it produced a provider that silently found nothing.

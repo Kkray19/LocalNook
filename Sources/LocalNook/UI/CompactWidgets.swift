@@ -33,13 +33,13 @@ struct CompactMediaView: View {
                     detail: "Allow LocalNook to control Music and Spotify.",
                     actionTitle: "Open Settings"
                 ) { Permissions.shared.open(.automation) }
-            } else if let pending = media.browsersAwaitingConnection.first,
+            } else if let pending = media.sourcesAwaitingConnection.first,
                       media.nowPlaying.isIdle {
                 // Switched on and running, but not permitted. Consent is asked
                 // for by pressing this, never by the dashboard appearing.
                 CompactMessage(
                     symbol: "link.badge.plus",
-                    title: "\(pending.browser.displayName) isn't connected",
+                    title: "\(pending.displayName) isn't connected",
                     detail: pending.status == .denied
                         ? "Automation access was refused."
                         : "macOS will ask once.",
@@ -49,7 +49,7 @@ struct CompactMediaView: View {
                     if pending.status == .denied {
                         Permissions.shared.open(.automation)
                     } else {
-                        media.connect(pending.browser)
+                        media.connect(pending)
                     }
                 }
             } else if media.nowPlaying.isIdle {

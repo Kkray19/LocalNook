@@ -166,9 +166,20 @@ protocol MediaProvider: Sendable {
 }
 
 extension MediaProvider {
+    /// Installed, running, and permitted.
+    ///
+    /// The consent check is read-only and cannot prompt, which is the point:
+    /// every provider consults it before sending an Apple Event, so no amount
+    /// of polling — and no dashboard opening — can produce a dialog. Consent is
+    /// asked for by pressing Connect, and by nothing else.
+    ///
+    /// The consequence for a source that has never been connected is that it
+    /// reports nothing rather than raising a prompt at the moment of use. The
+    /// widget says which source that is and offers to connect it.
     var isAvailable: Bool {
         MediaScriptBridge.isInstalled(bundleID: bundleID)
             && MediaScriptBridge.isRunning(bundleID: bundleID)
+            && AutomationPermission.status(forBundleID: bundleID).isGranted
     }
 }
 

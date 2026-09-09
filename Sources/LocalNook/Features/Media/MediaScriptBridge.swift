@@ -40,8 +40,12 @@ struct ScriptResult: Sendable {
 nonisolated final class MediaScriptBridge: @unchecked Sendable {
     static let shared = MediaScriptBridge()
 
-    /// Automation consent is only observable *after* an event is sent, so the
-    /// Privacy pane reads the outcome of the most recent attempt.
+    /// The outcome of the most recent Apple Event.
+    ///
+    /// Not the way to discover consent — `AutomationPermission` reads that
+    /// directly, without sending anything — but still worth recording: it is
+    /// the only signal available for a target that is not running, and it is
+    /// what a refusal at the moment of use looks like.
     nonisolated(unsafe) private static var _lastAutomationState: PermissionState = .notDetermined
     private static let stateLock = NSLock()
 

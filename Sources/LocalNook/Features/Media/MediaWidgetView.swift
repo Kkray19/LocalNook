@@ -30,9 +30,9 @@ struct MediaWidgetView: View {
                     actionTitle: "Open Settings",
                     action: { Permissions.shared.open(.automation) }
                 )
-            } else if let pending = media.browsersAwaitingConnection.first,
+            } else if let pending = media.sourcesAwaitingConnection.first,
                       media.nowPlaying.isIdle {
-                connect(pending.browser, status: pending.status)
+                connect(pending)
             } else if media.nowPlaying.isIdle {
                 idle
             } else {
@@ -71,21 +71,20 @@ struct MediaWidgetView: View {
     /// permitted. Reading its tabs needs Automation consent, and consent is
     /// only ever asked for from a button like this one — never because a panel
     /// appeared.
-    private func connect(
-        _ browser: MediaBrowser, status: AutomationPermission.Status
-    ) -> some View {
+    private func connect(_ pending: MediaManager.PendingSource) -> some View {
         MediaMessage(
             symbol: "link.badge.plus",
-            title: "\(browser.displayName) isn't connected",
-            detail: status == .denied
-                ? "Automation access for \(browser.displayName) was refused. Turn it back on in System Settings ▸ Privacy & Security ▸ Automation ▸ LocalNook."
-                : "LocalNook needs your permission to read \(browser.displayName)'s tabs. macOS will ask once.",
-            actionTitle: status == .denied ? "Open Settings" : "Connect \(browser.displayName)",
+            title: "\(pending.displayName) isn't connected",
+            detail: pending.status == .denied
+                ? "Automation access for \(pending.displayName) was refused. Turn it back on in System Settings ▸ Privacy & Security ▸ Automation ▸ LocalNook."
+                : "LocalNook needs your permission to read what \(pending.displayName) is playing. macOS will ask once.",
+            actionTitle: pending.status == .denied
+                ? "Open Settings" : "Connect \(pending.displayName)",
             action: {
-                if status == .denied {
+                if pending.status == .denied {
                     Permissions.shared.open(.automation)
                 } else {
-                    media.connect(browser)
+                    media.connect(pending)
                 }
             }
         )
