@@ -168,6 +168,10 @@ enum NotchMotion {
     /// 240 times to find its peak velocity, so constructing one per read meant
     /// tens of thousands of spring evaluations a second for a value that never
     /// changes. Immutable and derived from constants, so sharing it is safe.
+    ///
+    /// A screen recording dropping frames mid-open is what sent me looking, but
+    /// that turned out to be the recorder: the gaps are still there with this
+    /// in place. The waste was real regardless.
     nonisolated(unsafe) private static let openingMotion = OpeningMotion(
         duration: 0.52, bounce: 0.16, settleDuration: 0.40
     )
