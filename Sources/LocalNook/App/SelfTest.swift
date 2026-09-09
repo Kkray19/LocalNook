@@ -1566,6 +1566,18 @@ enum SelfTest {
         check("a browser provider is unavailable without automation consent",
               !chrome.isAvailable,
               "the provider would have scripted a browser it has no permission for")
+        // A term the target app's own dictionary redefines must never be used
+        // bare. `tab` inside a Chrome or Safari tell block is that app's tab
+        // class, and using it produced a provider that silently found nothing.
+        for provider in [BrowserMediaProvider(browser: .chrome),
+                         BrowserMediaProvider(browser: .safari)] {
+            for (label, source) in [("tab listing", provider.tabListingScript),
+                                    ("page state", provider.pageStateScript)] {
+                check("the \(provider.browser.rawValue) \(label) script separates fields with a character, not a class",
+                      !source.contains("& tab &") && source.contains("character id 9"),
+                      "the bare `tab` term resolves to the browser's tab class")
+            }
+        }
         check("the browser toggle hint names a real menu path",
               MediaBrowser.chrome.javaScriptToggleHint.contains("Apple Events")
                   && MediaBrowser.safari.javaScriptToggleHint.contains("Apple Events"))

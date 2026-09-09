@@ -336,10 +336,19 @@ nonisolated final class BrowserMediaProvider: MediaProvider, @unchecked Sendable
     // MARK: Scripts
 
     /// Collapses newlines and tabs in a title so one tab is always one line.
+    ///
+    /// `character id 9` rather than the `tab` constant, here and below, for a
+    /// reason found by running this against a real browser: inside a `tell
+    /// application "Google Chrome"` block, `tab` resolves to *Chrome's tab
+    /// class*, not to the character. Concatenating it yields the literal text
+    /// "tab", every line comes back as one field instead of three, and the
+    /// provider reports no media tabs at all while a player sits open. Nothing
+    /// errors — it just silently finds nothing. Both browsers define a `tab`
+    /// class, so both scripts avoid the bare term.
     private var flattenHandler: String {
         """
         on flat(s)
-          set AppleScript's text item delimiters to {return, linefeed, tab}
+          set AppleScript's text item delimiters to {return, linefeed, character id 9}
           set parts to text items of (s as text)
           set AppleScript's text item delimiters to " "
           set r to parts as text
@@ -379,15 +388,16 @@ nonisolated final class BrowserMediaProvider: MediaProvider, @unchecked Sendable
         browser == .chrome ? "title of t" : "name of t"
     }
 
-    private var tabListingScript: String {
+    var tabListingScript: String {
         """
         \(flattenHandler)
+        set sep to (character id 9)
         set out to {}
         tell application "\(appTell)"
           repeat with w in windows
             repeat with t in tabs of w
-              set end of out to (\(keyExpression) & tab & (URL of t as text) \
-        & tab & my flat(\(titleProperty)))
+              set end of out to (\(keyExpression) & sep & (URL of t as text) \
+        & sep & my flat(\(titleProperty)))
             end repeat
           end repeat
         end tell
@@ -397,13 +407,14 @@ nonisolated final class BrowserMediaProvider: MediaProvider, @unchecked Sendable
     }
 
     /// Runs the media-element probe in every player tab, capped.
-    private var pageStateScript: String {
+    var pageStateScript: String {
         let probe = appleScriptEscaped(Self.pageProbeJavaScript)
         let execute = browser == .chrome
             ? "(execute t javascript \"\(probe)\") as text"
             : "(do JavaScript \"\(probe)\" in t) as text"
         return """
         \(playerHandler)
+        set sep to (character id 9)
         set out to {}
         set n to 0
         tell application "\(appTell)"
@@ -417,7 +428,7 @@ nonisolated final class BrowserMediaProvider: MediaProvider, @unchecked Sendable
                 on error errText number errNum
                   set r to "ERR" & (errNum as text)
                 end try
-                set end of out to (\(keyExpression) & tab & r)
+                set end of out to (\(keyExpression) & sep & r)
               end if
             end repeat
           end repeat
