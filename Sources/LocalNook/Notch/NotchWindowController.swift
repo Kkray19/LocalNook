@@ -589,6 +589,14 @@ final class NotchWindowController: NSObject {
                     self.pointerSafetyTask = nil
                     return
                 }
+                // The timer reads the *real* pointer, so it is live input like
+                // any other and belongs behind the same door. Tests that want
+                // the recovery pass drive it explicitly through
+                // `runPointerSafetyCheckNow()`, which is unaffected — the timer
+                // firing on its own schedule with the real pointer position was
+                // closing notches mid-assertion about one deterministic run in
+                // four.
+                guard !self.ignoresLiveInput else { continue }
                 self.closeIfPointerHasLeft()
             }
         }

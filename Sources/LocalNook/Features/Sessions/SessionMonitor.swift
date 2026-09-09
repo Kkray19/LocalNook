@@ -148,10 +148,12 @@ final class SessionMonitor: ObservableObject {
     // MARK: Lifecycle
 
     func start() {
-        // The suite renders real views, and a rendered sessions widget would
-        // otherwise point this at the user's actual transcript directories.
-        // Tests scan fixtures through `scan(agents:roots:)` instead.
-        guard !AppInfo.isSelfTest else { return }
+        // The suite and the preview renderer both build real views, and a
+        // rendered sessions widget would otherwise point this at the user's
+        // actual transcript directories — in the renderer's case writing the
+        // result into a PNG on disk. Tests scan fixtures through
+        // `scan(agents:roots:)` instead.
+        guard !AppInfo.forbidsTranscriptReads else { return }
         stop()
         running = true
         for agent in enabledAgents {
@@ -206,7 +208,7 @@ final class SessionMonitor: ObservableObject {
         // Reading transcript content needs an explicit choice, and stops at the
         // lock screen — there is nothing to label for a display nobody can see,
         // and a label read now could be shown later on a locked screen.
-        let depth: SessionLabelDepth = ScreenLock.isLocked
+        let depth: SessionLabelDepth = (ScreenLock.isLocked || AppInfo.forbidsTranscriptReads)
             ? .metadataOnly
             : Settings.shared.sessionLabelDepth
         let cache = detailCache
