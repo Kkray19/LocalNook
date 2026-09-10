@@ -65,6 +65,15 @@ struct NotchRootView: View {
         return model.closedSize.width
     }
 
+    /// How far right the collapsed body is drawn, so the gap left for the
+    /// camera stays over the camera when the wings differ in width. See
+    /// ClosedActivityView — centring it instead is what hid expanded text
+    /// under the housing.
+    private var bodyOffset: CGFloat {
+        guard !isOpen, closedActivity != nil else { return 0 }
+        return ClosedActivityView.bodyOffset(expanded: activities.trailingExpanded)
+    }
+
     private var bodyHeight: CGFloat {
         isOpen ? NotchGeometry.openSize.height : model.effectiveClosedHeight
     }
@@ -96,6 +105,9 @@ struct NotchRootView: View {
                     width: NotchShape.totalWidth(forBody: bodyWidth, topRadius: topRadius),
                     height: bodyHeight
                 )
+                // Before the animation modifiers, so the shift animates with
+                // the wing it is compensating for.
+                .offset(x: bodyOffset)
                 // Opening runs the closing curve backwards; closing is
                 // untouched. Evaluated with the new value of `isOpen`, so the
                 // direction being animated picks its own curve.

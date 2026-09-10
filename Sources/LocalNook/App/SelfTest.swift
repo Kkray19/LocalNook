@@ -2345,11 +2345,35 @@ enum SelfTest {
         )
         check("a busy indicator with something to say can expand",
               ClosedActivityView.canExpand(busy))
+        // Compact wings hide every worded part of an activity, so its own words
+        // are something to reveal even without details — and an idle activity
+        // with details can be read too. Only a wordless one cannot expand.
         busy.details = []
-        check("but not with nothing to say", !ClosedActivityView.canExpand(busy))
+        check("its own words are still something to reveal", ClosedActivityView.canExpand(busy))
         busy.details = [LiveActivityDetail(id: "a", symbol: "sparkle", name: "n", step: "s")]
         busy.isBusy = false
-        check("and not when nothing is working", !ClosedActivityView.canExpand(busy))
+        check("an idle activity with details can expand as well", ClosedActivityView.canExpand(busy))
+        let wordless = LiveActivity(id: "w", symbol: "x", tint: .green, leading: "", trailing: "",
+                                    style: .persistent, progress: nil, priority: 1)
+        check("an activity with no words has nothing to expand into",
+              !ClosedActivityView.canExpand(wordless))
+
+        // ── The wings, and the menu bar either side of them ────────────────
+        check("wings are a symbol's width, not a label's",
+              ClosedActivityView.leadingWidth <= 40 && ClosedActivityView.trailingWidth <= 40,
+              "\(ClosedActivityView.leadingWidth) / \(ClosedActivityView.trailingWidth)")
+        for expanded in [false, true] {
+            let centre = ClosedActivityView.deadZoneCentre(notchWidth: 185, expanded: expanded)
+            check("the camera gap stays over the camera, \(expanded ? "expanded" : "collapsed")",
+                  abs(centre) < 0.001, "off centre by \(centre)pt")
+        }
+        let offset = ClosedActivityView.bodyOffset(expanded: true)
+        let halfBody = ClosedActivityView.totalBodyWidth(notchWidth: 185, expanded: true) / 2
+        let halfCanvas = ClosedActivityView.canvasWidth(notchWidth: 185, expanded: true) / 2
+        check("the collapsed window contains the offset body on both sides",
+              offset + halfBody <= halfCanvas + 0.001 && offset - halfBody >= -halfCanvas - 0.001)
+        check("with nothing expanded the body needs no offset",
+              ClosedActivityView.bodyOffset(expanded: false) == 0)
 
         check("expanding makes room rather than truncating",
               ClosedActivityView.totalBodyWidth(notchWidth: 185, expanded: true)

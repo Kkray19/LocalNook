@@ -177,8 +177,11 @@ enum NotchGeometry {
     static func collapsedWindowSize(
         closed: CGSize, hasActivity: Bool, expandedActivity: Bool = false
     ) -> CGSize {
+        // The canvas, not the drawn body: the body is offset to keep the camera
+        // gap over the camera, so the window must be symmetric about the notch
+        // to contain it. See ClosedActivityView.canvasWidth.
         let body = hasActivity
-            ? ClosedActivityView.totalBodyWidth(notchWidth: closed.width, expanded: expandedActivity)
+            ? ClosedActivityView.canvasWidth(notchWidth: closed.width, expanded: expandedActivity)
             : closed.width
         return CGSize(width: body + 2 * Settings.shared.closedCornerRadius,
                       height: max(4, closed.height) + 3)
