@@ -1608,6 +1608,33 @@ enum SelfTest {
         check("and the ledger was never opened at all", quietLedger.isEmpty,
               "the ledger holds state after a metadata-only scan")
 
+        // ── A dashboard column is not a place to nag ───────────────────────
+        //
+        // The offer to connect a browser had taken a column of the dashboard
+        // indefinitely, saying that something which was not playing anything
+        // could not be read. A player is only running because it was opened,
+        // so its offer is brief and answers a live question; a browser is open
+        // all day, so the same offer never leaves.
+        func source(_ name: String, browser: Bool) -> MediaManager.PendingSource {
+            MediaManager.PendingSource(displayName: name, bundleID: "id.\(name)",
+                                       status: .notDetermined, isBrowser: browser)
+        }
+        let chrome = source("Google Chrome", browser: true)
+        let safari = source("Safari", browser: true)
+        let music = source("Music", browser: false)
+        check("a browser alone produces no dashboard prompt",
+              MediaManager.compactConnectPrompt(from: [chrome, safari]) == nil)
+        check("a player still does",
+              MediaManager.compactConnectPrompt(from: [music])?.displayName == "Music")
+        check("and a player is preferred over a browser ahead of it",
+              MediaManager.compactConnectPrompt(from: [chrome, music])?.displayName == "Music")
+        check("nothing pending, nothing offered",
+              MediaManager.compactConnectPrompt(from: []) == nil)
+        // The offer is not abolished, only moved: the full-size Media view and
+        // Settings both take the unfiltered list.
+        check("the full list still carries the browser for the views that want it",
+              [chrome, safari, music].filter(\.isBrowser).count == 2)
+
         // ── Getting to the app ─────────────────────────────────────────────
         for provider in SessionProvider.allCases {
             check("\(provider.label) has an app to look for",

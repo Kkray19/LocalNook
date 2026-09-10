@@ -100,6 +100,10 @@ final class MediaManager: ObservableObject {
         let displayName: String
         let bundleID: String
         let status: AutomationPermission.Status
+        /// Browsers differ from players in the one way that matters to a
+        /// dashboard: a browser is almost always running, so an unanswered
+        /// offer to connect one never goes away. See CompactMediaView.
+        let isBrowser: Bool
     }
 
     /// Sources that are running but not yet permitted.
@@ -121,9 +125,19 @@ final class MediaManager: ObservableObject {
             return PendingSource(
                 displayName: provider.displayName,
                 bundleID: provider.bundleID,
-                status: AutomationPermission.status(forBundleID: provider.bundleID)
+                status: AutomationPermission.status(forBundleID: provider.bundleID),
+                isBrowser: provider is BrowserMediaProvider
             )
         }
+    }
+
+    /// The source a *dashboard column* should offer to connect, if any.
+    ///
+    /// Separated from the list itself so the rule can be asserted without
+    /// standing up a view: the full-size Media view deliberately offers every
+    /// pending source, and only the compact column filters.
+    static func compactConnectPrompt(from sources: [PendingSource]) -> PendingSource? {
+        sources.first { !$0.isBrowser }
     }
 
     /// The deliberate request for Automation consent.

@@ -33,10 +33,20 @@ struct CompactMediaView: View {
                     detail: "Allow LocalNook to control Music and Spotify.",
                     actionTitle: "Open Settings"
                 ) { Permissions.shared.open(.automation) }
-            } else if let pending = media.sourcesAwaitingConnection.first,
+            } else if let pending = MediaManager.compactConnectPrompt(
+                          from: media.sourcesAwaitingConnection),
                       media.nowPlaying.isIdle {
                 // Switched on and running, but not permitted. Consent is asked
                 // for by pressing this, never by the dashboard appearing.
+                //
+                // Browsers are deliberately excluded here. A player is only
+                // running because you opened it, so an offer to connect it is
+                // brief and answers a question you are already asking. A
+                // browser is running all day, so the same offer never goes
+                // away — it had taken a dashboard column permanently to say
+                // that a thing which was not playing anything could not be
+                // read. The offer still exists where it is sought rather than
+                // suffered: the full-size Media view, and Settings.
                 CompactMessage(
                     symbol: "link.badge.plus",
                     title: "\(pending.displayName) isn't connected",

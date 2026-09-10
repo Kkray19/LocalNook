@@ -456,7 +456,8 @@ private struct BrowserConnectionRows: View {
                     media.connect(MediaManager.PendingSource(
                         displayName: browser.displayName,
                         bundleID: browser.bundleID,
-                        status: status
+                        status: status,
+                        isBrowser: true
                     ))
                 }
                 }
