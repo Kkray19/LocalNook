@@ -2,7 +2,7 @@
 
 A local-first notch utility for macOS. It turns the area around the MacBook
 camera notch into a Dynamic Island-style panel: media controls, a drag-and-drop
-shelf, calendar, camera mirror, timers, notes, to-dos, Shortcuts, system stats,
+shelf, calendar, timers, notes, to-dos, Shortcuts, system stats,
 and a live view of your Claude Code and Codex sessions.
 
 **No subscription. No account. No licence server. No telemetry. No network
@@ -10,6 +10,17 @@ access at all** — see [docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md), which
 verifies that claim at source, binary and runtime level.
 
 ---
+
+## Continuing development with an AI assistant
+
+Start with [AGENTS.md](AGENTS.md), then [docs/HANDOFF.md](docs/HANDOFF.md).
+These describe the current state, constraints, key source files, verification
+commands, and remaining work. Update the handoff at the end of each development
+session so the next assistant can continue without the previous chat.
+
+A private repository requires authenticated access; a URL alone does not give
+an AI service permission to read it. Connect this repository to that service,
+or provide the handoff and relevant source files directly.
 
 ## What it does
 
@@ -22,13 +33,13 @@ connecting, or an agent session going quiet.
 
 | Page | What it holds |
 |---|---|
-| **Dashboard** | Everyday information side by side — media, calendar, a Mirror action |
+| **Dashboard** | Pinned widgets side by side — sessions, stats, media, calendar, timers |
 | **Tray** | Files you have dragged in, and the drop target |
 | **Tools** | Everything that needs more room than a dashboard column |
 
 Choose and reorder the Dashboard sections in Settings ▸ Widgets ▸ Dashboard. If
-the panel is too narrow for all of them, the ones at the end are left out rather
-than everything being shrunk.
+the panel is too narrow for all of them, additional pinned widgets remain reachable through **More**. Unpinned widgets
+remain available through Tools or their dedicated page.
 
 The widgets themselves:
 
@@ -37,7 +48,6 @@ The widgets themselves:
 | **Media** | Now Playing from Music and Spotify: artwork, scrubbing, transport. Chrome and Safari tabs too, once you connect them — with what a browser can honestly report, which is less |
 | **Shelf** | Drag files in, drag them back out. Quick Look, multi-select, persists across launches |
 | **Calendar** | Today's events via EventKit, with day navigation |
-| **Mirror** | Live camera preview, including Continuity Camera |
 | **Timers** | Countdown, stopwatch and pomodoro, with notifications |
 | **Notes / To-Do** | Local, searchable, autosaving |
 | **Shortcuts** | Lists and runs your macOS Shortcuts; pin the ones you use |
@@ -132,7 +142,6 @@ feature.
 | Permission | Needed for | If you say no |
 |---|---|---|
 | **Calendar** | The Calendar widget | Widget explains and offers a Settings link |
-| **Camera** | The Mirror widget | Same. Video is *previewed only* — never recorded or saved |
 | **Notifications** | Timer alerts | Falls back to an audible beep |
 | **Automation** | Reading Music, Spotify and browser tabs | Read before use, never provoked; a Connect button asks |
 | **Accessibility** | **Never requested** | — |
