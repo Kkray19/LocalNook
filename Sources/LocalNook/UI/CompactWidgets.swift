@@ -441,10 +441,24 @@ struct CompactStatsView: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("Battery")
-                .font(Theme.sectionTitle)
-                .foregroundStyle(Theme.tertiaryText)
-                .textCase(.uppercase)
+            HStack(spacing: 6) {
+                Text("Battery")
+                    .font(Theme.sectionTitle)
+                    .foregroundStyle(Theme.tertiaryText)
+                    .textCase(.uppercase)
+                Spacer(minLength: 4)
+                // Without this the column was a door with no handle: pressing
+                // it opened the System page and nothing on screen said so.
+                // Shown on hover only, for the same reason as the AI Sessions
+                // column — a permanent chevron on one of five columns would
+                // imply the others do nothing.
+                if model != nil {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(Theme.tertiaryText)
+                        .opacity(isHovering ? 1 : 0)
+                }
+            }
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text(battery.state.isPresent ? "\(battery.state.percentage)" : "—")
                     .font(Theme.display)
