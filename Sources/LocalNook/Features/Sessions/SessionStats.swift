@@ -17,18 +17,16 @@
 //  size says how much has been written to it in total. Neither is a record of
 //  when a session ran. So:
 //
-//    * `perDay` counts sessions by the day they were last written. A session
-//      started on Monday and last written on Thursday counts once, on Thursday.
-//      It is a "what have I touched lately" chart, not a history of work — and
-//      the label above it in the UI says "last active" for that reason.
+//    * `total` counts transcripts touched in the seven-day scan window, not
+//      sessions started in it. A conversation resumed today counts once, today.
 //    * `totalBytes` is transcript volume, which correlates with how much was
 //      said but is not a token count, a cost, or a measure of work done. It is
-//      presented as what it is: bytes on disk.
+//      presented as what it is: bytes on disk. Token counts come from
+//      SessionUsage, where the agents report them directly.
 //
-//  These limits are inherent to metadata. Producing a genuine history would
-//  mean either persisting observations (a record of your agent use, on disk,
-//  which this app deliberately does not keep) or reading transcript bodies far
-//  more widely than SessionDetail's four named fields.
+//  These limits are inherent to metadata. Producing a genuine history of when
+//  work happened would mean persisting observations — a record of your agent
+//  use, on disk, which this app deliberately does not keep.
 //
 
 import Foundation
@@ -36,56 +34,18 @@ import Foundation
 /// Counts across every transcript the scan found — including the ones beyond
 /// the display cap, so "this week" is not silently the top thirty.
 nonisolated struct SessionStats: Equatable, Sendable {
-    /// How many days `perDay` covers. The scan window is seven days.
-    static let dayBuckets = 7
-
     var total = 0
     var totalBytes = 0
-    var perAgent: [SessionAgent: Int] = [:]
-    var bytesPerAgent: [SessionAgent: Int] = [:]
-    /// Sessions by the day they were last written. Index 0 is today.
-    var perDay: [Int] = Array(repeating: 0, count: SessionStats.dayBuckets)
 
     var isEmpty: Bool { total == 0 }
 
-    /// The busiest of the seven days, for scaling the chart. Never zero, so a
-    /// day with one session does not draw a full-height bar.
-    var peakDay: Int { max(1, perDay.max() ?? 1) }
-
-    static func tally(
-        _ sessions: [AgentSession],
-        now: Date = Date(),
-        calendar: Calendar = .current
-    ) -> SessionStats {
+    static func tally(_ sessions: [AgentSession]) -> SessionStats {
         var stats = SessionStats()
-        let today = calendar.startOfDay(for: now)
-
         for session in sessions {
             stats.total += 1
             stats.totalBytes += session.byteSize
-            stats.perAgent[session.agent, default: 0] += 1
-            stats.bytesPerAgent[session.agent, default: 0] += session.byteSize
-
-            let day = calendar.startOfDay(for: session.lastActivity)
-            guard let offset = calendar.dateComponents([.day], from: day, to: today).day,
-                  offset >= 0, offset < dayBuckets
-            else { continue }
-            stats.perDay[offset] += 1
         }
         return stats
-    }
-
-    /// Single-letter weekday headings for the seven buckets, newest first, so
-    /// the chart can be drawn oldest-to-newest by reversing both together.
-    static func dayInitials(now: Date = Date(), calendar: Calendar = .current) -> [String] {
-        let symbols = calendar.veryShortWeekdaySymbols
-        guard symbols.count == 7 else { return Array(repeating: "", count: dayBuckets) }
-        return (0..<dayBuckets).map { offset in
-            guard let date = calendar.date(byAdding: .day, value: -offset, to: now) else { return "" }
-            // `weekday` is 1-based and `veryShortWeekdaySymbols` starts at
-            // Sunday whatever the locale's first day of the week is.
-            return symbols[calendar.component(.weekday, from: date) - 1]
-        }
     }
 
     /// Bytes as a short label. Deliberately not `ByteCountFormatter`: this is

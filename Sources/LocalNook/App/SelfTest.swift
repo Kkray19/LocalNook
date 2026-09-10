@@ -1232,88 +1232,35 @@ enum SelfTest {
     private static func testSessionsDashboard() {
         section("Sessions dashboard")
 
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "UTC")!
-        // A fixed instant, so the day buckets cannot depend on when the suite
-        // happens to run.
-        let now = Date(timeIntervalSince1970: 1_788_000_000)
-        func daysAgo(_ days: Double, hour: Double = 0) -> Date {
-            now.addingTimeInterval(-(days * 86400) + hour * 3600)
-        }
         func session(
             _ agent: SessionAgent, _ id: String, at date: Date,
-            bytes: Int = 1000, project: String = "p", title: String? = nil
+            bytes: Int = 1000, project: String = "p", title: String? = nil,
+            model: String? = nil, tokens: TokenUsage? = nil,
+            limits: [RateLimitWindow] = []
         ) -> AgentSession {
             var value = AgentSession(id: id, agent: agent, projectName: project,
                                      lastActivity: date, byteSize: bytes)
-            if let title { value.detail.title = title }
+            value.detail.title = title
+            value.detail.model = model
+            value.detail.tokens = tokens
+            value.detail.limits = limits
             return value
         }
+        let now = Date(timeIntervalSince1970: 1_789_000_000)
 
         // ── Counts ─────────────────────────────────────────────────────────
         let week = [
             session(.claudeCode, "1", at: now, bytes: 2048),
-            session(.claudeCode, "2", at: daysAgo(0, hour: -3), bytes: 1024),
-            session(.codex, "3", at: daysAgo(1), bytes: 4096),
-            session(.codex, "4", at: daysAgo(6, hour: 1), bytes: 8),
-            // Outside the seven-day window, so it counts in the totals the
-            // scan already accepted but lands in no bucket.
-            session(.claudeCode, "5", at: daysAgo(9), bytes: 16)
+            session(.claudeCode, "2", at: now, bytes: 1024),
+            session(.codex, "3", at: now, bytes: 4096),
+            session(.codex, "4", at: now, bytes: 8),
+            session(.claudeCode, "5", at: now, bytes: 16)
         ]
-        let stats = SessionStats.tally(week, now: now, calendar: calendar)
+        let stats = SessionStats.tally(week)
         check("every session found is counted", stats.total == 5, "got \(stats.total)")
         check("volume adds up", stats.totalBytes == 2048 + 1024 + 4096 + 8 + 16,
               "got \(stats.totalBytes)")
-        check("sessions are counted per agent",
-              stats.perAgent[.claudeCode] == 3 && stats.perAgent[.codex] == 2,
-              "claude \(stats.perAgent[.claudeCode] ?? -1), codex \(stats.perAgent[.codex] ?? -1)")
-        check("bytes are counted per agent",
-              stats.bytesPerAgent[.claudeCode] == 2048 + 1024 + 16
-                  && stats.bytesPerAgent[.codex] == 4096 + 8)
-        check("two sessions last written today share today's bucket",
-              stats.perDay[0] == 2, "got \(stats.perDay[0])")
-        check("yesterday is its own bucket", stats.perDay[1] == 1, "got \(stats.perDay[1])")
-        check("six days ago is the oldest bucket", stats.perDay[6] == 1,
-              "got \(stats.perDay[6])")
-        check("older than the chart lands in no bucket",
-              stats.perDay.reduce(0, +) == 4, "buckets hold \(stats.perDay.reduce(0, +))")
-        check("the chart covers a week", stats.perDay.count == SessionStats.dayBuckets)
-
-        // A clock adjustment must not put a session in a bucket that is not
-        // there, and must not crash the chart either.
-        let future = SessionStats.tally(
-            [session(.codex, "f", at: now.addingTimeInterval(86400))],
-            now: now, calendar: calendar
-        )
-        check("a session dated in the future is counted but not charted",
-              future.total == 1 && future.perDay.reduce(0, +) == 0)
-
-        check("an empty week draws no full-height bar", SessionStats().peakDay == 1)
-        check("the tallest bar sets the scale", stats.peakDay == 2, "got \(stats.peakDay)")
         check("nothing found is reported as nothing", SessionStats().isEmpty)
-
-        let initials = SessionStats.dayInitials(now: now, calendar: calendar)
-        check("the chart is labelled for seven days", initials.count == SessionStats.dayBuckets)
-        check("the first label is today's",
-              initials.first == calendar.veryShortWeekdaySymbols[
-                  calendar.component(.weekday, from: now) - 1
-              ], "got \(initials.first ?? "nil")")
-        // Not "seven distinct letters": most locales abbreviate Tuesday and
-        // Thursday to the same one. What matters is that each label belongs to
-        // the day its bar counts.
-        var labelsMatchTheirDays = true
-        for offset in 0..<SessionStats.dayBuckets {
-            guard let date = calendar.date(byAdding: .day, value: -offset, to: now) else {
-                labelsMatchTheirDays = false
-                continue
-            }
-            let expected = calendar.veryShortWeekdaySymbols[
-                calendar.component(.weekday, from: date) - 1
-            ]
-            if initials[offset] != expected { labelsMatchTheirDays = false }
-        }
-        check("each label belongs to the day its bar counts", labelsMatchTheirDays,
-              initials.joined(separator: " "))
 
         // ── Volume reads as a size, at every scale ─────────────────────────
         check("zero bytes", SessionStats.volumeLabel(bytes: 0) == "0 B")
@@ -1368,15 +1315,106 @@ enum SelfTest {
               sessions[4].projectLabel == nil,
               sessions[4].projectLabel ?? "nil")
 
+        // ── Usage: what each maker actually reports ────────────────────────
+        let reset = now.addingTimeInterval(3600)
+        func window(_ provider: SessionProvider, _ minutes: Int, _ percent: Double,
+                    observed: Date, resets: Date? = nil) -> RateLimitWindow {
+            RateLimitWindow(provider: provider, windowMinutes: minutes,
+                            usedPercent: percent, resetsAt: resets ?? reset,
+                            observedAt: observed)
+        }
+        let older = now.addingTimeInterval(-600)
+        let metering = [
+            session(.codex, "m1", at: now, model: "GPT 6 Astra",
+                    tokens: TokenUsage(input: 900, cachedInput: 100, output: 90,
+                                       reasoning: 10, total: 1000),
+                    limits: [window(.openAI, 300, 12, observed: older),
+                             window(.openAI, 10080, 52, observed: older)]),
+            session(.codex, "m2", at: now, model: "GPT 6 Astra",
+                    tokens: TokenUsage(input: 400, cachedInput: 0, output: 100,
+                                       reasoning: 0, total: 500),
+                    limits: [window(.openAI, 300, 40, observed: now)]),
+            session(.claudeCode, "m3", at: now, model: "Opus 5"),
+            session(.claudeCode, "m4", at: now, model: "Opus 5"),
+            session(.claudeCode, "m5", at: now, model: "Sonnet 5")
+        ]
+        let summary = UsageSummary.build(from: metering)
+        check("tokens add up across a model's sessions",
+              summary.models.first?.model == "GPT 6 Astra"
+                  && summary.models.first?.tokens.total == 1500,
+              "got \(summary.models.first?.model ?? "nil") "
+                  + "\(summary.models.first?.tokens.total ?? -1)")
+        check("a model that reports tokens outranks one that cannot",
+              summary.models.map(\.model) == ["GPT 6 Astra", "Opus 5", "Sonnet 5"],
+              summary.models.map(\.model).joined(separator: ", "))
+        check("a model with no reported tokens says so rather than showing zero",
+              summary.models.first { $0.model == "Opus 5" }?.tokensUnreported == true)
+        check("and is still counted by session",
+              summary.models.first { $0.model == "Opus 5" }?.sessions == 2)
+        check("the freshest snapshot of a window wins",
+              summary.limits.first { $0.windowMinutes == 300 }?.usedPercent == 40,
+              "got \(summary.limits.first { $0.windowMinutes == 300 }?.usedPercent ?? -1)")
+        check("a window only one session saw is still kept",
+              summary.limits.contains { $0.windowMinutes == 10080 })
+        check("a maker that publishes no limits is named, not omitted",
+              summary.providersWithoutLimits == [.anthropic],
+              summary.providersWithoutLimits.map(\.rawValue).joined(separator: ", "))
+        check("a maker that does publish them is not in that list",
+              !summary.providersWithoutLimits.contains(.openAI))
+        check("nothing at all is empty", UsageSummary.build(from: []).isEmpty)
+
+        // A snapshot describes the moment it was written, and says so.
+        let stale = window(.openAI, 300, 90, observed: now.addingTimeInterval(-3600),
+                           resets: now.addingTimeInterval(-60))
+        check("a window whose reset has passed is marked expired",
+              stale.hasExpired(now: now))
+        check("and offers no countdown", stale.resetText(now: now) == nil)
+        check("an old reading shows its age",
+              stale.ageText(now: now) == "1h ago", stale.ageText(now: now) ?? "nil")
+        let current = window(.openAI, 300, 20, observed: now.addingTimeInterval(-30))
+        check("a reading from moments ago does not",
+              current.ageText(now: now) == nil)
+        check("a live window counts down", current.resetText(now: now) == "1h 0m",
+              current.resetText(now: now) ?? "nil")
+        check("an unusual window is labelled by its own length",
+              window(.openAI, 60, 0, observed: now).label == "1h")
+
+        check("token counts read as counts",
+              TokenUsage.short(940) == "940" && TokenUsage.short(1500) == "1.5K"
+                  && TokenUsage.short(18_563_412) == "18.6M",
+              TokenUsage.short(18_563_412))
+        check("large counts drop the decimal",
+              TokenUsage.short(812_000) == "812K", TokenUsage.short(812_000))
+
+        // ── Getting to the app ─────────────────────────────────────────────
+        for provider in SessionProvider.allCases {
+            check("\(provider.label) has an app to look for",
+                  !AgentApplication.bundleIDs(for: provider).isEmpty)
+        }
+        check("the two makers are not looked up under the same identifier",
+              Set(AgentApplication.bundleIDs(for: .anthropic))
+                  .isDisjoint(with: Set(AgentApplication.bundleIDs(for: .openAI))))
+        // Whether either is installed is a fact about this Mac, so what is
+        // asserted is the consequence: a name exists exactly when the app does.
+        for provider in SessionProvider.allCases {
+            let installed = AgentApplication.isInstalled(provider)
+            check("\(provider.label)'s row is pressable only if its app is there",
+                  installed == (AgentApplication.displayName(for: provider) != nil))
+            if !installed {
+                check("opening a missing \(provider.label) does nothing",
+                      !AgentApplication.open(provider))
+            }
+        }
+
         // ── Narrowing ──────────────────────────────────────────────────────
         let wide = SessionsDashboardLayout.plan(width: 660)
         check("the default panel shows every region",
-              wide.showsSummary && wide.showsActivity)
+              wide.showsSummary && wide.showsLimits)
         let medium = SessionsDashboardLayout.plan(width: 460)
-        check("the chart is the first thing to go",
-              medium.showsSummary && !medium.showsActivity)
+        check("the limits rail is the first thing to go",
+              medium.showsSummary && !medium.showsLimits)
         let narrow = SessionsDashboardLayout.plan(width: 300)
-        check("the counts go next", !narrow.showsSummary && !narrow.showsActivity)
+        check("the counts go next", !narrow.showsSummary && !narrow.showsLimits)
 
         // The invariant the whole layout exists for: the list is never the
         // thing that gets dropped, so no width can hide the sessions.
@@ -1388,18 +1426,18 @@ enum SelfTest {
                 used += SessionsDashboardLayout.summaryWidth
                     + SessionsDashboardLayout.railGap * 2 + 1
             }
-            if plan.showsActivity {
-                used += SessionsDashboardLayout.activityWidth
+            if plan.showsLimits {
+                used += SessionsDashboardLayout.limitsWidth
                     + SessionsDashboardLayout.railGap * 2 + 1
             }
             if CGFloat(width) - used < SessionsDashboardLayout.minimumListWidth,
-               plan.showsSummary || plan.showsActivity {
+               plan.showsSummary || plan.showsLimits {
                 listAlwaysFits = false
             }
         }
         check("no width squeezes the session list out", listAlwaysFits)
         check("a region never returns as the panel narrows",
-              !SessionsDashboardLayout.plan(width: 400).showsActivity
+              !SessionsDashboardLayout.plan(width: 400).showsLimits
                   && !SessionsDashboardLayout.plan(width: 240).showsSummary)
 
         // ── Getting there and back ─────────────────────────────────────────
@@ -1556,6 +1594,63 @@ enum SelfTest {
         check("the head fallback stays behind consent",
               SessionDetailReader.read(path: longTurn, agent: .codex,
                                        depth: .metadataOnly).title == nil)
+
+        // ── Tokens and limits, from the fields that carry them ─────────────
+        let epoch = Int(Date().addingTimeInterval(3600).timeIntervalSince1970)
+        func counted(_ age: TimeInterval, total: Int, percent: Double, resets: Int) -> String {
+            #"{"type":"event_msg","timestamp":"\#(stamp(age))","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":\#(total - 100),"cached_input_tokens":40,"cache_write_input_tokens":0,"output_tokens":100,"reasoning_output_tokens":7,"total_tokens":\#(total)},"model_context_window":258400},"rate_limits":{"primary":{"used_percent":\#(percent),"window_minutes":300,"resets_at":\#(resets)},"secondary":{"used_percent":52.0,"window_minutes":10080,"resets_at":\#(resets + 86400)}}}}"#
+        }
+        let metered = write("metered.jsonl", [
+            context(30),
+            counted(20, total: 900, percent: 12, resets: epoch),
+            // The newest snapshot is the one that counts; this supersedes it.
+            counted(5, total: 1200, percent: 40, resets: epoch),
+            exec(3, verb: "read")
+        ])
+        let usage = SessionDetailReader.read(path: metered, agent: .codex, depth: .richLabels)
+        check("a Codex session reports its token total",
+              usage.tokens?.total == 1200, "got \(usage.tokens?.total ?? -1)")
+        check("the newest count supersedes rather than adding to the last",
+              usage.tokens?.output == 100, "got \(usage.tokens?.output ?? -1)")
+        check("both rate-limit windows are read", usage.limits.count == 2,
+              "got \(usage.limits.count)")
+        check("the five-hour window is labelled as one",
+              usage.limits.first(where: { $0.windowMinutes == 300 })?.label == "5h")
+        check("the weekly window is labelled as one",
+              usage.limits.first(where: { $0.windowMinutes == 10080 })?.label == "Week")
+        check("the newest percentage wins",
+              usage.limits.first(where: { $0.windowMinutes == 300 })?.usedPercent == 40,
+              "got \(usage.limits.first(where: { $0.windowMinutes == 300 })?.usedPercent ?? -1)")
+        check("limits stay behind consent",
+              SessionDetailReader.read(path: metered, agent: .codex,
+                                       depth: .metadataOnly).limits.isEmpty)
+        let unmetered = SessionDetailReader.read(path: running, agent: .codex,
+                                                 depth: .richLabels)
+        check("a transcript with no counts reports no tokens and no limits",
+              unmetered.tokens == nil && unmetered.limits.isEmpty)
+
+        // A window with no reset instant cannot be drawn counting down, and is
+        // dropped rather than given one.
+        let noReset = SessionDetailReader.rateLimits(
+            from: ["primary": ["used_percent": 10.0, "window_minutes": 300]],
+            provider: .openAI, observedAt: Date()
+        )
+        check("a window with no reset time is dropped, not invented",
+              noReset.isEmpty)
+        let noPercent = SessionDetailReader.rateLimits(
+            from: ["primary": ["window_minutes": 300, "resets_at": epoch]],
+            provider: .openAI, observedAt: Date()
+        )
+        check("a window with no percentage is dropped too", noPercent.isEmpty)
+        let overrun = SessionDetailReader.rateLimits(
+            from: ["primary": ["used_percent": 140.0, "window_minutes": 300,
+                               "resets_at": epoch]],
+            provider: .openAI, observedAt: Date()
+        )
+        check("a percentage beyond the bar is clamped to it",
+              overrun.first?.usedPercent == 100)
+        check("a non-numeric token field yields nothing rather than zero",
+              SessionDetailReader.tokenUsage(from: ["total_tokens": "lots"]) == nil)
 
         // The fallback is a second place to look, not a licence to invent one.
         let noContext = write("no-context.jsonl", [started, exec(3, verb: "read")])

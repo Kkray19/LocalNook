@@ -18,9 +18,16 @@
 //    * Off by default. `Settings.sessionLabelDepth` starts at `.metadataOnly`,
 //      in which not one byte of any transcript body is read. Switching the
 //      sessions widget on is not consent to read inside transcripts.
-//    * Strictly extracted. Four named fields and nothing else. There is no
-//      fallback to message text, assistant prose or user input — if the named
-//      field is absent then the value is absent, and the UI says so.
+//    * Strictly extracted. Named fields and nothing else. There is no fallback
+//      to message text, assistant prose or user input — if the named field is
+//      absent then the value is absent, and the UI says so.
+//    * Two kinds of field, held to different standards. Four carry *text* a
+//      person or a model wrote: the model identifier, the effort, the chat
+//      name and the current step. Those are the ones the paragraph above is
+//      about. The rest are *numbers* an agent recorded about itself — token
+//      counts and rate-limit percentages — which cannot carry a client name
+//      or a diagnosis however they are written, and are read from the same
+//      windows under the same consent. See SessionUsage.
 //    * Never printed. Not logged, not written to diagnostics, not included in
 //      `--render-preview` output, never persisted. The only cache is in memory
 //      and is dropped the moment the feature is switched off.
@@ -100,11 +107,20 @@ nonisolated struct SessionDetail: Equatable, Sendable {
     /// The current step. Only ever populated when `activity == .working`.
     var step: String?
     var activity: SessionActivityState = .unknown
+    /// The session's running token total, where the agent records one.
+    /// See SessionUsage: Codex does, Claude Code does not.
+    var tokens: TokenUsage?
+    /// The account's rate-limit windows as this transcript last saw them.
+    /// Empty for an agent that writes none.
+    var limits: [RateLimitWindow] = []
     /// True when the reader was not permitted to look, as distinct from looking
     /// and finding nothing. Keeps "switched off" distinguishable from "empty".
     var wasNotRead = true
 
-    var isEmpty: Bool { model == nil && effort == nil && title == nil && step == nil }
+    var isEmpty: Bool {
+        model == nil && effort == nil && title == nil && step == nil
+            && tokens == nil && limits.isEmpty
+    }
 
     /// "Opus 5 max". Absent when the model is unknown — never a placeholder.
     var modelLabel: String? {
@@ -272,6 +288,19 @@ nonisolated enum SessionDetailReader {
                        let step = codexStep(forItem: item) {
                         newestStep = step
                     }
+                case "token_count":
+                    // Cumulative for the session, so the newest wins outright
+                    // rather than being added to what came before it.
+                    if let info = payload["info"] as? [String: Any],
+                       let usage = tokenUsage(from: info["total_token_usage"]) {
+                        detail.tokens = usage
+                    }
+                    if let raw = payload["rate_limits"] as? [String: Any] {
+                        let observed = parseTimestamp(object["timestamp"] as? String ?? "")
+                        let windows = rateLimits(from: raw, provider: .openAI,
+                                                 observedAt: observed ?? Date())
+                        if !windows.isEmpty { detail.limits = windows }
+                    }
                 default:
                     break
                 }
@@ -339,6 +368,57 @@ nonisolated enum SessionDetailReader {
         default:
             // Reasoning, AgentMessage, UserMessage. All prose.
             return nil
+        }
+    }
+
+    /// Token counts from a named object of integers. Anything non-numeric is
+    /// ignored rather than coerced — a string here would mean the format has
+    /// changed, and a wrong number is worse than none.
+    static func tokenUsage(from raw: Any?) -> TokenUsage? {
+        guard let object = raw as? [String: Any] else { return nil }
+        func number(_ key: String) -> Int {
+            if let value = object[key] as? Int { return max(0, value) }
+            if let value = object[key] as? Double, value.isFinite { return max(0, Int(value)) }
+            return 0
+        }
+        let usage = TokenUsage(
+            input: number("input_tokens"),
+            cachedInput: number("cached_input_tokens"),
+            output: number("output_tokens"),
+            reasoning: number("reasoning_output_tokens"),
+            total: number("total_tokens")
+        )
+        return usage.isEmpty ? nil : usage
+    }
+
+    /// The rate-limit windows in one snapshot.
+    ///
+    /// Both slots are optional and are taken independently: a plan with no
+    /// weekly window yields one bar rather than a fabricated second one.
+    static func rateLimits(
+        from raw: [String: Any], provider: SessionProvider, observedAt: Date
+    ) -> [RateLimitWindow] {
+        ["primary", "secondary"].compactMap { key in
+            guard let slot = raw[key] as? [String: Any] else { return nil }
+            guard let minutes = slot["window_minutes"] as? Int, minutes > 0 else { return nil }
+            let percent: Double
+            if let value = slot["used_percent"] as? Double { percent = value }
+            else if let value = slot["used_percent"] as? Int { percent = Double(value) }
+            else { return nil }
+            guard percent.isFinite else { return nil }
+            // Seconds since the epoch. Absent means the reset instant is not
+            // known, and a window with no reset cannot be shown as counting
+            // down, so it is dropped rather than guessed at.
+            let resets: Date
+            if let seconds = slot["resets_at"] as? Int { resets = Date(timeIntervalSince1970: TimeInterval(seconds)) }
+            else if let seconds = slot["resets_at"] as? Double, seconds.isFinite {
+                resets = Date(timeIntervalSince1970: seconds)
+            } else { return nil }
+            return RateLimitWindow(
+                provider: provider, windowMinutes: minutes,
+                usedPercent: min(100, max(0, percent)),
+                resetsAt: resets, observedAt: observedAt
+            )
         }
     }
 

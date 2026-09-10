@@ -44,6 +44,7 @@ enum PreviewRenderer {
             ("dashboard-browser-ambiguous", true, .media),
             ("dashboard-browser-page", true, .media),
             ("sessions-dashboard", true, .sessions),
+            ("sessions-tokens", true, .sessions),
             ("tray-populated", true, .shelf),
             ("tools", true, .timers),
             ("tray-drag-target", true, .shelf),
@@ -96,7 +97,7 @@ enum PreviewRenderer {
                     capabilities: [.playbackState, .position, .playPause, .seek]
                 ))
                 model.page = .dashboard
-            } else if scene.name == "sessions-dashboard" {
+            } else if scene.name.hasPrefix("sessions-") {
                 // Invented sessions, for the same reason as the badge scenes
                 // below: the renderer must not open a transcript, so nothing
                 // here came from one.
@@ -118,19 +119,51 @@ enum PreviewRenderer {
                     value.detail.wasNotRead = false
                     return value
                 }
+                // Limits and token counts of the shape Codex writes. Invented
+                // like everything else here — but the *shape* is real, which
+                // is the part a layout has to survive.
+                func limits(_ percent: Double, _ weekly: Double) -> [RateLimitWindow] {
+                    [
+                        RateLimitWindow(provider: .openAI, windowMinutes: 300,
+                                        usedPercent: percent,
+                                        resetsAt: Date().addingTimeInterval(15_000),
+                                        observedAt: Date().addingTimeInterval(-20)),
+                        RateLimitWindow(provider: .openAI, windowMinutes: 10080,
+                                        usedPercent: weekly,
+                                        resetsAt: Date().addingTimeInterval(440_000),
+                                        observedAt: Date().addingTimeInterval(-20)),
+                    ]
+                }
+                var codexRunning = staged(
+                    .codex, "2", "2026-09-09T14", secondsAgo: 22, bytes: 812_000,
+                    model: "GPT 6 Astra", effort: "high", title: "LedgerApp",
+                    step: "Reading a file"
+                )
+                codexRunning.detail.tokens = TokenUsage(
+                    input: 18_487_073, cachedInput: 17_964_416, output: 76_339,
+                    reasoning: 18_081, total: 18_563_412
+                )
+                codexRunning.detail.limits = limits(40, 52)
+                var codexOlder = staged(.codex, "5", "2026-09-08T09",
+                                        secondsAgo: 90_000, bytes: 210_000,
+                                        model: "GPT 6 Astra")
+                codexOlder.detail.tokens = TokenUsage(
+                    input: 402_000, cachedInput: 380_000, output: 9_400,
+                    reasoning: 1_200, total: 411_400
+                )
                 let staging = [
                     staged(.claudeCode, "1", "LedgerApp", secondsAgo: 4, bytes: 3_400_000,
                            model: "Opus 5", effort: "xhigh", title: "Statement importer",
                            step: "Running the test suite"),
-                    staged(.codex, "2", "2026-09-09T14", secondsAgo: 22, bytes: 812_000,
-                           model: "GPT 6 Astra", effort: "high", title: "LedgerApp",
-                           step: "Reading a file"),
+                    codexRunning,
                     staged(.claudeCode, "3", "Notch", secondsAgo: 640, bytes: 41_000_000,
                            model: "Opus 5", effort: "high", title: "Opening animation"),
                     staged(.claudeCode, "4", "Notch", secondsAgo: 5400, bytes: 96_000,
                            model: "Sonnet 5"),
-                    staged(.codex, "5", "2026-09-08T09", secondsAgo: 90_000, bytes: 210_000),
+                    codexOlder,
                 ]
+                SessionsDashboardView.previewMode =
+                    scene.name == "sessions-tokens" ? .models : .sessions
                 SessionMonitor.shared.previewInject(
                     staging, stats: SessionStats.tally(staging)
                 )

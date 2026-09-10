@@ -31,26 +31,27 @@ import SwiftUI
 /// narrow for the counts should show fewer numbers, never fewer sessions.
 nonisolated struct SessionsDashboardLayout: Equatable {
     var showsSummary: Bool
-    var showsActivity: Bool
+    var showsLimits: Bool
 
     static let summaryWidth: CGFloat = 128
-    static let activityWidth: CGFloat = 176
+    static let limitsWidth: CGFloat = 190
     /// The list's own floor. Below this the rails are worth less than the rows.
     static let minimumListWidth: CGFloat = 240
     static let railGap: CGFloat = 12
 
     static func plan(width: CGFloat) -> SessionsDashboardLayout {
         let summaryCost = summaryWidth + railGap * 2 + 1
-        let activityCost = activityWidth + railGap * 2 + 1
-        // The activity chart is the first thing to go: it describes the week,
-        // and the week is still legible from the "Week" count in the summary.
+        let activityCost = limitsWidth + railGap * 2 + 1
+        // The limits rail is the first thing to go. It is the most useful
+        // thing here and also the most self-contained: losing it costs a
+        // reading, where losing the list costs the page its purpose.
         if width >= minimumListWidth + summaryCost + activityCost {
-            return SessionsDashboardLayout(showsSummary: true, showsActivity: true)
+            return SessionsDashboardLayout(showsSummary: true, showsLimits: true)
         }
         if width >= minimumListWidth + summaryCost {
-            return SessionsDashboardLayout(showsSummary: true, showsActivity: false)
+            return SessionsDashboardLayout(showsSummary: true, showsLimits: false)
         }
-        return SessionsDashboardLayout(showsSummary: false, showsActivity: false)
+        return SessionsDashboardLayout(showsSummary: false, showsLimits: false)
     }
 }
 
@@ -58,27 +59,40 @@ struct SessionsDashboardView: View {
     @ObservedObject private var monitor = SessionMonitor.shared
     @EnvironmentObject var settings: Settings
 
-    /// Whether the middle column lists sessions or the folders they are in.
+    /// What the middle column is listing.
     enum Mode: String, CaseIterable, Identifiable {
         case sessions
         case projects
+        case models
 
         var id: String { rawValue }
         var label: String {
             switch self {
             case .sessions: "Sessions"
             case .projects: "Projects"
+            case .models: "Tokens"
             }
         }
     }
 
-    @LNState private var mode: Mode = .sessions
+    /// Which tab a freshly-built page starts on.
+    ///
+    /// Only `--render-preview` writes this, and only so a scene can capture a
+    /// tab the renderer has no way to click. Never written in normal
+    /// operation, where the tabs own the selection from the first frame.
+    nonisolated(unsafe) static var previewMode: Mode = .sessions
+
+    @LNState private var mode: Mode = SessionsDashboardView.previewMode
 
     /// Folders across the sessions being shown — the same thirty the list is
     /// capped at, not the whole week. The week's own total is in the summary,
     /// where it is labelled as such.
     private var breakdown: ProjectBreakdown {
         ProjectBreakdown.build(from: monitor.sessions)
+    }
+
+    private var usage: UsageSummary {
+        UsageSummary.build(from: monitor.sessions)
     }
 
     var body: some View {
@@ -95,11 +109,11 @@ struct SessionsDashboardView: View {
                 list
                     .frame(maxWidth: .infinity, alignment: .topLeading)
 
-                if layout.showsActivity {
+                if layout.showsLimits {
                     SectionDivider()
                         .padding(.horizontal, SessionsDashboardLayout.railGap)
-                    activity
-                        .frame(width: SessionsDashboardLayout.activityWidth)
+                    limitsRail
+                        .frame(width: SessionsDashboardLayout.limitsWidth)
                 }
             }
         }
@@ -217,6 +231,17 @@ struct SessionsDashboardView: View {
                             ForEach(breakdown.projects) { project in
                                 ProjectDashboardRow(project: project)
                             }
+                        case .models:
+                            let models = usage.models
+                            if models.isEmpty {
+                                Text("No model reported yet.")
+                                    .font(Theme.caption)
+                                    .foregroundStyle(Theme.tertiaryText)
+                                    .padding(.top, 6)
+                            }
+                            ForEach(models) { entry in
+                                ModelUsageRow(entry: entry)
+                            }
                         }
                     }
                     .padding(.trailing, 2)
@@ -225,30 +250,48 @@ struct SessionsDashboardView: View {
         }
     }
 
-    // MARK: Activity
+    // MARK: Limits
 
-    private var activity: some View {
-        let stats = monitor.stats
+    /// The account's rate-limit windows, as the agents last wrote them down.
+    ///
+    /// Deliberately not uniform across makers, because the data is not: see
+    /// SessionUsage. A maker that publishes nothing gets a sentence saying so,
+    /// which is the one thing an empty bar could never say.
+    private var limitsRail: some View {
+        let summary = usage
         return VStack(alignment: .leading, spacing: 5) {
-            Text("Last active")
+            Text("Limits")
                 .font(Theme.sectionTitle)
                 .textCase(.uppercase)
                 .foregroundStyle(Theme.tertiaryText)
-                .help("Sessions counted on the day they were last written to. A "
-                      + "session that ran for three days counts once, on the last.")
 
-            DayBars(stats: stats)
-                .frame(maxHeight: .infinity)
-
-            HStack(spacing: 6) {
-                ForEach(SessionProvider.allCases, id: \.self) { provider in
-                    let count = stats.perAgent
-                        .filter { $0.key.provider == provider }
-                        .values.reduce(0, +)
-                    ProviderChip(provider: provider, count: count)
-                }
-                Spacer(minLength: 0)
+            if summary.limits.isEmpty && summary.providersWithoutLimits.isEmpty {
+                Text("Nothing recorded yet.")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(Theme.quaternaryText)
             }
+
+            ForEach(summary.limits) { window in
+                LimitBar(window: window)
+            }
+
+            ForEach(summary.providersWithoutLimits, id: \.self) { provider in
+                HStack(spacing: 4) {
+                    Image(systemName: provider.symbol)
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(LiveActivityCenter.tint(for: provider))
+                    Text("\(provider.label) publishes no limits here")
+                        .font(.system(size: 9))
+                        .foregroundStyle(Theme.quaternaryText)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .help("LocalNook makes no network requests, so it can only show "
+                      + "figures an agent writes to this Mac. \(provider.label) "
+                      + "records no rate-limit state in its session files.")
+            }
+
+            Spacer(minLength: 0)
         }
     }
 }
@@ -284,6 +327,7 @@ private struct ModeTab: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 10, weight: .semibold))
+                .fixedSize()
                 .foregroundStyle(isSelected ? Theme.primaryText : Theme.tertiaryText)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2.5)
@@ -299,8 +343,20 @@ private struct ModeTab: View {
 }
 
 /// One session, at the width the compact column never had.
+///
+/// Pressing it brings the maker's app forward. See AgentApplication for why
+/// that is the maker's app rather than the exact window, and why a row whose
+/// app is not installed is not pressable.
 private struct SessionDashboardRow: View {
     let session: AgentSession
+
+    @LNState private var isHovering = false
+
+    /// Resolved once per row rather than per frame: this is a LaunchServices
+    /// lookup, and `body` runs whenever anything on the page changes.
+    private var application: String? {
+        AgentApplication.displayName(for: session.agent.provider)
+    }
 
     private var statusColour: Color {
         if session.isActive { return Theme.positive }
@@ -316,6 +372,23 @@ private struct SessionDashboardRow: View {
     }
 
     var body: some View {
+        if let application {
+            Button {
+                AgentApplication.open(session.agent.provider)
+            } label: {
+                row
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering in withAnimation(NotchMotion.quick) { isHovering = hovering } }
+            .help("Open \(application)")
+            .accessibilityLabel("Open \(application)")
+        } else {
+            row
+                .help("\(session.agent.provider.label)'s app is not installed on this Mac.")
+        }
+    }
+
+    private var row: some View {
         HStack(spacing: 8) {
             Image(systemName: session.agent.provider.symbol)
                 .font(.system(size: 10, weight: .semibold))
@@ -361,11 +434,19 @@ private struct SessionDashboardRow: View {
                 .frame(width: 52, alignment: .trailing)
 
             Circle().fill(statusColour).frame(width: 5, height: 5)
+
+            // Only where pressing does something, and only while pointed at.
+            Image(systemName: "arrow.up.forward.app")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Theme.secondaryText)
+                .frame(width: 10)
+                .opacity(application != nil && isHovering ? 1 : 0)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(RoundedRectangle(cornerRadius: Theme.chipRadius, style: .continuous)
-            .fill(Theme.surface))
+            .fill(isHovering && application != nil ? Theme.surfaceHover : Theme.surface))
+        .contentShape(RoundedRectangle(cornerRadius: Theme.chipRadius, style: .continuous))
         .help(session.isActive
               ? "Written in the last 90 seconds"
               : session.isIdle ? "Quiet — probably waiting on you" : "No recent writes")
@@ -433,66 +514,138 @@ private struct ProjectDashboardRow: View {
     }
 }
 
-/// Seven bars: how many sessions were last written on each of the last seven
-/// days, today on the right.
-private struct DayBars: View {
-    let stats: SessionStats
+/// One rate-limit window: how much of it is gone, and when it comes back.
+///
+/// The percentage is a snapshot, not a live reading, so this shows how old it
+/// is whenever that is old enough to matter — and once the window has rolled
+/// over it says so rather than continuing to draw a bar for a period that has
+/// ended.
+private struct LimitBar: View {
+    let window: RateLimitWindow
+
+    /// Repainted on a timer because the only thing moving here is the clock.
+    private let ticker = Timer.publish(every: 20, on: .main, in: .common).autoconnect()
+    @LNState private var now = Date()
+
+    private var expired: Bool { window.hasExpired(now: now) }
+
+    private var fill: Color {
+        if expired { return Theme.quaternaryText }
+        return switch window.usedPercent {
+        case ..<70: LiveActivityCenter.tint(for: window.provider)
+        case ..<90: Theme.warning
+        default: Theme.weekend
+        }
+    }
 
     var body: some View {
-        let counts = Array(stats.perDay.reversed())
-        let initials = Array(SessionStats.dayInitials().reversed())
-        let peak = stats.peakDay
-
-        HStack(alignment: .bottom, spacing: 4) {
-            ForEach(Array(counts.enumerated()), id: \.offset) { index, count in
-                let isToday = index == counts.count - 1
-                VStack(spacing: 3) {
-                    GeometryReader { geometry in
-                        VStack(spacing: 0) {
-                            Spacer(minLength: 0)
-                            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                                // A day with nothing still draws its baseline,
-                                // so an empty stretch reads as zero rather
-                                // than as a chart that failed to load.
-                                .fill(isToday ? Theme.accent
-                                      : Theme.primaryText.opacity(count > 0 ? 0.32 : 0.15))
-                                .frame(
-                                    height: max(2, geometry.size.height
-                                                * CGFloat(count) / CGFloat(peak))
-                                )
-                        }
-                    }
-                    Text(index < initials.count ? initials[index] : "")
-                        .font(.system(size: 8, weight: isToday ? .bold : .regular))
-                        .foregroundStyle(isToday ? Theme.secondaryText : Theme.quaternaryText)
-                }
-                .frame(maxWidth: .infinity)
-                .help("\(count) session\(count == 1 ? "" : "s") last written")
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Image(systemName: window.provider.symbol)
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(LiveActivityCenter.tint(for: window.provider))
+                Text(window.label)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.secondaryText)
+                Spacer(minLength: 2)
+                Text(expired ? "reset" : "\(Int(window.usedPercent.rounded()))%")
+                    .font(.system(size: 9, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(expired ? Theme.quaternaryText : Theme.primaryText)
             }
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Theme.primaryText.opacity(0.12))
+                    Capsule().fill(fill)
+                        .frame(width: expired ? 0
+                               : max(2, geometry.size.width * window.usedPercent / 100))
+                }
+            }
+            .frame(height: 4)
+
+            HStack(spacing: 4) {
+                if let resets = window.resetText(now: now) {
+                    Text("resets in \(resets)")
+                } else {
+                    Text("window has reset")
+                }
+                Spacer(minLength: 2)
+                // Shown only when the reading is old enough that saying
+                // nothing would imply it is current.
+                if let age = window.ageText(now: now) {
+                    Text(age)
+                }
+            }
+            .font(.system(size: 8.5))
+            .foregroundStyle(Theme.quaternaryText)
+            .lineLimit(1)
         }
+        .onReceive(ticker) { now = $0 }
+        .help(window.provider.label + " " + window.label + " window — "
+              + (window.ageText(now: now).map { "as read from a session transcript \($0)." }
+                 ?? "read from a session transcript just now."))
     }
 }
 
-/// How many sessions came from one maker.
-private struct ProviderChip: View {
-    let provider: SessionProvider
-    let count: Int
+/// Tokens attributed to one model.
+private struct ModelUsageRow: View {
+    let entry: ModelUsage
 
     var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: provider.symbol)
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(LiveActivityCenter.tint(for: provider))
-            Text(provider.label)
-                .font(.system(size: 9))
-                .foregroundStyle(Theme.tertiaryText)
-            Text("\(count)")
-                .font(.system(size: 9, weight: .semibold))
-                .monospacedDigit()
-                .foregroundStyle(count > 0 ? Theme.secondaryText : Theme.quaternaryText)
+        HStack(spacing: 8) {
+            Image(systemName: entry.provider.symbol)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(LiveActivityCenter.tint(for: entry.provider))
+                .frame(width: 13)
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text(entry.model)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .lineLimit(1)
+                    .foregroundStyle(Theme.primaryText)
+                // "recent" is doing real work here. The Week count in the
+                // summary rail spans every transcript the scan found; token
+                // counts only exist for the handful LocalNook actually opens,
+                // so without this word the two numbers look like parts of one
+                // picture. See SessionMonitor.scan.
+                Text("\(entry.sessions) recent session\(entry.sessions == 1 ? "" : "s")")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Theme.tertiaryText)
+                    .help("Only sessions LocalNook has read carry token counts — "
+                          + "the most recent few. This is not an account total.")
+            }
+
+            Spacer(minLength: 6)
+
+            if entry.tokensUnreported {
+                // Not zero. Claude Code writes per-message usage and no running
+                // total, and summing every message would mean reading whole
+                // transcripts — see SessionUsage.
+                Text("not reported")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Theme.quaternaryText)
+                    .help("\(entry.provider.label) does not record a session token "
+                          + "total in its transcripts, and LocalNook makes no "
+                          + "network requests.")
+            } else {
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(TokenUsage.short(entry.tokens.total))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.primaryText)
+                    Text("\(TokenUsage.short(entry.tokens.output)) out")
+                        .font(.system(size: 8.5))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.quaternaryText)
+                }
+                .help("\(entry.tokens.input) in, \(entry.tokens.cachedInput) cached, "
+                      + "\(entry.tokens.output) out")
+            }
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2.5)
-        .background(Capsule().fill(Theme.surface))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(RoundedRectangle(cornerRadius: Theme.chipRadius, style: .continuous)
+            .fill(Theme.surface))
     }
 }
