@@ -69,13 +69,18 @@ nonisolated enum SessionTokenReader {
     /// that is still being written from being counted as a short one now and
     /// skipped when it is complete.
     ///
+    /// `seen` carries the identifiers already counted, and must persist across
+    /// calls for the same file — see `identity(of:)` for why that is not
+    /// optional.
+    ///
     /// Scanning is done with `memchr` and `memmem` rather than Foundation's
     /// `Data.firstIndex(of:)` and `range(of:)`. That is not premature: the
     /// first version used them and a single pass over the 90 MB transcript on
     /// this Mac took 4.2 seconds, against 0.03 for `cat`. Searching every line
     /// for the marker was quadratic in all but name.
     static func accumulate(
-        path: String, from offset: UInt64, into usage: inout TokenUsage
+        path: String, from offset: UInt64, into usage: inout TokenUsage,
+        seen: inout Set<Int>, shouldContinue: () -> Bool = { true }
     ) -> UInt64 {
         guard let handle = FileHandle(forReadingAtPath: path) else { return offset }
         defer { try? handle.close() }
@@ -85,13 +90,16 @@ nonisolated enum SessionTokenReader {
         var carry: [UInt8] = []
 
         while let chunk = try? handle.read(upToCount: chunkSize), !chunk.isEmpty {
+            // Checked per chunk so switching the feature off stops the read
+            // rather than only discarding its result.
+            guard shouldContinue() else { return consumed }
             var buffer = carry
             buffer.append(contentsOf: chunk)
             carry = []
 
             var start = 0
             while let newline = Self.index(ofByte: UInt8(ascii: "\n"), in: buffer, from: start) {
-                add(line: buffer[start..<newline], to: &usage)
+                add(line: buffer[start..<newline], to: &usage, seen: &seen)
                 consumed += UInt64(newline - start + 1)
                 start = newline + 1
             }
@@ -121,13 +129,44 @@ nonisolated enum SessionTokenReader {
         }
     }
 
-    private static func add(line: ArraySlice<UInt8>, to usage: inout TokenUsage) {
+    /// What identifies the API message a usage record belongs to.
+    ///
+    /// **This is the difference between a total and a number 2.8× too big.**
+    /// A transcript writes the same assistant message several times as it
+    /// streams and continues, and every copy carries the same `usage` object.
+    /// Measured on the 90 MB transcript here: 1,493 of 1,887 request ids
+    /// carried more than one usage record, and in 1,492 of those the numbers
+    /// were byte-for-byte identical. Summing the records gives 29.7M fresh
+    /// tokens; summing the messages gives 10.0M.
+    ///
+    /// `message.id` is the API's own identifier for the message the usage
+    /// describes, so it is the key. `requestId` gives the same answer on this
+    /// data and stands in when the message has no id; `uuid` is the last
+    /// resort. A record with none of the three is counted, because a record
+    /// that cannot be identified cannot be shown to be a repeat.
+    static func identity(of record: [String: Any], message: [String: Any]) -> String? {
+        if let id = message["id"] as? String, !id.isEmpty { return id }
+        if let id = record["requestId"] as? String, !id.isEmpty { return id }
+        if let id = record["uuid"] as? String, !id.isEmpty { return id }
+        return nil
+    }
+
+    private static func add(line: ArraySlice<UInt8>, to usage: inout TokenUsage,
+                            seen: inout Set<Int>) {
         guard contains(markerBytes, in: line) else { return }
         guard let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
               object["type"] as? String == "assistant",
               let message = object["message"] as? [String: Any],
               let raw = message["usage"] as? [String: Any]
         else { return }
+        if let identity = identity(of: object, message: message) {
+            // Hashed rather than stored: a long conversation holds tens of
+            // thousands of these, and eight bytes each is the difference
+            // between a widget and a memory leak. A collision would undercount
+            // one message, at a probability far below that of the transcript
+            // format changing under us.
+            guard seen.insert(identity.hashValue).inserted else { return }
+        }
         usage = usage + claudeUsage(from: raw)
     }
 
@@ -164,33 +203,60 @@ nonisolated enum SessionTokenReader {
 /// the permission that produced it. Dropped whole when labels are switched off.
 nonisolated final class SessionTokenLedger: @unchecked Sendable {
     private struct Entry {
+        /// Device and inode. A transcript replaced by a *larger* file at the
+        /// same path would otherwise be treated as the old one having grown,
+        /// and its bytes added to a total belonging to a file that no longer
+        /// exists. Size alone cannot see that; identity can.
+        var fileID: String
         var offset: UInt64
         var usage: TokenUsage
+        /// Message identifiers already counted, hashed. Must survive across
+        /// appends or every incremental read would re-count the messages the
+        /// previous one had already seen.
+        var seen: Set<Int>
     }
 
     private var entries: [String: Entry] = [:]
     private let lock = NSLock()
 
+    /// Device and inode for a path, or nil when it cannot be read.
+    private static func fileID(forPath path: String) -> String? {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        return "\(info.st_dev):\(info.st_ino)"
+    }
+
     /// Brings `path` up to date and returns its total.
     ///
-    /// A file that has *shrunk* since last time is not the same file — a
-    /// transcript rotated, replaced or truncated — so its total is discarded
-    /// and rebuilt rather than being added to and quietly wrong.
-    func update(path: String, size: Int) -> TokenUsage? {
+    /// Three ways a file stops being the one already summed, all of which
+    /// discard the total and rebuild rather than adding to something wrong:
+    /// it has a different inode (replaced), it is shorter than what has
+    /// already been read (truncated), or it cannot be identified at all.
+    func update(
+        path: String, size: Int, shouldContinue: @escaping () -> Bool = { true }
+    ) -> TokenUsage? {
+        guard let fileID = Self.fileID(forPath: path) else { return nil }
+
         lock.lock()
-        var entry = entries[path] ?? Entry(offset: 0, usage: TokenUsage())
-        if UInt64(max(0, size)) < entry.offset {
-            entry = Entry(offset: 0, usage: TokenUsage())
+        var entry = entries[path] ?? Entry(fileID: fileID, offset: 0,
+                                           usage: TokenUsage(), seen: [])
+        if entry.fileID != fileID || UInt64(max(0, size)) < entry.offset {
+            entry = Entry(fileID: fileID, offset: 0, usage: TokenUsage(), seen: [])
         }
         lock.unlock()
 
+        guard shouldContinue() else {
+            return entry.usage.isEmpty ? nil : entry.usage
+        }
         guard UInt64(max(0, size)) > entry.offset || entry.offset == 0 else {
             return entry.usage.isEmpty ? nil : entry.usage
         }
 
         var usage = entry.usage
+        var seen = entry.seen
         let offset = SessionTokenReader.accumulate(
-            path: path, from: entry.offset, into: &usage
+            path: path, from: entry.offset, into: &usage,
+            seen: &seen, shouldContinue: shouldContinue
         )
 
         lock.lock()
@@ -198,7 +264,7 @@ nonisolated final class SessionTokenLedger: @unchecked Sendable {
         // sessions are ever read, and an unbounded map here would hold a total
         // for every transcript the machine has ever had.
         if entries.count > 64 { entries.removeAll() }
-        entries[path] = Entry(offset: offset, usage: usage)
+        entries[path] = Entry(fileID: fileID, offset: offset, usage: usage, seen: seen)
         lock.unlock()
 
         return usage.isEmpty ? nil : usage

@@ -264,6 +264,10 @@ struct SessionsDashboardView: View {
                 .font(Theme.sectionTitle)
                 .textCase(.uppercase)
                 .foregroundStyle(Theme.tertiaryText)
+                .help("Account-wide windows, as an agent last wrote them into "
+                      + "a transcript on this Mac. Reported by the agent, not "
+                      + "inferred from the sessions above, and not a live "
+                      + "query — LocalNook makes no network requests.")
 
             if summary.limits.isEmpty && summary.providersWithoutLimits.isEmpty {
                 Text("Nothing recorded yet.")
@@ -582,9 +586,13 @@ private struct LimitBar: View {
             .lineLimit(1)
         }
         .onReceive(ticker) { now = $0 }
-        .help(window.provider.label + " " + window.label + " window — "
-              + (window.ageText(now: now).map { "as read from a session transcript \($0)." }
-                 ?? "read from a session transcript just now."))
+        .help(window.provider.label + " " + window.label
+              + " window, account-wide — as \(window.provider.label) itself "
+              + "recorded it, "
+              + (window.ageText(now: now).map { "read from a transcript \($0)." }
+                 ?? "read from a transcript moments ago.")
+              + " A percentage used, not an allowance remaining, and a snapshot "
+              + "rather than a live reading.")
     }
 }
 
@@ -635,23 +643,27 @@ private struct ModelUsageRow: View {
                           + "network requests.")
             } else {
                 VStack(alignment: .trailing, spacing: 0) {
-                    // Fresh tokens, not the raw sum. Cache reads repeat the
-                    // whole conversation every turn, so the sum grows with
-                    // length rather than with use — see TokenUsage.
+                    // The headline is input *plus* output, so the line under it
+                    // breaks that same figure into its two parts rather than
+                    // repeating one of them beside it. Showing "28.1M" over
+                    // "5.5M out" read as two quantities when it was one.
+                    // Cache reads are excluded from both — they repeat the
+                    // whole conversation every turn. See TokenUsage.
                     Text(TokenUsage.short(entry.tokens.fresh))
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(Theme.primaryText)
-                    Text("\(TokenUsage.short(entry.tokens.output)) out")
+                    Text("\(TokenUsage.short(entry.tokens.freshInput)) in · "
+                         + "\(TokenUsage.short(entry.tokens.output)) out")
                         .font(.system(size: 8.5))
                         .monospacedDigit()
                         .foregroundStyle(Theme.quaternaryText)
                 }
-                .help("\(entry.tokens.freshInput) new input and "
-                      + "\(entry.tokens.output) output. A further "
+                .help("\(entry.tokens.freshInput) new input plus "
+                      + "\(entry.tokens.output) output, from the sessions "
+                      + "LocalNook has read — not an account total. A further "
                       + "\(entry.tokens.cachedInput) came from cache, which "
-                      + "re-counts the conversation every turn and is left out "
-                      + "of the headline.")
+                      + "re-counts the conversation every turn and is left out.")
             }
         }
         .padding(.horizontal, 8)

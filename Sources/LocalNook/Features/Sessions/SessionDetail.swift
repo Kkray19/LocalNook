@@ -86,11 +86,20 @@ nonisolated enum SessionLabelDepth: String, CaseIterable, Identifiable, Sendable
             "Sessions are described by file name and timestamp only. No "
                 + "transcript content is read."
         case .richLabels:
-            "LocalNook reads four fields from your local session files — the "
-                + "model, the effort, the name you gave the chat, and the current "
-                + "step — and uses them as labels. Those fields can contain "
-                + "anything you or the agent wrote. They stay on this Mac, are "
-                + "never saved or logged, and are not shown on the lock screen."
+            "LocalNook reads named fields from your local session files: the "
+                + "model, the effort, the name you gave the chat, the current "
+                + "step, and the token counts and rate-limit percentages the "
+                + "agents record about themselves. The first four can contain "
+                + "anything you or the agent wrote.\n\n"
+                + "To total Claude Code's tokens it has to read each transcript "
+                + "all the way through, because that agent records usage per "
+                + "message and no running total — a partial sum would not be a "
+                + "smaller total but a wrong one. Only numbers are taken from "
+                + "that pass; no text is kept from it.\n\n"
+                + "Everything stays on this Mac, is held in memory only, is "
+                + "never saved or logged, and is not shown on the lock screen. "
+                + "Switching this off stops any read already running and "
+                + "discards what has been read."
         }
     }
 }

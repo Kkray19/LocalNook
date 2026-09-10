@@ -1445,6 +1445,7 @@ enum SelfTest {
             (try? FileManager.default.attributesOfItem(atPath: ledgerPath)[.size] as? Int) ?? 0
         }
         let first = ledger.update(path: ledgerPath, size: size())
+        _ = first
         check("fresh input counts cache writes and not cache reads",
               first?.freshInput == 105, "got \(first?.freshInput ?? -1)")
         check("cache reads are counted apart",
@@ -1494,11 +1495,118 @@ enum SelfTest {
         check("a truncated transcript is resummed rather than added to",
               rebuilt?.fresh == 2, "got \(rebuilt?.fresh ?? -1)")
 
+        // ── The same message, written more than once ───────────────────────
+        //
+        // Not hypothetical and not small: on the 90 MB transcript here, 1,493
+        // of 1,887 request ids carried more than one usage record, and in
+        // 1,492 of those the numbers were identical. Summing records rather
+        // than messages reported 29.7M fresh tokens where the truth was 10.0M.
+        func identified(_ id: String, output: Int) -> String {
+            #"{"type":"assistant","requestId":"\#(id)","uuid":"u-\#(id)","message":{"id":"msg_\#(id)","model":"claude-opus-5","usage":{"input_tokens":\#(output),"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":\#(output)}}}"#
+        }
+        let dupePath = ledgerDir.appendingPathComponent("dupes.jsonl").path
+        func writeDupes(_ lines: [String], append: Bool = false) {
+            let text = lines.joined(separator: "\n") + "\n"
+            if append, let handle = FileHandle(forWritingAtPath: dupePath) {
+                _ = try? handle.seekToEnd(); handle.write(Data(text.utf8)); try? handle.close()
+            } else {
+                try? text.write(toFile: dupePath, atomically: true, encoding: .utf8)
+            }
+        }
+        func dupeSize() -> Int {
+            (try? FileManager.default.attributesOfItem(atPath: dupePath)[.size] as? Int) ?? 0
+        }
+        writeDupes([identified("a", output: 10), identified("a", output: 10),
+                    identified("a", output: 10), identified("b", output: 5)])
+        let dupes = SessionTokenLedger()
+        let counted = dupes.update(path: dupePath, size: dupeSize())
+        check("a message written three times is counted once",
+              counted?.output == 15, "got \(counted?.output ?? -1)")
+
+        // And the identifiers have to survive the append, or every incremental
+        // read would re-count what the last one already had.
+        writeDupes([identified("a", output: 10), identified("c", output: 7)], append: true)
+        let afterAppend = dupes.update(path: dupePath, size: dupeSize())
+        check("a repeat arriving in a later append is still not re-counted",
+              afterAppend?.output == 22, "got \(afterAppend?.output ?? -1)")
+
+        // A record with nothing to identify it cannot be shown to be a repeat,
+        // so it is counted rather than silently dropped.
+        writeDupes([#"{"type":"assistant","message":{"usage":{"input_tokens":0,"output_tokens":3}}}"#,
+                    #"{"type":"assistant","message":{"usage":{"input_tokens":0,"output_tokens":3}}}"#],
+                   append: true)
+        let anonymous = dupes.update(path: dupePath, size: dupeSize())
+        check("unidentifiable records are counted, not dropped",
+              anonymous?.output == 28, "got \(anonymous?.output ?? -1)")
+
+        // ── A different file at the same path ──────────────────────────────
+        //
+        // Size alone cannot see this: a replacement that happens to be longer
+        // looks exactly like the old file having grown, and its bytes would be
+        // added to a total belonging to a file that no longer exists.
+        let swapPath = ledgerDir.appendingPathComponent("swap.jsonl").path
+        try? (identified("x", output: 4) + "\n").write(toFile: swapPath,
+                                                       atomically: true, encoding: .utf8)
+        let swapper = SessionTokenLedger()
+        func swapSize() -> Int {
+            (try? FileManager.default.attributesOfItem(atPath: swapPath)[.size] as? Int) ?? 0
+        }
+        let before = swapper.update(path: swapPath, size: swapSize())
+        check("the original file is summed", before?.output == 4,
+              "got \(before?.output ?? -1)")
+        // Replaced by a *longer* file, which is the case size cannot catch.
+        try? FileManager.default.removeItem(atPath: swapPath)
+        try? ([identified("y", output: 9), identified("z", output: 9),
+               identified("w", output: 9)].joined(separator: "\n") + "\n")
+            .write(toFile: swapPath, atomically: true, encoding: .utf8)
+        let after = swapper.update(path: swapPath, size: swapSize())
+        check("a replaced transcript is resummed rather than appended to",
+              after?.output == 27, "got \(after?.output ?? -1)")
+
+        // ── Switching the feature off stops the read ───────────────────────
+        var reads = 0
+        let stopper = SessionTokenLedger()
+        let stopped = stopper.update(path: ledgerPath, size: size(),
+                                     shouldContinue: { reads += 1; return false })
+        check("a cancelled read returns without summing anything",
+              stopped == nil, "got \(String(describing: stopped))")
+        check("and it is asked before it starts reading", reads > 0)
+
         ledger.clear()
         check("switching labels off drops the totals", ledger.isEmpty)
         check("a transcript that is not there yields nothing",
               ledger.update(path: ledgerDir.appendingPathComponent("gone.jsonl").path,
                             size: 100) == nil)
+
+        // ── Metadata-only reaches no transcript body, ledger included ──────
+        //
+        // Asserted through the scan rather than the reader, because the reader
+        // refusing is only half of it: the question is whether anything on the
+        // path from a scan to the screen opens a file, and the ledger is a
+        // second door that was added later.
+        let quietDir = AppInfo.testDirectory.appendingPathComponent("quiet", isDirectory: true)
+        try? FileManager.default.createDirectory(at: quietDir, withIntermediateDirectories: true)
+        let quietFile = quietDir.appendingPathComponent("session.jsonl")
+        try? (identified("q", output: 11) + "\n").write(to: quietFile, atomically: true,
+                                                        encoding: .utf8)
+        let quietLedger = SessionTokenLedger()
+        var quietScan: SessionScan?
+        Task {
+            quietScan = await SessionMonitor.scan(
+                agents: [.claudeCode], roots: [.claudeCode: quietDir],
+                depth: .metadataOnly, cache: nil, ledger: quietLedger
+            )
+        }
+        let quietDeadline = Date().addingTimeInterval(10)
+        while quietScan == nil && Date() < quietDeadline { pumpEvents(for: 0.05) }
+        check("a metadata-only scan still finds the session", quietScan?.sessions.count == 1,
+              "found \(quietScan?.sessions.count ?? -1)")
+        check("metadata-only reads no labels",
+              quietScan?.sessions.first?.detail.wasNotRead == true)
+        check("metadata-only reports no tokens",
+              quietScan?.sessions.first?.detail.tokens == nil)
+        check("and the ledger was never opened at all", quietLedger.isEmpty,
+              "the ledger holds state after a metadata-only scan")
 
         // ── Getting to the app ─────────────────────────────────────────────
         for provider in SessionProvider.allCases {
@@ -1905,6 +2013,15 @@ enum SelfTest {
         check("it comes back to the target and stays",
               abs(opening.progress(at: opening.totalDuration) - 1) < 0.001,
               "ended at \(opening.progress(at: opening.totalDuration))")
+        // Printed, not just asserted. The bounds above say the overshoot is
+        // between 0.4% and 2% of the travel; what it actually is decides
+        // whether it can be seen, and that is the thing being judged.
+        print(String(
+            format: "  measured: overshoot %.2f%% of travel (%.1fpt at the open width), "
+                + "peaking %.0fms after full size, settling %.2fs after the open begins",
+            (peak - 1) * 100,
+            (peak - 1) * (NotchGeometry.openSize.width - 185) / 2,
+            (peakAt - hand) * 1000, opening.totalDuration))
 
         // ── Nothing is forced to finish early ──────────────────────────────
         //

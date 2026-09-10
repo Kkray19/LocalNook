@@ -127,6 +127,29 @@ nonisolated struct AgentSession: Identifiable, Equatable, Sendable {
     }
 }
 
+/// Lets a scan already reading transcripts be told to stop.
+///
+/// Discarding a scan's *result* is not the same as stopping its *reads*. The
+/// ledger streams whole transcripts, so without this, switching labels off
+/// left a background read working through someone's conversations for as long
+/// as it took to finish — the answer thrown away, the reading done anyway.
+nonisolated final class ScanToken: @unchecked Sendable {
+    private var cancelled = false
+    private let lock = NSLock()
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+}
+
 /// What one scan produced: the sessions worth showing, and counts over every
 /// transcript found.
 nonisolated struct SessionScan: Sendable {
@@ -154,6 +177,8 @@ final class SessionMonitor: ObservableObject {
     private var previouslyActive: Set<String> = []
     private var refreshTicker: AnyCancellable?
     private var scanGeneration = 0
+    /// The scan currently reading, so it can be stopped rather than ignored.
+    private var currentScan: ScanToken?
     private var running = false
     private var settingsSubscription: AnyCancellable?
 
@@ -180,6 +205,10 @@ final class SessionMonitor: ObservableObject {
     /// Drops every label read from a transcript, from the cache and from the
     /// sessions already on screen.
     func forgetTranscriptLabels() {
+        // Stop first, then forget. A read still in flight would otherwise
+        // finish and refill what was just cleared.
+        currentScan?.cancel()
+        currentScan = nil
         detailCache.clear()
         // A token total is derived from the same transcripts under the same
         // consent, so it goes when the labels do.
@@ -281,10 +310,14 @@ final class SessionMonitor: ObservableObject {
             : Settings.shared.sessionLabelDepth
         let cache = detailCache
         let ledger = tokenLedger
+        currentScan?.cancel()
+        let token = ScanToken()
+        currentScan = token
         Task { [weak self] in
             let scan = await Self.scan(agents: agents, depth: depth,
-                                       cache: cache, ledger: ledger)
-            guard let self, self.running, self.scanGeneration == generation else { return }
+                                       cache: cache, ledger: ledger, token: token)
+            guard let self, self.running, self.scanGeneration == generation,
+                  !token.isCancelled else { return }
             let found = scan.sessions
             let previous = self.previouslyActive
             self.sessions = found
@@ -326,7 +359,8 @@ final class SessionMonitor: ObservableObject {
         roots: [SessionAgent: URL] = [:],
         depth: SessionLabelDepth = .metadataOnly,
         cache: SessionDetailCache? = nil,
-        ledger: SessionTokenLedger? = nil
+        ledger: SessionTokenLedger? = nil,
+        token: ScanToken? = nil
     ) async -> SessionScan {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
@@ -380,6 +414,9 @@ final class SessionMonitor: ObservableObject {
                     for index in recent.indices.prefix(6)
                     where Date().timeIntervalSince(recent[index].lastActivity)
                         < transcriptReadWindow {
+                        // Checked before each transcript, so a cancellation
+                        // stops at the next file rather than after all six.
+                        if token?.isCancelled == true { break }
                         let session = recent[index]
                         // An unchanged file cannot have a newer answer, so it is
                         // not reopened.
@@ -402,8 +439,10 @@ final class SessionMonitor: ObservableObject {
                         // the label cache because it advances with the file even
                         // when the labels have not changed.
                         if session.agent == .claudeCode,
-                           let tokens = ledger?.update(path: session.id,
-                                                       size: session.byteSize) {
+                           let tokens = ledger?.update(
+                               path: session.id, size: session.byteSize,
+                               shouldContinue: { token?.isCancelled != true }
+                           ) {
                             recent[index].detail.tokens = tokens
                         }
                     }
