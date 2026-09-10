@@ -37,22 +37,51 @@
 import Foundation
 
 /// Tokens for one session or one model.
+///
+/// ── Why the headline is not the sum of everything ──────────────────────────
+///
+/// Both agents report tokens per request, and both re-count the whole prompt
+/// on every request. With prompt caching that means the *same* context is
+/// counted again on every turn: one Claude session on this Mac sums to 2.48
+/// **billion** tokens across 4,888 turns, of which 2.45 billion are the same
+/// conversation being read back out of cache. That number is a true sum and a
+/// useless measure of use — it grows with how long a conversation is, not with
+/// how much work was done.
+///
+/// So `fresh` is the headline: input the model had not already been given,
+/// plus what it wrote. `cachedInput` is kept beside it rather than folded in,
+/// and `processed` is available for anyone who wants the raw sum.
+///
+/// The two agents describe this differently and are normalised here rather
+/// than at the call sites:
+///
+///   * Codex's `input_tokens` **includes** its `cached_input_tokens`, so fresh
+///     input is the difference.
+///   * Claude's `input_tokens` **excludes** cache, and cache *writes* are
+///     charged as fresh input, so fresh input is `input_tokens` plus
+///     `cache_creation_input_tokens`.
 nonisolated struct TokenUsage: Equatable, Sendable {
-    var input = 0
+    /// Input the model actually had to read, cache writes included.
+    var freshInput = 0
+    /// Input served from cache. Re-counted every turn, so it is reported
+    /// separately and never added into the headline.
     var cachedInput = 0
     var output = 0
     var reasoning = 0
-    var total = 0
 
-    var isEmpty: Bool { total == 0 && input == 0 && output == 0 }
+    /// What this session actually consumed.
+    var fresh: Int { freshInput + output }
+    /// Every token the model was handed, cache reads included. The big number.
+    var processed: Int { freshInput + cachedInput + output }
+
+    var isEmpty: Bool { freshInput == 0 && cachedInput == 0 && output == 0 }
 
     static func + (lhs: TokenUsage, rhs: TokenUsage) -> TokenUsage {
         TokenUsage(
-            input: lhs.input + rhs.input,
+            freshInput: lhs.freshInput + rhs.freshInput,
             cachedInput: lhs.cachedInput + rhs.cachedInput,
             output: lhs.output + rhs.output,
-            reasoning: lhs.reasoning + rhs.reasoning,
-            total: lhs.total + rhs.total
+            reasoning: lhs.reasoning + rhs.reasoning
         )
     }
 
@@ -198,7 +227,7 @@ nonisolated struct UsageSummary: Equatable, Sendable {
             if $0.tokensUnreported != $1.tokensUnreported { return !$0.tokensUnreported }
             if ($0.model == nil) != ($1.model == nil) { return $0.model != nil }
             if $0.tokensUnreported { return $0.sessions > $1.sessions }
-            return $0.tokens.total > $1.tokens.total
+            return $0.tokens.fresh > $1.tokens.fresh
         }
         let limits = newest.values.sorted {
             if $0.provider != $1.provider { return $0.provider.rawValue < $1.provider.rawValue }

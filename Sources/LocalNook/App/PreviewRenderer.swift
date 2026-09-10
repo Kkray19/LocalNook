@@ -140,21 +140,29 @@ enum PreviewRenderer {
                     step: "Reading a file"
                 )
                 codexRunning.detail.tokens = TokenUsage(
-                    input: 18_487_073, cachedInput: 17_964_416, output: 76_339,
-                    reasoning: 18_081, total: 18_563_412
+                    freshInput: 522_657, cachedInput: 17_964_416,
+                    output: 76_339, reasoning: 18_081
                 )
                 codexRunning.detail.limits = limits(40, 52)
                 var codexOlder = staged(.codex, "5", "2026-09-08T09",
                                         secondsAgo: 90_000, bytes: 210_000,
                                         model: "GPT 6 Astra")
                 codexOlder.detail.tokens = TokenUsage(
-                    input: 402_000, cachedInput: 380_000, output: 9_400,
-                    reasoning: 1_200, total: 411_400
+                    freshInput: 22_000, cachedInput: 380_000,
+                    output: 9_400, reasoning: 1_200
+                )
+                var claudeRunning = staged(
+                    .claudeCode, "1", "LedgerApp", secondsAgo: 4, bytes: 3_400_000,
+                    model: "Opus 5", effort: "xhigh", title: "Statement importer",
+                    step: "Running the test suite"
+                )
+                // Summed from per-message usage, the way the ledger does it.
+                claudeRunning.detail.tokens = TokenUsage(
+                    freshInput: 22_563_073, cachedInput: 2_448_305_098,
+                    output: 5_525_932, reasoning: 2_177_230
                 )
                 let staging = [
-                    staged(.claudeCode, "1", "LedgerApp", secondsAgo: 4, bytes: 3_400_000,
-                           model: "Opus 5", effort: "xhigh", title: "Statement importer",
-                           step: "Running the test suite"),
+                    claudeRunning,
                     codexRunning,
                     staged(.claudeCode, "3", "Notch", secondsAgo: 640, bytes: 41_000_000,
                            model: "Opus 5", effort: "high", title: "Opening animation"),

@@ -49,6 +49,14 @@
 //      working directory — out of the tail. The head is searched for that one
 //      field when the tail has none, which is why a 3 MB Codex transcript is
 //      still named after its folder rather than the time of day.
+//
+//  ── One thing here is not sampled ──────────────────────────────────────────
+//
+//  Claude Code token totals are the exception, and it is a deliberate one. A
+//  sum over part of a file is not a smaller total but a wrong one, so
+//  SessionTokenLedger streams whole transcripts. It extracts four integers per
+//  assistant record and retains no text, under this same consent and these
+//  same locks. The reasoning, and what bounds it, are set out there.
 //    * The head and the tail can come from far apart in a long conversation.
 //      Nothing is inferred across that gap: the model, the effort and the step
 //      are all taken from one record, so they cannot describe different turns.
@@ -377,6 +385,10 @@ nonisolated enum SessionDetailReader {
     /// Token counts from a named object of integers. Anything non-numeric is
     /// ignored rather than coerced — a string here would mean the format has
     /// changed, and a wrong number is worse than none.
+    ///
+    /// Codex's `input_tokens` includes what it served from cache, so fresh
+    /// input is the difference. See TokenUsage for why the two are kept apart
+    /// rather than summed into one headline.
     static func tokenUsage(from raw: Any?) -> TokenUsage? {
         guard let object = raw as? [String: Any] else { return nil }
         func number(_ key: String) -> Int {
@@ -384,12 +396,13 @@ nonisolated enum SessionDetailReader {
             if let value = object[key] as? Double, value.isFinite { return max(0, Int(value)) }
             return 0
         }
+        let cached = number("cached_input_tokens")
         let usage = TokenUsage(
-            input: number("input_tokens"),
-            cachedInput: number("cached_input_tokens"),
+            freshInput: max(0, number("input_tokens") - cached)
+                + number("cache_write_input_tokens"),
+            cachedInput: cached,
             output: number("output_tokens"),
-            reasoning: number("reasoning_output_tokens"),
-            total: number("total_tokens")
+            reasoning: number("reasoning_output_tokens")
         )
         return usage.isEmpty ? nil : usage
     }

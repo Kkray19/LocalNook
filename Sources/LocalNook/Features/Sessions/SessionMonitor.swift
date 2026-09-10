@@ -159,6 +159,8 @@ final class SessionMonitor: ObservableObject {
 
     /// Labels read from transcripts, held only in memory. See SessionDetailCache.
     private let detailCache = SessionDetailCache()
+    /// Running token totals, likewise in memory only. See SessionTokenLedger.
+    private let tokenLedger = SessionTokenLedger()
 
     private init() {
         settingsSubscription = Settings.shared.objectWillChange
@@ -179,6 +181,9 @@ final class SessionMonitor: ObservableObject {
     /// sessions already on screen.
     func forgetTranscriptLabels() {
         detailCache.clear()
+        // A token total is derived from the same transcripts under the same
+        // consent, so it goes when the labels do.
+        tokenLedger.clear()
         guard sessions.contains(where: { !$0.detail.wasNotRead }) else { return }
         sessions = sessions.map { session in
             var copy = session
@@ -275,8 +280,10 @@ final class SessionMonitor: ObservableObject {
             ? .metadataOnly
             : Settings.shared.sessionLabelDepth
         let cache = detailCache
+        let ledger = tokenLedger
         Task { [weak self] in
-            let scan = await Self.scan(agents: agents, depth: depth, cache: cache)
+            let scan = await Self.scan(agents: agents, depth: depth,
+                                       cache: cache, ledger: ledger)
             guard let self, self.running, self.scanGeneration == generation else { return }
             let found = scan.sessions
             let previous = self.previouslyActive
@@ -299,6 +306,18 @@ final class SessionMonitor: ObservableObject {
         }
     }
 
+    /// How recent a session must be for its transcript to be opened at all.
+    ///
+    /// This was an hour, on the reasoning that a session quiet for longer is
+    /// not one anyone is watching. Rate limits changed that: a five-hour window
+    /// keeps running whether or not you have used the agent in the last hour,
+    /// and a limits panel that goes blank the moment you stop working is close
+    /// to useless. A day is still bounded — at most six transcripts are ever
+    /// opened — and nothing stale is presented as current: activity state comes
+    /// from the transcript's own timestamps, and every limit reading carries
+    /// how old it is.
+    nonisolated static let transcriptReadWindow: TimeInterval = 86_400
+
     /// Collects transcript metadata, plus a bounded peek inside each recent
     /// transcript for the model and the current step. See SessionDetail for
     /// exactly how much is read and what is kept.
@@ -306,7 +325,8 @@ final class SessionMonitor: ObservableObject {
         agents: [SessionAgent],
         roots: [SessionAgent: URL] = [:],
         depth: SessionLabelDepth = .metadataOnly,
-        cache: SessionDetailCache? = nil
+        cache: SessionDetailCache? = nil,
+        ledger: SessionTokenLedger? = nil
     ) async -> SessionScan {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
@@ -358,7 +378,8 @@ final class SessionMonitor: ObservableObject {
                 // read to sessions nobody is looking at.
                 if depth == .richLabels {
                     for index in recent.indices.prefix(6)
-                    where Date().timeIntervalSince(recent[index].lastActivity) < 3600 {
+                    where Date().timeIntervalSince(recent[index].lastActivity)
+                        < transcriptReadWindow {
                         let session = recent[index]
                         // An unchanged file cannot have a newer answer, so it is
                         // not reopened.
@@ -367,14 +388,24 @@ final class SessionMonitor: ObservableObject {
                             modified: session.lastActivity
                         ) {
                             recent[index].detail = cached
-                            continue
+                        } else {
+                            let detail = SessionDetailReader.read(
+                                path: session.id, agent: session.agent, depth: depth
+                            )
+                            recent[index].detail = detail
+                            cache?.store(detail, forPath: session.id, size: session.byteSize,
+                                         modified: session.lastActivity)
                         }
-                        let detail = SessionDetailReader.read(
-                            path: session.id, agent: session.agent, depth: depth
-                        )
-                        recent[index].detail = detail
-                        cache?.store(detail, forPath: session.id, size: session.byteSize,
-                                     modified: session.lastActivity)
+
+                        // Claude Code writes usage per message and no total, so
+                        // its total is accumulated here instead. Kept outside
+                        // the label cache because it advances with the file even
+                        // when the labels have not changed.
+                        if session.agent == .claudeCode,
+                           let tokens = ledger?.update(path: session.id,
+                                                       size: session.byteSize) {
+                            recent[index].detail.tokens = tokens
+                        }
                     }
                 }
                 continuation.resume(returning: SessionScan(sessions: recent, stats: stats))

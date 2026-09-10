@@ -1326,13 +1326,13 @@ enum SelfTest {
         let older = now.addingTimeInterval(-600)
         let metering = [
             session(.codex, "m1", at: now, model: "GPT 6 Astra",
-                    tokens: TokenUsage(input: 900, cachedInput: 100, output: 90,
-                                       reasoning: 10, total: 1000),
+                    tokens: TokenUsage(freshInput: 800, cachedInput: 100,
+                                       output: 200, reasoning: 10),
                     limits: [window(.openAI, 300, 12, observed: older),
                              window(.openAI, 10080, 52, observed: older)]),
             session(.codex, "m2", at: now, model: "GPT 6 Astra",
-                    tokens: TokenUsage(input: 400, cachedInput: 0, output: 100,
-                                       reasoning: 0, total: 500),
+                    tokens: TokenUsage(freshInput: 400, cachedInput: 0,
+                                       output: 100, reasoning: 0),
                     limits: [window(.openAI, 300, 40, observed: now)]),
             session(.claudeCode, "m3", at: now, model: "Opus 5"),
             session(.claudeCode, "m4", at: now, model: "Opus 5"),
@@ -1341,9 +1341,9 @@ enum SelfTest {
         let summary = UsageSummary.build(from: metering)
         check("tokens add up across a model's sessions",
               summary.models.first?.model == "GPT 6 Astra"
-                  && summary.models.first?.tokens.total == 1500,
+                  && summary.models.first?.tokens.fresh == 1500,
               "got \(summary.models.first?.model ?? "nil") "
-                  + "\(summary.models.first?.tokens.total ?? -1)")
+                  + "\(summary.models.first?.tokens.fresh ?? -1)")
         check("a model that reports tokens outranks one that cannot",
               summary.models.compactMap(\.model) == ["GPT 6 Astra", "Opus 5", "Sonnet 5"],
               summary.models.compactMap(\.model).joined(separator: ", "))
@@ -1367,11 +1367,11 @@ enum SelfTest {
         // Losing them would understate the figure without saying so.
         let orphaned = UsageSummary.build(from: [
             session(.codex, "o1", at: now,
-                    tokens: TokenUsage(input: 100, cachedInput: 0, output: 20,
-                                       reasoning: 0, total: 120))
+                    tokens: TokenUsage(freshInput: 100, cachedInput: 0,
+                                       output: 20, reasoning: 0))
         ])
         check("tokens with no model are kept, not dropped",
-              orphaned.models.count == 1 && orphaned.models.first?.tokens.total == 120,
+              orphaned.models.count == 1 && orphaned.models.first?.tokens.fresh == 120,
               "\(orphaned.models.count) entries")
         check("and are marked as having no model rather than filed under a guess",
               orphaned.models.first?.model == nil)
@@ -1380,11 +1380,11 @@ enum SelfTest {
         check("a named model is listed ahead of an unnamed one",
               UsageSummary.build(from: [
                   session(.codex, "o1", at: now,
-                          tokens: TokenUsage(input: 1, cachedInput: 0, output: 1,
-                                             reasoning: 0, total: 2)),
+                          tokens: TokenUsage(freshInput: 1, cachedInput: 0,
+                                             output: 1, reasoning: 0)),
                   session(.codex, "o3", at: now, model: "GPT 6 Astra",
-                          tokens: TokenUsage(input: 1, cachedInput: 0, output: 1,
-                                             reasoning: 0, total: 1))
+                          tokens: TokenUsage(freshInput: 1, cachedInput: 0,
+                                             output: 1, reasoning: 0))
               ]).models.first?.model == "GPT 6 Astra")
 
         // A snapshot describes the moment it was written, and says so.
@@ -1407,8 +1407,98 @@ enum SelfTest {
               TokenUsage.short(940) == "940" && TokenUsage.short(1500) == "1.5K"
                   && TokenUsage.short(18_563_412) == "18.6M",
               TokenUsage.short(18_563_412))
+        check("and billions do not become unreadable",
+              TokenUsage.short(2_448_305_098) == "2.4B",
+              TokenUsage.short(2_448_305_098))
         check("large counts drop the decimal",
               TokenUsage.short(812_000) == "812K", TokenUsage.short(812_000))
+
+        // ── Claude token totals, summed rather than sampled ────────────────
+        let ledgerDir = AppInfo.testDirectory.appendingPathComponent("ledger", isDirectory: true)
+        try? FileManager.default.createDirectory(at: ledgerDir, withIntermediateDirectories: true)
+        func assistant(input: Int, cacheWrite: Int, cacheRead: Int, output: Int,
+                       thinking: Int = 0) -> String {
+            // `iterations` repeats the same numbers. Counting it as well would
+            // double every figure — plausible-looking and wrong by exactly 2×.
+            #"{"type":"assistant","message":{"model":"claude-opus-5","usage":{"input_tokens":\#(input),"cache_creation_input_tokens":\#(cacheWrite),"cache_read_input_tokens":\#(cacheRead),"output_tokens":\#(output),"output_tokens_details":{"thinking_tokens":\#(thinking)},"iterations":[{"input_tokens":\#(input),"output_tokens":\#(output),"cache_read_input_tokens":\#(cacheRead)}]}}}"#
+        }
+        let noise = #"{"type":"user","message":{"content":"input_tokens output_tokens 999999"}}"#
+        let ledgerPath = ledgerDir.appendingPathComponent("claude.jsonl").path
+        func writeLedger(_ lines: [String], append: Bool = false) {
+            let text = lines.joined(separator: "\n") + "\n"
+            if append, let handle = FileHandle(forWritingAtPath: ledgerPath) {
+                _ = try? handle.seekToEnd()
+                handle.write(Data(text.utf8))
+                try? handle.close()
+            } else {
+                try? text.write(toFile: ledgerPath, atomically: true, encoding: .utf8)
+            }
+        }
+        writeLedger([
+            noise,
+            assistant(input: 10, cacheWrite: 90, cacheRead: 5000, output: 40, thinking: 7),
+            noise,
+            assistant(input: 5, cacheWrite: 0, cacheRead: 6000, output: 60)
+        ])
+        let ledger = SessionTokenLedger()
+        func size() -> Int {
+            (try? FileManager.default.attributesOfItem(atPath: ledgerPath)[.size] as? Int) ?? 0
+        }
+        let first = ledger.update(path: ledgerPath, size: size())
+        check("fresh input counts cache writes and not cache reads",
+              first?.freshInput == 105, "got \(first?.freshInput ?? -1)")
+        check("cache reads are counted apart",
+              first?.cachedInput == 11000, "got \(first?.cachedInput ?? -1)")
+        check("output is summed across messages",
+              first?.output == 100, "got \(first?.output ?? -1)")
+        check("thinking tokens are picked up from their own object",
+              first?.reasoning == 7, "got \(first?.reasoning ?? -1)")
+        check("the headline is what was actually consumed",
+              first?.fresh == 205, "got \(first?.fresh ?? -1)")
+        check("and the raw sum is available beside it",
+              first?.processed == 11205, "got \(first?.processed ?? -1)")
+        check("a user turn quoting the field names contributes nothing",
+              first?.freshInput == 105)
+
+        // Growing the file must cost only the new bytes, and must not recount
+        // what was already summed.
+        writeLedger([assistant(input: 1, cacheWrite: 0, cacheRead: 1, output: 2)],
+                    append: true)
+        let second = ledger.update(path: ledgerPath, size: size())
+        check("an appended message adds to the total rather than restarting it",
+              second?.fresh == 208, "got \(second?.fresh ?? -1)")
+        check("and nothing already counted is counted twice",
+              second?.cachedInput == 11001, "got \(second?.cachedInput ?? -1)")
+        let unchanged = ledger.update(path: ledgerPath, size: size())
+        check("re-reading an unchanged file changes nothing",
+              unchanged == second)
+
+        // A record still being written must not be counted short now and
+        // skipped once it is complete.
+        if let handle = FileHandle(forWritingAtPath: ledgerPath) {
+            _ = try? handle.seekToEnd()
+            handle.write(Data(#"{"type":"assistant","message":{"usa"#.utf8))
+            try? handle.close()
+        }
+        let torn = ledger.update(path: ledgerPath, size: size())
+        check("a half-written record is not counted", torn?.fresh == 208,
+              "got \(torn?.fresh ?? -1)")
+        writeLedger([#"ge":{"input_tokens":7,"output_tokens":3}}}"#], append: true)
+        let healed = ledger.update(path: ledgerPath, size: size())
+        check("and is counted once it is complete", healed?.fresh == 218,
+              "got \(healed?.fresh ?? -1)")
+
+        // A transcript that shrank is a different file, not one to add to.
+        writeLedger([assistant(input: 1, cacheWrite: 0, cacheRead: 0, output: 1)])
+        let rebuilt = ledger.update(path: ledgerPath, size: size())
+        check("a truncated transcript is resummed rather than added to",
+              rebuilt?.fresh == 2, "got \(rebuilt?.fresh ?? -1)")
+
+        ledger.clear()
+        check("switching labels off drops the totals", ledger.isEmpty)
+        check("a transcript that is not there yields nothing",
+              ledger.update(path: ledgerDir.appendingPathComponent("gone.jsonl").path,
+                            size: 100) == nil)
 
         // ── Getting to the app ─────────────────────────────────────────────
         for provider in SessionProvider.allCases {
@@ -1632,10 +1722,16 @@ enum SelfTest {
             exec(3, verb: "read")
         ])
         let usage = SessionDetailReader.read(path: metered, agent: .codex, depth: .richLabels)
-        check("a Codex session reports its token total",
-              usage.tokens?.total == 1200, "got \(usage.tokens?.total ?? -1)")
-        check("the newest count supersedes rather than adding to the last",
+        check("a Codex session reports its tokens",
               usage.tokens?.output == 100, "got \(usage.tokens?.output ?? -1)")
+        check("cached input is separated from fresh, not summed with it",
+              usage.tokens?.freshInput == 1200 - 100 - 40
+                  && usage.tokens?.cachedInput == 40,
+              "fresh \(usage.tokens?.freshInput ?? -1), "
+                  + "cached \(usage.tokens?.cachedInput ?? -1)")
+        check("the newest count supersedes rather than adding to the last",
+              usage.tokens?.fresh == (1200 - 100 - 40) + 100,
+              "got \(usage.tokens?.fresh ?? -1)")
         check("both rate-limit windows are read", usage.limits.count == 2,
               "got \(usage.limits.count)")
         check("the five-hour window is labelled as one",
@@ -1674,7 +1770,7 @@ enum SelfTest {
         check("a percentage beyond the bar is clamped to it",
               overrun.first?.usedPercent == 100)
         check("a non-numeric token field yields nothing rather than zero",
-              SessionDetailReader.tokenUsage(from: ["total_tokens": "lots"]) == nil)
+              SessionDetailReader.tokenUsage(from: ["output_tokens": "lots"]) == nil)
 
         // The first record in a Codex file carries the folder too, so a session
         // that has written only one turn is still named.

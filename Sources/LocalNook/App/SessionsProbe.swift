@@ -40,10 +40,15 @@ enum SessionsProbe {
         print("")
 
         let agents = SessionAgent.allCases
+        // Timed, because "how long does a scan cost" is exactly the kind of
+        // thing this tool exists to answer — the ledger reads whole
+        // transcripts, and the cost of that should never be a guess.
+        let started = Date()
         var scan: SessionScan?
         Task {
             scan = await SessionMonitor.scan(
-                agents: agents, depth: depth, cache: nil
+                agents: agents, depth: depth, cache: nil,
+                ledger: SessionTokenLedger()
             )
         }
         let deadline = Date().addingTimeInterval(20)
@@ -55,7 +60,9 @@ enum SessionsProbe {
             exit(2)
         }
 
+        let scanned = Date().timeIntervalSince(started)
         print("SCAN")
+        print(String(format: "  took %.2fs", scanned))
         print("  transcripts in the window: \(scan.stats.total)")
         print("  volume: \(SessionStats.volumeLabel(bytes: scan.stats.totalBytes))")
         print("  listed: \(scan.sessions.count)")
@@ -69,7 +76,7 @@ enum SessionsProbe {
             flags.append("model=\(detail.model ?? "none")")
             flags.append("activity=\(detail.activity.rawValue)")
             flags.append("step=\(detail.step == nil ? "no" : "yes")")
-            flags.append("tokens=\(detail.tokens.map { TokenUsage.short($0.total) } ?? "none")")
+            flags.append("tokens=\(detail.tokens.map { TokenUsage.short($0.fresh) } ?? "none")")
             flags.append("limits=\(detail.limits.count)")
             print("  \(session.agent.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0))"
                   + "\(Int(Date().timeIntervalSince(session.lastActivity)))s ago  "
@@ -83,8 +90,9 @@ enum SessionsProbe {
         for entry in usage.models {
             let tokens = entry.tokensUnreported
                 ? "not reported"
-                : "\(TokenUsage.short(entry.tokens.total)) total, "
-                    + "\(TokenUsage.short(entry.tokens.output)) out"
+                : "\(TokenUsage.short(entry.tokens.fresh)) fresh, "
+                    + "\(TokenUsage.short(entry.tokens.output)) out, "
+                    + "\(TokenUsage.short(entry.tokens.cachedInput)) cached"
             print("  \(entry.provider.rawValue)/\(entry.model ?? "model not recorded"): "
                   + "\(entry.sessions) session(s), \(tokens)")
         }
@@ -104,11 +112,14 @@ enum SessionsProbe {
         }
 
         print("")
+        let beforeApps = Date()
         print("APPS")
         for provider in SessionProvider.allCases {
             print("  \(provider.rawValue): "
                   + (AgentApplication.displayName(for: provider) ?? "not installed"))
         }
+        print(String(format: "  resolved in %.2fs", Date().timeIntervalSince(beforeApps)))
+        print(String(format: "\ntotal %.2fs", Date().timeIntervalSince(started)))
         exit(0)
     }
 }

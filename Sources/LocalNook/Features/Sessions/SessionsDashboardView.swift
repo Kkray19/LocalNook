@@ -635,7 +635,10 @@ private struct ModelUsageRow: View {
                           + "network requests.")
             } else {
                 VStack(alignment: .trailing, spacing: 0) {
-                    Text(TokenUsage.short(entry.tokens.total))
+                    // Fresh tokens, not the raw sum. Cache reads repeat the
+                    // whole conversation every turn, so the sum grows with
+                    // length rather than with use — see TokenUsage.
+                    Text(TokenUsage.short(entry.tokens.fresh))
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(Theme.primaryText)
@@ -644,8 +647,11 @@ private struct ModelUsageRow: View {
                         .monospacedDigit()
                         .foregroundStyle(Theme.quaternaryText)
                 }
-                .help("\(entry.tokens.input) in, \(entry.tokens.cachedInput) cached, "
-                      + "\(entry.tokens.output) out")
+                .help("\(entry.tokens.freshInput) new input and "
+                      + "\(entry.tokens.output) output. A further "
+                      + "\(entry.tokens.cachedInput) came from cache, which "
+                      + "re-counts the conversation every turn and is left out "
+                      + "of the headline.")
             }
         }
         .padding(.horizontal, 8)
