@@ -41,12 +41,12 @@ The widgets themselves:
 | **Timers** | Countdown, stopwatch and pomodoro, with notifications |
 | **Notes / To-Do** | Local, searchable, autosaving |
 | **Shortcuts** | Lists and runs your macOS Shortcuts; pin the ones you use |
-| **AI Sessions** | Which Claude Code / Codex sessions are working, and which have gone quiet |
+| **AI Sessions** | A page of its own: which Claude Code / Codex sessions are working and what they are doing, the folders they are in, tokens by model, and rate-limit windows — from what the agents write locally, never a network call |
 | **Stats** | Battery, memory and storage |
 
-> **Note:** NotchNook is currently installed and running on this Mac. It draws
-> its own notch UI, and LocalNook floats above it. They do not conflict, but
-> quit NotchNook if you want to see LocalNook's own appearance clearly.
+> **Note:** if NotchNook is installed, it draws its own notch UI and LocalNook
+> floats above it. They do not conflict, but quit NotchNook if you want to see
+> LocalNook's own appearance clearly.
 
 ## System requirements
 
