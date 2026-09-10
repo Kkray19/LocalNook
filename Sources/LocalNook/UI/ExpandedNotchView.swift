@@ -73,6 +73,9 @@ struct ExpandedNotchView: View {
                         withAnimation(NotchMotion.content) {
                             model.page = item
                             if item != .tools { model.focusedTool = nil }
+                            // Asking for Tools directly makes Tools the place
+                            // "back" returns to, whatever opened the tool.
+                            if item == .tools { model.focusedToolOrigin = .tools }
                         }
                     }
                 )
@@ -84,14 +87,17 @@ struct ExpandedNotchView: View {
         HStack(spacing: 10) {
             if model.page == .tools, model.focusedTool != nil {
                 Button {
-                    withAnimation(NotchMotion.content) { model.focusedTool = nil }
+                    withAnimation(NotchMotion.content) {
+                        model.focusedTool = nil
+                        model.page = model.focusedToolOrigin
+                    }
                 } label: {
                     Image(systemName: "chevron.backward")
                         .font(.system(size: 10, weight: .semibold))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.secondaryText)
-                .help("Back to Tools")
+                .help("Back to \(model.focusedToolOrigin.label)")
             }
 
             Button {

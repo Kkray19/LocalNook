@@ -1,0 +1,177 @@
+//
+//  SessionStats.swift
+//  LocalNook
+//
+//  Copyright (C) 2026 Krish Kowli
+//  Licensed under the GNU General Public License v3.0 or later. See LICENSE.
+//
+//  Aggregates over agent sessions, for the AI Sessions dashboard.
+//
+//  Everything here is derived from three pieces of file metadata — path,
+//  modification date and size — which is the same boundary SessionMonitor
+//  already works inside. Nothing in this file opens a transcript.
+//
+//  ── What these numbers do and do not mean ───────────────────────────────────
+//
+//  A transcript's modification date says when it was *last written*, and its
+//  size says how much has been written to it in total. Neither is a record of
+//  when a session ran. So:
+//
+//    * `perDay` counts sessions by the day they were last written. A session
+//      started on Monday and last written on Thursday counts once, on Thursday.
+//      It is a "what have I touched lately" chart, not a history of work — and
+//      the label above it in the UI says "last active" for that reason.
+//    * `totalBytes` is transcript volume, which correlates with how much was
+//      said but is not a token count, a cost, or a measure of work done. It is
+//      presented as what it is: bytes on disk.
+//
+//  These limits are inherent to metadata. Producing a genuine history would
+//  mean either persisting observations (a record of your agent use, on disk,
+//  which this app deliberately does not keep) or reading transcript bodies far
+//  more widely than SessionDetail's four named fields.
+//
+
+import Foundation
+
+/// Counts across every transcript the scan found — including the ones beyond
+/// the display cap, so "this week" is not silently the top thirty.
+nonisolated struct SessionStats: Equatable, Sendable {
+    /// How many days `perDay` covers. The scan window is seven days.
+    static let dayBuckets = 7
+
+    var total = 0
+    var totalBytes = 0
+    var perAgent: [SessionAgent: Int] = [:]
+    var bytesPerAgent: [SessionAgent: Int] = [:]
+    /// Sessions by the day they were last written. Index 0 is today.
+    var perDay: [Int] = Array(repeating: 0, count: SessionStats.dayBuckets)
+
+    var isEmpty: Bool { total == 0 }
+
+    /// The busiest of the seven days, for scaling the chart. Never zero, so a
+    /// day with one session does not draw a full-height bar.
+    var peakDay: Int { max(1, perDay.max() ?? 1) }
+
+    static func tally(
+        _ sessions: [AgentSession],
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> SessionStats {
+        var stats = SessionStats()
+        let today = calendar.startOfDay(for: now)
+
+        for session in sessions {
+            stats.total += 1
+            stats.totalBytes += session.byteSize
+            stats.perAgent[session.agent, default: 0] += 1
+            stats.bytesPerAgent[session.agent, default: 0] += session.byteSize
+
+            let day = calendar.startOfDay(for: session.lastActivity)
+            guard let offset = calendar.dateComponents([.day], from: day, to: today).day,
+                  offset >= 0, offset < dayBuckets
+            else { continue }
+            stats.perDay[offset] += 1
+        }
+        return stats
+    }
+
+    /// Single-letter weekday headings for the seven buckets, newest first, so
+    /// the chart can be drawn oldest-to-newest by reversing both together.
+    static func dayInitials(now: Date = Date(), calendar: Calendar = .current) -> [String] {
+        let symbols = calendar.veryShortWeekdaySymbols
+        guard symbols.count == 7 else { return Array(repeating: "", count: dayBuckets) }
+        return (0..<dayBuckets).map { offset in
+            guard let date = calendar.date(byAdding: .day, value: -offset, to: now) else { return "" }
+            // `weekday` is 1-based and `veryShortWeekdaySymbols` starts at
+            // Sunday whatever the locale's first day of the week is.
+            return symbols[calendar.component(.weekday, from: date) - 1]
+        }
+    }
+
+    /// Bytes as a short label. Deliberately not `ByteCountFormatter`: this is
+    /// asserted by the suite, and a formatter that changes with the locale and
+    /// the OS release cannot be.
+    static func volumeLabel(bytes: Int) -> String {
+        let value = Double(max(0, bytes))
+        let kilobyte = 1024.0
+        let megabyte = kilobyte * 1024
+        let gigabyte = megabyte * 1024
+        if value < kilobyte { return "\(Int(value)) B" }
+        if value < megabyte { return scaled(value / kilobyte, "KB") }
+        if value < gigabyte { return scaled(value / megabyte, "MB") }
+        return scaled(value / gigabyte, "GB")
+    }
+
+    /// One decimal place below ten, none above: "4.2 MB", "41 MB".
+    private static func scaled(_ value: Double, _ suffix: String) -> String {
+        value >= 10
+            ? "\(Int(value.rounded())) \(suffix)"
+            : String(format: "%.1f %@", value, suffix)
+    }
+}
+
+/// One working folder, and what has been happening in it.
+nonisolated struct ProjectTally: Identifiable, Equatable, Sendable {
+    var name: String
+    var sessions: Int
+    var active: Int
+    var lastActivity: Date
+
+    var id: String { name }
+}
+
+/// Projects, plus how many sessions could not be attributed to one.
+///
+/// The unattributed count is carried rather than dropped: a Codex session whose
+/// working directory has not been read is not "no project", it is "project
+/// unknown", and a list that quietly omits it would under-count the week.
+nonisolated struct ProjectBreakdown: Equatable, Sendable {
+    var projects: [ProjectTally] = []
+    var unattributed = 0
+
+    var isEmpty: Bool { projects.isEmpty && unattributed == 0 }
+
+    static func build(
+        from sessions: [AgentSession],
+        now: Date = Date()
+    ) -> ProjectBreakdown {
+        var byName: [String: ProjectTally] = [:]
+        var unattributed = 0
+
+        for session in sessions {
+            guard let name = session.projectLabel else {
+                unattributed += 1
+                continue
+            }
+            var tally = byName[name] ?? ProjectTally(
+                name: name, sessions: 0, active: 0, lastActivity: session.lastActivity
+            )
+            tally.sessions += 1
+            if session.isActive { tally.active += 1 }
+            tally.lastActivity = max(tally.lastActivity, session.lastActivity)
+            byName[name] = tally
+        }
+
+        let sorted = byName.values.sorted {
+            if $0.sessions != $1.sessions { return $0.sessions > $1.sessions }
+            return $0.lastActivity > $1.lastActivity
+        }
+        return ProjectBreakdown(projects: sorted, unattributed: unattributed)
+    }
+}
+
+extension AgentSession {
+    /// The working folder this session belongs to, where it is known.
+    ///
+    /// Claude Code encodes the directory in its transcript path, so it is known
+    /// from metadata alone. Codex groups its files by date instead, so its
+    /// folder is only known when transcript labels are switched on and the
+    /// `cwd` field has been read — absent otherwise, rather than guessed from
+    /// the timestamp the path does carry.
+    nonisolated var projectLabel: String? {
+        switch agent {
+        case .claudeCode: projectName
+        case .codex: detail.title
+        }
+    }
+}

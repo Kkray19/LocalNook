@@ -452,7 +452,29 @@ struct CompactSessionsView: View {
     @ObservedObject var model: NotchViewModel
     @ObservedObject private var monitor = SessionMonitor.shared
 
+    @LNState private var isHovering = false
+
+    /// The column is a doorway, not just a readout.
+    ///
+    /// Three truncated lines is all this width holds. Everything the column has
+    /// to leave out — counts for the week, the folders in play, transcript
+    /// volume, and rows wide enough to finish a sentence — is one click away in
+    /// SessionsDashboardView, so the section itself opens it.
     var body: some View {
+        Button {
+            withAnimation(NotchMotion.content) { model.focus(.sessions, from: .dashboard) }
+        } label: {
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in withAnimation(NotchMotion.quick) { isHovering = hovering } }
+        .help("Open the AI Sessions dashboard")
+        .accessibilityLabel("Open the AI Sessions dashboard")
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 Circle()
@@ -462,6 +484,13 @@ struct CompactSessionsView: View {
                     .font(Theme.sectionTitle)
                     .foregroundStyle(Theme.tertiaryText)
                     .textCase(.uppercase)
+                Spacer(minLength: 4)
+                // Appears on hover only: a permanent chevron on one of five
+                // columns would imply the others do nothing.
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Theme.tertiaryText)
+                    .opacity(isHovering ? 1 : 0)
             }
             if monitor.sessions.isEmpty {
                 Text("None recently")

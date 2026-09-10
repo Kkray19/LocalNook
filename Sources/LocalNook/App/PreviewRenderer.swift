@@ -43,6 +43,7 @@ enum PreviewRenderer {
             ("dashboard-browser-audio", true, .media),
             ("dashboard-browser-ambiguous", true, .media),
             ("dashboard-browser-page", true, .media),
+            ("sessions-dashboard", true, .sessions),
             ("tray-populated", true, .shelf),
             ("tools", true, .timers),
             ("tray-drag-target", true, .shelf),
@@ -95,6 +96,47 @@ enum PreviewRenderer {
                     capabilities: [.playbackState, .position, .playPause, .seek]
                 ))
                 model.page = .dashboard
+            } else if scene.name == "sessions-dashboard" {
+                // Invented sessions, for the same reason as the badge scenes
+                // below: the renderer must not open a transcript, so nothing
+                // here came from one.
+                func staged(
+                    _ agent: SessionAgent, _ id: String, _ project: String,
+                    secondsAgo: TimeInterval, bytes: Int,
+                    model modelName: String? = nil, effort: String? = nil,
+                    title: String? = nil, step: String? = nil
+                ) -> AgentSession {
+                    var value = AgentSession(
+                        id: id, agent: agent, projectName: project,
+                        lastActivity: Date().addingTimeInterval(-secondsAgo), byteSize: bytes
+                    )
+                    value.detail.model = modelName
+                    value.detail.effort = effort
+                    value.detail.title = title
+                    value.detail.step = step
+                    value.detail.activity = step == nil ? .recent : .working
+                    value.detail.wasNotRead = false
+                    return value
+                }
+                let staging = [
+                    staged(.claudeCode, "1", "LedgerApp", secondsAgo: 4, bytes: 3_400_000,
+                           model: "Opus 5", effort: "xhigh", title: "Statement importer",
+                           step: "Running the test suite"),
+                    staged(.codex, "2", "2026-09-09T14", secondsAgo: 22, bytes: 812_000,
+                           model: "GPT 6 Astra", effort: "high", title: "LedgerApp",
+                           step: "Reading a file"),
+                    staged(.claudeCode, "3", "Notch", secondsAgo: 640, bytes: 41_000_000,
+                           model: "Opus 5", effort: "high", title: "Opening animation"),
+                    staged(.claudeCode, "4", "Notch", secondsAgo: 5400, bytes: 96_000,
+                           model: "Sonnet 5"),
+                    staged(.codex, "5", "2026-09-08T09", secondsAgo: 90_000, bytes: 210_000),
+                ]
+                SessionMonitor.shared.previewInject(
+                    staging, stats: SessionStats.tally(staging)
+                )
+                model.page = .tools
+                model.focusedTool = .sessions
+                model.focusedToolOrigin = .dashboard
             } else if scene.name == "tray-populated" {
                 model.page = .tray
             } else if scene.name == "tray-drag-target" {

@@ -140,8 +140,13 @@ private struct OverflowControl: View {
     var body: some View {
         Button {
             withAnimation(NotchMotion.content) {
-                model.page = .tools
-                model.focusedTool = hidden.count == 1 ? hidden[0] : nil
+                if hidden.count == 1 {
+                    model.focus(hidden[0], from: .dashboard)
+                } else {
+                    model.page = .tools
+                    model.focusedTool = nil
+                    model.focusedToolOrigin = .dashboard
+                }
             }
         } label: {
             VStack(spacing: 4) {

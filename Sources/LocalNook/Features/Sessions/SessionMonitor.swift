@@ -87,7 +87,11 @@ nonisolated enum SessionAgent: String, CaseIterable, Identifiable {
 }
 
 /// One transcript file, described purely by its metadata.
-struct AgentSession: Identifiable, Equatable, Sendable {
+///
+/// `nonisolated` because the scan runs off the main actor and the aggregates in
+/// SessionStats are computed there, on the full result set, before the display
+/// cap is applied.
+nonisolated struct AgentSession: Identifiable, Equatable, Sendable {
     let id: String
     let agent: SessionAgent
     let projectName: String
@@ -123,6 +127,13 @@ struct AgentSession: Identifiable, Equatable, Sendable {
     }
 }
 
+/// What one scan produced: the sessions worth showing, and counts over every
+/// transcript found.
+nonisolated struct SessionScan: Sendable {
+    var sessions: [AgentSession] = []
+    var stats = SessionStats()
+}
+
 /// Tracks agent sessions by watching their transcript directories.
 ///
 /// Uses `DispatchSource` file-system events rather than a polling timer, so an
@@ -132,6 +143,9 @@ final class SessionMonitor: ObservableObject {
     static let shared = SessionMonitor()
 
     @Published private(set) var sessions: [AgentSession] = []
+    /// Counts across every transcript the scan found, not just the ones kept
+    /// for display. See SessionStats for what they do and do not mean.
+    @Published private(set) var stats = SessionStats()
     @Published private(set) var isWatching = false
 
     private var watchers: [SessionAgent: DirectoryWatcher] = [:]
@@ -171,6 +185,17 @@ final class SessionMonitor: ObservableObject {
             copy.detail = SessionDetail()
             return copy
         }
+    }
+
+    /// Used only by `--render-preview`, to stage sessions for a screenshot.
+    ///
+    /// Guarded on the same flag that stops `start()` pointing at the user's
+    /// real transcript folders, so this cannot put invented sessions in front
+    /// of someone running the app for real.
+    func previewInject(_ sessions: [AgentSession], stats: SessionStats) {
+        guard AppInfo.forbidsTranscriptReads else { return }
+        self.sessions = sessions
+        self.stats = stats
     }
 
     var activeSessions: [AgentSession] { sessions.filter(\.isActive) }
@@ -251,10 +276,12 @@ final class SessionMonitor: ObservableObject {
             : Settings.shared.sessionLabelDepth
         let cache = detailCache
         Task { [weak self] in
-            let found = await Self.scan(agents: agents, depth: depth, cache: cache)
+            let scan = await Self.scan(agents: agents, depth: depth, cache: cache)
             guard let self, self.running, self.scanGeneration == generation else { return }
+            let found = scan.sessions
             let previous = self.previouslyActive
             self.sessions = found
+            self.stats = scan.stats
 
             let nowActive = Set(found.filter(\.isActive).map(\.id))
             // A session that was working and has now gone quiet is the moment
@@ -280,7 +307,7 @@ final class SessionMonitor: ObservableObject {
         roots: [SessionAgent: URL] = [:],
         depth: SessionLabelDepth = .metadataOnly,
         cache: SessionDetailCache? = nil
-    ) async -> [AgentSession] {
+    ) async -> SessionScan {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 var results: [AgentSession] = []
@@ -316,6 +343,9 @@ final class SessionMonitor: ObservableObject {
                 }
 
                 results.sort { $0.lastActivity > $1.lastActivity }
+                // Tallied before the display cap, so "this week" counts the
+                // week rather than the top thirty.
+                let stats = SessionStats.tally(results)
                 var recent = Array(results.prefix(30))
 
                 // Only the handful that could actually be shown are opened, and
@@ -347,7 +377,7 @@ final class SessionMonitor: ObservableObject {
                                      modified: session.lastActivity)
                     }
                 }
-                continuation.resume(returning: recent)
+                continuation.resume(returning: SessionScan(sessions: recent, stats: stats))
             }
         }
     }

@@ -102,6 +102,7 @@ enum SelfTest {
             testTrayWithRealFiles()
             testSurfaceOpacity()
             testCodexSessions()
+            testSessionsDashboard()
             testOpeningMotion()
             testHoverAttribution()
             testBrowserMedia()
@@ -1221,6 +1222,200 @@ enum SelfTest {
               settings.glassWhenCollapsed
                   || !NotchSurface.usesGlass(settings: settings, isOpen: false,
                                              hasPhysicalNotch: true))
+    }
+
+    /// The AI Sessions dashboard: the aggregates behind it, and the order its
+    /// regions give way at narrow widths.
+    ///
+    /// Entirely synthetic. Every session below is a value built here — nothing
+    /// reads the machine's own transcript folders, and nothing opens a file.
+    private static func testSessionsDashboard() {
+        section("Sessions dashboard")
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        // A fixed instant, so the day buckets cannot depend on when the suite
+        // happens to run.
+        let now = Date(timeIntervalSince1970: 1_788_000_000)
+        func daysAgo(_ days: Double, hour: Double = 0) -> Date {
+            now.addingTimeInterval(-(days * 86400) + hour * 3600)
+        }
+        func session(
+            _ agent: SessionAgent, _ id: String, at date: Date,
+            bytes: Int = 1000, project: String = "p", title: String? = nil
+        ) -> AgentSession {
+            var value = AgentSession(id: id, agent: agent, projectName: project,
+                                     lastActivity: date, byteSize: bytes)
+            if let title { value.detail.title = title }
+            return value
+        }
+
+        // ── Counts ─────────────────────────────────────────────────────────
+        let week = [
+            session(.claudeCode, "1", at: now, bytes: 2048),
+            session(.claudeCode, "2", at: daysAgo(0, hour: -3), bytes: 1024),
+            session(.codex, "3", at: daysAgo(1), bytes: 4096),
+            session(.codex, "4", at: daysAgo(6, hour: 1), bytes: 8),
+            // Outside the seven-day window, so it counts in the totals the
+            // scan already accepted but lands in no bucket.
+            session(.claudeCode, "5", at: daysAgo(9), bytes: 16)
+        ]
+        let stats = SessionStats.tally(week, now: now, calendar: calendar)
+        check("every session found is counted", stats.total == 5, "got \(stats.total)")
+        check("volume adds up", stats.totalBytes == 2048 + 1024 + 4096 + 8 + 16,
+              "got \(stats.totalBytes)")
+        check("sessions are counted per agent",
+              stats.perAgent[.claudeCode] == 3 && stats.perAgent[.codex] == 2,
+              "claude \(stats.perAgent[.claudeCode] ?? -1), codex \(stats.perAgent[.codex] ?? -1)")
+        check("bytes are counted per agent",
+              stats.bytesPerAgent[.claudeCode] == 2048 + 1024 + 16
+                  && stats.bytesPerAgent[.codex] == 4096 + 8)
+        check("two sessions last written today share today's bucket",
+              stats.perDay[0] == 2, "got \(stats.perDay[0])")
+        check("yesterday is its own bucket", stats.perDay[1] == 1, "got \(stats.perDay[1])")
+        check("six days ago is the oldest bucket", stats.perDay[6] == 1,
+              "got \(stats.perDay[6])")
+        check("older than the chart lands in no bucket",
+              stats.perDay.reduce(0, +) == 4, "buckets hold \(stats.perDay.reduce(0, +))")
+        check("the chart covers a week", stats.perDay.count == SessionStats.dayBuckets)
+
+        // A clock adjustment must not put a session in a bucket that is not
+        // there, and must not crash the chart either.
+        let future = SessionStats.tally(
+            [session(.codex, "f", at: now.addingTimeInterval(86400))],
+            now: now, calendar: calendar
+        )
+        check("a session dated in the future is counted but not charted",
+              future.total == 1 && future.perDay.reduce(0, +) == 0)
+
+        check("an empty week draws no full-height bar", SessionStats().peakDay == 1)
+        check("the tallest bar sets the scale", stats.peakDay == 2, "got \(stats.peakDay)")
+        check("nothing found is reported as nothing", SessionStats().isEmpty)
+
+        let initials = SessionStats.dayInitials(now: now, calendar: calendar)
+        check("the chart is labelled for seven days", initials.count == SessionStats.dayBuckets)
+        check("the first label is today's",
+              initials.first == calendar.veryShortWeekdaySymbols[
+                  calendar.component(.weekday, from: now) - 1
+              ], "got \(initials.first ?? "nil")")
+        // Not "seven distinct letters": most locales abbreviate Tuesday and
+        // Thursday to the same one. What matters is that each label belongs to
+        // the day its bar counts.
+        var labelsMatchTheirDays = true
+        for offset in 0..<SessionStats.dayBuckets {
+            guard let date = calendar.date(byAdding: .day, value: -offset, to: now) else {
+                labelsMatchTheirDays = false
+                continue
+            }
+            let expected = calendar.veryShortWeekdaySymbols[
+                calendar.component(.weekday, from: date) - 1
+            ]
+            if initials[offset] != expected { labelsMatchTheirDays = false }
+        }
+        check("each label belongs to the day its bar counts", labelsMatchTheirDays,
+              initials.joined(separator: " "))
+
+        // ── Volume reads as a size, at every scale ─────────────────────────
+        check("zero bytes", SessionStats.volumeLabel(bytes: 0) == "0 B")
+        check("bytes stay bytes", SessionStats.volumeLabel(bytes: 512) == "512 B")
+        check("a kilobyte is one decimal", SessionStats.volumeLabel(bytes: 1024) == "1.0 KB",
+              SessionStats.volumeLabel(bytes: 1024))
+        check("and so is one and a half", SessionStats.volumeLabel(bytes: 1536) == "1.5 KB",
+              SessionStats.volumeLabel(bytes: 1536))
+        check("ten and over drop the decimal",
+              SessionStats.volumeLabel(bytes: 10 * 1024) == "10 KB",
+              SessionStats.volumeLabel(bytes: 10 * 1024))
+        check("megabytes", SessionStats.volumeLabel(bytes: 4 * 1024 * 1024 + 200_000) == "4.2 MB",
+              SessionStats.volumeLabel(bytes: 4 * 1024 * 1024 + 200_000))
+        check("gigabytes", SessionStats.volumeLabel(bytes: 3 * 1024 * 1024 * 1024) == "3.0 GB",
+              SessionStats.volumeLabel(bytes: 3 * 1024 * 1024 * 1024))
+        check("a negative size is not rendered as one",
+              SessionStats.volumeLabel(bytes: -5) == "0 B")
+
+        // ── Projects ───────────────────────────────────────────────────────
+        let live = Date()
+        let quiet = live.addingTimeInterval(-3600)
+        let sessions = [
+            session(.claudeCode, "a", at: live, project: "LedgerApp"),
+            session(.claudeCode, "b", at: quiet, project: "LedgerApp"),
+            session(.claudeCode, "c", at: quiet, project: "Notch"),
+            // Codex knows its folder only once labels are read.
+            session(.codex, "d", at: live, project: "2026-09-08T00", title: "LedgerApp"),
+            session(.codex, "e", at: quiet, project: "2026-09-08T01")
+        ]
+        let breakdown = ProjectBreakdown.build(from: sessions)
+        check("folders are grouped across agents",
+              breakdown.projects.first?.name == "LedgerApp"
+                  && breakdown.projects.first?.sessions == 3,
+              "got \(breakdown.projects.first?.name ?? "nil") "
+                  + "× \(breakdown.projects.first?.sessions ?? -1)")
+        check("the busiest folder comes first",
+              breakdown.projects.map(\.name) == ["LedgerApp", "Notch"],
+              breakdown.projects.map(\.name).joined(separator: ", "))
+        check("live sessions are counted per folder",
+              breakdown.projects.first?.active == 2, "got \(breakdown.projects.first?.active ?? -1)")
+        check("a folder's time is its most recent session's",
+              breakdown.projects.first?.lastActivity == live)
+        check("a session with no known folder is counted, not dropped",
+              breakdown.unattributed == 1, "got \(breakdown.unattributed)")
+        check("nothing at all is empty", ProjectBreakdown.build(from: []).isEmpty)
+
+        check("a Claude session's folder comes from its path",
+              sessions[0].projectLabel == "LedgerApp")
+        check("a Codex session's folder comes from the field that holds one",
+              sessions[3].projectLabel == "LedgerApp")
+        check("and is absent rather than a timestamp when unread",
+              sessions[4].projectLabel == nil,
+              sessions[4].projectLabel ?? "nil")
+
+        // ── Narrowing ──────────────────────────────────────────────────────
+        let wide = SessionsDashboardLayout.plan(width: 660)
+        check("the default panel shows every region",
+              wide.showsSummary && wide.showsActivity)
+        let medium = SessionsDashboardLayout.plan(width: 460)
+        check("the chart is the first thing to go",
+              medium.showsSummary && !medium.showsActivity)
+        let narrow = SessionsDashboardLayout.plan(width: 300)
+        check("the counts go next", !narrow.showsSummary && !narrow.showsActivity)
+
+        // The invariant the whole layout exists for: the list is never the
+        // thing that gets dropped, so no width can hide the sessions.
+        var listAlwaysFits = true
+        for width in stride(from: 200.0, through: 1400.0, by: 5.0) {
+            let plan = SessionsDashboardLayout.plan(width: CGFloat(width))
+            var used: CGFloat = 0
+            if plan.showsSummary {
+                used += SessionsDashboardLayout.summaryWidth
+                    + SessionsDashboardLayout.railGap * 2 + 1
+            }
+            if plan.showsActivity {
+                used += SessionsDashboardLayout.activityWidth
+                    + SessionsDashboardLayout.railGap * 2 + 1
+            }
+            if CGFloat(width) - used < SessionsDashboardLayout.minimumListWidth,
+               plan.showsSummary || plan.showsActivity {
+                listAlwaysFits = false
+            }
+        }
+        check("no width squeezes the session list out", listAlwaysFits)
+        check("a region never returns as the panel narrows",
+              !SessionsDashboardLayout.plan(width: 400).showsActivity
+                  && !SessionsDashboardLayout.plan(width: 240).showsSummary)
+
+        // ── Getting there and back ─────────────────────────────────────────
+        let model = NotchViewModel(screenID: nil)
+        model.page = .dashboard
+        model.focus(.sessions, from: .dashboard)
+        check("clicking the AI Sessions column opens it full size",
+              model.page == .tools && model.focusedTool == .sessions)
+        check("and remembers where it was opened from",
+              model.focusedToolOrigin == .dashboard)
+        model.focusedTool = nil
+        model.page = model.focusedToolOrigin
+        check("so leaving it returns to the Dashboard", model.page == .dashboard)
+        model.focus(.notes, from: .tools)
+        check("a tool opened from Tools still goes back to Tools",
+              model.focusedToolOrigin == .tools)
     }
 
     /// Codex sessions, the provider badge, and the trailing indicator.

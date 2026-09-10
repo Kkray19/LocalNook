@@ -23,8 +23,13 @@ final class NotchViewModel: ObservableObject {
     @Published private(set) var state: NotchState = .closed
     /// Which top-level page the expanded notch is showing.
     @Published var page: NotchPage = .dashboard
-    /// Set when a tool has been opened from the Tools page.
+    /// Set when a tool has been opened at full size.
     @Published var focusedTool: WidgetKind?
+    /// Which page that happened from, so leaving the tool goes back where the
+    /// user came from. A section opened from the Dashboard that returned to the
+    /// Tools grid would leave them somewhere they had never been — and, for a
+    /// section that is *on* the Dashboard, on a page that does not list it.
+    @Published var focusedToolOrigin: NotchPage = .tools
     /// Retained so drag-to-shelf can still target the Tray directly.
     @Published var selectedWidget: WidgetKind = .media
     @Published var isHovering: Bool = false
@@ -104,6 +109,13 @@ final class NotchViewModel: ObservableObject {
     /// notification because the ordering is the entire point: this has to run
     /// inside `open()`, not a runloop turn later. Nil for a detached model.
     var willOpen: ((NotchViewModel) -> Void)?
+
+    /// Opens one widget at full size, remembering where from.
+    func focus(_ tool: WidgetKind, from page: NotchPage) {
+        focusedToolOrigin = page
+        focusedTool = tool
+        self.page = .tools
+    }
 
     func open(source: NotchTransitionSource = .programmatic) {
         cancelPending()

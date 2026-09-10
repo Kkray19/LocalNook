@@ -137,12 +137,27 @@ enum StabilizationTests {
             let file = sessions.appendingPathComponent("malformed.jsonl")
             try! Data([0xff, 0x00, 0xfe]).write(to: file)
             let result = await SessionMonitor.scan(agents: [.codex], roots: [.codex: root.appendingPathComponent("sessions")])
-            check("nested malformed transcript uses only file metadata", result.count == 1 && result[0].byteSize == 3, "")
+            check("nested malformed transcript uses only file metadata", result.sessions.count == 1 && result.sessions[0].byteSize == 3, "")
             try! FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-8 * 86400)], ofItemAtPath: file.path)
             let stale = await SessionMonitor.scan(agents: [.codex], roots: [.codex: root.appendingPathComponent("sessions")])
-            check("stale transcript is excluded", stale.isEmpty, "")
+            check("stale transcript is excluded", stale.sessions.isEmpty && stale.stats.isEmpty, "")
             let absent = await SessionMonitor.scan(agents: [.codex], roots: [.codex: root.appendingPathComponent("absent")])
-            check("missing session folder is safe", absent.isEmpty, "")
+            check("missing session folder is safe", absent.sessions.isEmpty, "")
+            // The dashboard's "Week" count is taken before the display cap. If
+            // it were taken after, a busy week would read as exactly thirty
+            // sessions forever, which looks like a number and is not one.
+            let many = root.appendingPathComponent("many")
+            try! FileManager.default.createDirectory(at: many, withIntermediateDirectories: true)
+            for index in 0..<33 {
+                try! Data(repeating: 0x20, count: 100)
+                    .write(to: many.appendingPathComponent("s\(index).jsonl"))
+            }
+            let capped = await SessionMonitor.scan(agents: [.codex], roots: [.codex: many])
+            check("the list is capped for display",
+                  capped.sessions.count == 30, "\(capped.sessions.count)")
+            check("the week is counted before the cap",
+                  capped.stats.total == 33 && capped.stats.totalBytes == 3300,
+                  "\(capped.stats.total) sessions, \(capped.stats.totalBytes) bytes")
             completed = true
         }
         let deadline = Date().addingTimeInterval(15)

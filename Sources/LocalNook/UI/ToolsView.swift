@@ -98,12 +98,21 @@ private struct ToolTile: View {
 struct FocusedToolView: View {
     let tool: WidgetKind
 
+    /// Sections that title themselves.
+    ///
+    /// The panel is about 120pt tall inside the shoulders, and a title on its
+    /// own line costs a fifth of that. A section dense enough to need the
+    /// height puts its name on a row it was drawing anyway.
+    private var drawsOwnTitle: Bool { tool == .sessions }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(tool.label)
-                .font(Theme.sectionTitle)
-                .foregroundStyle(Theme.tertiaryText)
-                .textCase(.uppercase)
+            if !drawsOwnTitle {
+                Text(tool.label)
+                    .font(Theme.sectionTitle)
+                    .foregroundStyle(Theme.tertiaryText)
+                    .textCase(.uppercase)
+            }
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
@@ -119,7 +128,7 @@ struct FocusedToolView: View {
         case .notes: NotesWidgetView()
         case .todo: TodoWidgetView()
         case .shortcuts: ShortcutsWidgetView()
-        case .sessions: SessionsWidgetView()
+        case .sessions: SessionsDashboardView()
         case .stats: StatsWidgetView()
         }
     }
