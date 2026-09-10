@@ -54,6 +54,13 @@ if CommandLine.arguments.contains("--media-probe") {
     MediaProbe.run()
 }
 
+// Development aid: what the session reader gets out of the real transcripts.
+// Numbers and flags only — never a chat name, a step or a folder. See
+// SessionsProbe.
+if CommandLine.arguments.contains("--sessions-probe") {
+    SessionsProbe.run()
+}
+
 if CommandLine.arguments.contains("--self-test") {
     SelfTest.run()
 }

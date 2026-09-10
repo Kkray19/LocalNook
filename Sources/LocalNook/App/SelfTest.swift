@@ -1345,8 +1345,8 @@ enum SelfTest {
               "got \(summary.models.first?.model ?? "nil") "
                   + "\(summary.models.first?.tokens.total ?? -1)")
         check("a model that reports tokens outranks one that cannot",
-              summary.models.map(\.model) == ["GPT 6 Astra", "Opus 5", "Sonnet 5"],
-              summary.models.map(\.model).joined(separator: ", "))
+              summary.models.compactMap(\.model) == ["GPT 6 Astra", "Opus 5", "Sonnet 5"],
+              summary.models.compactMap(\.model).joined(separator: ", "))
         check("a model with no reported tokens says so rather than showing zero",
               summary.models.first { $0.model == "Opus 5" }?.tokensUnreported == true)
         check("and is still counted by session",
@@ -1362,6 +1362,30 @@ enum SelfTest {
         check("a maker that does publish them is not in that list",
               !summary.providersWithoutLimits.contains(.openAI))
         check("nothing at all is empty", UsageSummary.build(from: []).isEmpty)
+
+        // Real tokens whose model was outside the window LocalNook reads.
+        // Losing them would understate the figure without saying so.
+        let orphaned = UsageSummary.build(from: [
+            session(.codex, "o1", at: now,
+                    tokens: TokenUsage(input: 100, cachedInput: 0, output: 20,
+                                       reasoning: 0, total: 120))
+        ])
+        check("tokens with no model are kept, not dropped",
+              orphaned.models.count == 1 && orphaned.models.first?.tokens.total == 120,
+              "\(orphaned.models.count) entries")
+        check("and are marked as having no model rather than filed under a guess",
+              orphaned.models.first?.model == nil)
+        check("a session with neither a model nor tokens adds no row",
+              UsageSummary.build(from: [session(.codex, "o2", at: now)]).models.isEmpty)
+        check("a named model is listed ahead of an unnamed one",
+              UsageSummary.build(from: [
+                  session(.codex, "o1", at: now,
+                          tokens: TokenUsage(input: 1, cachedInput: 0, output: 1,
+                                             reasoning: 0, total: 2)),
+                  session(.codex, "o3", at: now, model: "GPT 6 Astra",
+                          tokens: TokenUsage(input: 1, cachedInput: 0, output: 1,
+                                             reasoning: 0, total: 1))
+              ]).models.first?.model == "GPT 6 Astra")
 
         // A snapshot describes the moment it was written, and says so.
         let stale = window(.openAI, 300, 90, observed: now.addingTimeInterval(-3600),
@@ -1651,6 +1675,16 @@ enum SelfTest {
               overrun.first?.usedPercent == 100)
         check("a non-numeric token field yields nothing rather than zero",
               SessionDetailReader.tokenUsage(from: ["total_tokens": "lots"]) == nil)
+
+        // The first record in a Codex file carries the folder too, so a session
+        // that has written only one turn is still named.
+        let metaOnly = write("meta-only.jsonl", [
+            #"{"type":"session_meta","timestamp":"\#(stamp(60))","payload":{"cwd":"/Users/someone/Developer/LedgerApp","cli_version":"1.0"}}"#,
+            exec(3, verb: "read")
+        ])
+        check("a Codex session is named from its opening record when there is no turn",
+              SessionDetailReader.read(path: metaOnly, agent: .codex,
+                                       depth: .richLabels).title == "LedgerApp")
 
         // The fallback is a second place to look, not a licence to invent one.
         let noContext = write("no-context.jsonl", [started, exec(3, verb: "read")])

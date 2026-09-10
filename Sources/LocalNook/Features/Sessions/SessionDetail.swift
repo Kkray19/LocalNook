@@ -321,8 +321,11 @@ nonisolated enum SessionDetailReader {
         // naming it after the time of day.
         if detail.title == nil {
             for line in lines(atPath: path, window: headWindow, fromEnd: false) {
+                // `session_meta` is the first record in the file and carries
+                // the directory too, so this finds one even for a session that
+                // has not yet written a second turn.
                 guard let object = json(line),
-                      object["type"] as? String == "turn_context",
+                      ["turn_context", "session_meta"].contains(object["type"] as? String),
                       let payload = object["payload"] as? [String: Any],
                       let cwd = payload["cwd"] as? String,
                       let name = projectLabel(forPath: cwd)

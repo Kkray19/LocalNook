@@ -123,7 +123,15 @@ nonisolated struct RateLimitWindow: Equatable, Sendable, Identifiable {
 
 /// Tokens attributed to one model.
 nonisolated struct ModelUsage: Equatable, Sendable, Identifiable {
-    var model: String
+    /// Absent when the session reported tokens but no model.
+    ///
+    /// This is not hypothetical: a long Codex session pushes its
+    /// `turn_context` — the only record naming the model — past the tail
+    /// window, and it has no head fallback because a model taken from the
+    /// start of a session may not be the one running now. Those tokens are
+    /// real and are kept under an entry that says the model is unknown, rather
+    /// than being dropped from the table or filed under a guess.
+    var model: String?
     var provider: SessionProvider
     var sessions: Int
     var tokens: TokenUsage
@@ -131,7 +139,7 @@ nonisolated struct ModelUsage: Equatable, Sendable, Identifiable {
     /// total of zero, and shown as "not reported" rather than "0".
     var tokensUnreported: Bool
 
-    var id: String { "\(provider.rawValue).\(model)" }
+    var id: String { "\(provider.rawValue).\(model ?? "unknown")" }
 }
 
 /// Everything the usage side of the dashboard needs, computed in one pass.
@@ -164,8 +172,12 @@ nonisolated struct UsageSummary: Equatable, Sendable {
                 newest[window.id] = window
             }
 
-            guard let model = session.detail.model else { continue }
-            let key = "\(session.agent.provider.rawValue).\(model)"
+            let model = session.detail.model
+            // A session with neither a model nor tokens has nothing to add to
+            // this table; one with tokens and no model has a real figure that
+            // must not be lost with it.
+            guard model != nil || session.detail.tokens != nil else { continue }
+            let key = "\(session.agent.provider.rawValue).\(model ?? "")"
             var entry = byModel[key] ?? ModelUsage(
                 model: model, provider: session.agent.provider,
                 sessions: 0, tokens: TokenUsage(), tokensUnreported: true
@@ -180,8 +192,11 @@ nonisolated struct UsageSummary: Equatable, Sendable {
 
         let models = byModel.values.sorted {
             // Models that report tokens rank by them; the rest fall in behind,
-            // by how many sessions used them.
+            // by how many sessions used them. A named model outranks an
+            // unnamed one at equal standing, so the table leads with what can
+            // actually be read.
             if $0.tokensUnreported != $1.tokensUnreported { return !$0.tokensUnreported }
+            if ($0.model == nil) != ($1.model == nil) { return $0.model != nil }
             if $0.tokensUnreported { return $0.sessions > $1.sessions }
             return $0.tokens.total > $1.tokens.total
         }

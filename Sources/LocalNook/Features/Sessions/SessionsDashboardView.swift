@@ -600,10 +600,15 @@ private struct ModelUsageRow: View {
                 .frame(width: 13)
 
             VStack(alignment: .leading, spacing: 0) {
-                Text(entry.model)
+                Text(entry.model ?? "Model not recorded")
                     .font(.system(size: 10.5, weight: .medium))
                     .lineLimit(1)
-                    .foregroundStyle(Theme.primaryText)
+                    .foregroundStyle(entry.model == nil ? Theme.secondaryText
+                                     : Theme.primaryText)
+                    .help(entry.model == nil
+                          ? "These tokens are real; the record naming the model "
+                            + "was outside the part of the transcript LocalNook reads."
+                          : entry.model ?? "")
                 // "recent" is doing real work here. The Week count in the
                 // summary rail spans every transcript the scan found; token
                 // counts only exist for the handful LocalNook actually opens,
