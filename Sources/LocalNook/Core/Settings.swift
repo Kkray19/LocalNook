@@ -336,6 +336,9 @@ final class Settings: ObservableObject {
 
     @Pref("sessions.watchClaudeCode", true) var watchClaudeCode: Bool
     @Pref("sessions.watchCodex", true) var watchCodex: Bool
+    /// The ChatGPT desktop app's local chat list. Timestamps only unless session
+    /// labels are on, in which case chat titles too. See ChatGPTCatalogReader.
+    @Pref("sessions.watchChatGPT", true) var watchChatGPT: Bool
     @Pref("sessions.notifyOnIdle", true) var sessionsNotifyOnIdle: Bool
 
     // MARK: Bindings

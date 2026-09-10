@@ -53,13 +53,23 @@ nonisolated enum SessionProvider: String, CaseIterable, Equatable, Sendable {
 nonisolated enum SessionAgent: String, CaseIterable, Identifiable {
     case claudeCode
     case codex
+    /// Chats in the ChatGPT desktop app. They run in OpenAI's cloud and leave
+    /// no transcript here; what LocalNook sees is the app's own local list of
+    /// them. See ChatGPTCatalogReader.
+    case chatGPT
 
     var id: String { rawValue }
+
+    /// Whether this agent leaves a transcript on disk. The ChatGPT source does
+    /// not, so it never takes a transcript-reading slot, never counts toward
+    /// transcript volume, and is never read by SessionDetailReader.
+    var hasTranscript: Bool { self != .chatGPT }
 
     var label: String {
         switch self {
         case .claudeCode: "Claude Code"
         case .codex: "Codex"
+        case .chatGPT: "ChatGPT"
         }
     }
 
@@ -67,6 +77,7 @@ nonisolated enum SessionAgent: String, CaseIterable, Identifiable {
         switch self {
         case .claudeCode: "sparkle"
         case .codex: "chevron.left.forwardslash.chevron.right"
+        case .chatGPT: "bubble.left.and.bubble.right"
         }
     }
 
@@ -74,6 +85,7 @@ nonisolated enum SessionAgent: String, CaseIterable, Identifiable {
         switch self {
         case .claudeCode: .anthropic
         case .codex: .openAI
+        case .chatGPT: .openAI
         }
     }
 
@@ -82,6 +94,8 @@ nonisolated enum SessionAgent: String, CaseIterable, Identifiable {
         return switch self {
         case .claudeCode: home.appendingPathComponent(".claude/projects", isDirectory: true)
         case .codex: home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        // Not a folder of transcripts; read through ChatGPTCatalogReader.
+        case .chatGPT: nil
         }
     }
 }
@@ -155,6 +169,8 @@ nonisolated final class ScanToken: @unchecked Sendable {
 nonisolated struct SessionScan: Sendable {
     var sessions: [AgentSession] = []
     var stats = SessionStats()
+    /// How reading the ChatGPT chat list went, when it was watched.
+    var chatGPT: ChatGPTCatalogReader.Status?
 }
 
 /// Tracks agent sessions by watching their transcript directories.
@@ -169,6 +185,9 @@ final class SessionMonitor: ObservableObject {
     /// Counts across every transcript the scan found, not just the ones kept
     /// for display. See SessionStats for what they do and do not mean.
     @Published private(set) var stats = SessionStats()
+    /// Shown in Settings, so a change in the ChatGPT app's format is visible
+    /// as a sentence rather than as chats quietly vanishing.
+    @Published private(set) var chatGPTStatus: ChatGPTCatalogReader.Status?
     @Published private(set) var isWatching = false
 
     private var watchers: [SessionAgent: DirectoryWatcher] = [:]
@@ -239,6 +258,7 @@ final class SessionMonitor: ObservableObject {
         var agents: [SessionAgent] = []
         if Settings.shared.watchClaudeCode { agents.append(.claudeCode) }
         if Settings.shared.watchCodex { agents.append(.codex) }
+        if Settings.shared.watchChatGPT { agents.append(.chatGPT) }
         return agents
     }
 
@@ -322,8 +342,11 @@ final class SessionMonitor: ObservableObject {
             let previous = self.previouslyActive
             self.sessions = found
             self.stats = scan.stats
+            self.chatGPTStatus = scan.chatGPT
 
-            let nowActive = Set(found.filter(\.isActive).map(\.id))
+            // Chats are left out of "went quiet": a chat is always waiting on
+            // you once a reply lands, so every reply would become a notification.
+            let nowActive = Set(found.filter { $0.isActive && $0.agent.hasTranscript }.map(\.id))
             // A session that was working and has now gone quiet is the moment
             // worth telling you about.
             if Settings.shared.sessionsNotifyOnIdle {
@@ -351,6 +374,22 @@ final class SessionMonitor: ObservableObject {
     /// how old it is.
     nonisolated static let transcriptReadWindow: TimeInterval = 86_400
 
+    /// Which sessions have their transcripts read for labels: the six most
+    /// recent *transcript* sessions inside the read window.
+    ///
+    /// Chats have no transcript and never take one of these slots. Before they
+    /// existed, the six were simply the first six in the list; with a busy
+    /// ChatGPT week that would have meant Claude and Codex sessions losing
+    /// their names and steps to chats that cannot use the slot.
+    nonisolated static func transcriptDetailSlots(
+        _ sessions: [AgentSession], now: Date = Date()
+    ) -> [Int] {
+        Array(sessions.indices.filter {
+            sessions[$0].agent.hasTranscript
+                && now.timeIntervalSince(sessions[$0].lastActivity) < transcriptReadWindow
+        }.prefix(6))
+    }
+
     /// Collects transcript metadata, plus a bounded peek inside each recent
     /// transcript for the model and the current step. See SessionDetail for
     /// exactly how much is read and what is kept.
@@ -368,7 +407,7 @@ final class SessionMonitor: ObservableObject {
                 let manager = FileManager.default
                 let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
 
-                for agent in agents {
+                for agent in agents where agent.hasTranscript {
                     guard let root = roots[agent] ?? agent.rootDirectory else { continue }
                     guard let enumerator = manager.enumerator(
                         at: root,
@@ -398,22 +437,29 @@ final class SessionMonitor: ObservableObject {
 
                 results.sort { $0.lastActivity > $1.lastActivity }
                 // Tallied before the display cap, so "this week" counts the
-                // week rather than the top thirty.
+                // week rather than the top thirty — and before any chats are
+                // added, because the figure means transcripts and a chat is not
+                // one.
                 let stats = SessionStats.tally(results)
+
+                var catalogStatus: ChatGPTCatalogReader.Status?
+                if agents.contains(.chatGPT) {
+                    let catalog = ChatGPTCatalogReader.read(
+                        database: roots[.chatGPT] ?? ChatGPTCatalogReader.defaultDatabase,
+                        depth: depth
+                    )
+                    catalogStatus = catalog.status
+                    results.append(contentsOf: catalog.sessions)
+                    results.sort { $0.lastActivity > $1.lastActivity }
+                }
                 var recent = Array(results.prefix(30))
 
                 // Only the handful that could actually be shown are opened, and
                 // only the ones recent enough to be worth describing. Reading
                 // thirty transcripts on every scan would be wasteful and would
                 // widen the read for sessions nobody is looking at.
-                // Only the few that could actually be shown are opened, and only
-                // those recent enough to be worth describing. Reading thirty
-                // transcripts every scan would be wasteful and would widen the
-                // read to sessions nobody is looking at.
                 if depth == .richLabels {
-                    for index in recent.indices.prefix(6)
-                    where Date().timeIntervalSince(recent[index].lastActivity)
-                        < transcriptReadWindow {
+                    for index in transcriptDetailSlots(recent) {
                         // Checked before each transcript, so a cancellation
                         // stops at the next file rather than after all six.
                         if token?.isCancelled == true { break }
@@ -447,7 +493,9 @@ final class SessionMonitor: ObservableObject {
                         }
                     }
                 }
-                continuation.resume(returning: SessionScan(sessions: recent, stats: stats))
+                continuation.resume(returning: SessionScan(
+                    sessions: recent, stats: stats, chatGPT: catalogStatus
+                ))
             }
         }
     }
@@ -472,6 +520,8 @@ final class SessionMonitor: ObservableObject {
                 return "\(parts[1])-\(parts[2])-\(parts[3])"
             }
             return "Codex session"
+        case .chatGPT:
+            return "ChatGPT chat"
         }
     }
 }

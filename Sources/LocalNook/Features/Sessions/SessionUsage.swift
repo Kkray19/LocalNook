@@ -188,7 +188,10 @@ nonisolated struct UsageSummary: Equatable, Sendable {
         var providersWithLimits: Set<SessionProvider> = []
 
         for session in sessions {
-            providers.insert(session.agent.provider)
+            // Only agents that could publish limits count here. A ChatGPT chat
+            // never carries them, so it must not make OpenAI read as "publishes
+            // no limits" when Codex does.
+            if session.agent.hasTranscript { providers.insert(session.agent.provider) }
 
             // A limit is account-wide, so several sessions describe the same
             // window. The most recently observed snapshot wins — an older one

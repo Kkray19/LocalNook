@@ -425,11 +425,15 @@ private struct SessionDashboardRow: View {
 
             Spacer(minLength: 6)
 
-            Text(SessionStats.volumeLabel(bytes: session.byteSize))
-                .font(.system(size: 9))
-                .monospacedDigit()
-                .foregroundStyle(Theme.quaternaryText)
-                .help("Transcript size on disk")
+            // A chat has no transcript, so "0 B" would be a number about
+            // nothing. Only agents that write one show a size.
+            if session.agent.hasTranscript {
+                Text(SessionStats.volumeLabel(bytes: session.byteSize))
+                    .font(.system(size: 9))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.quaternaryText)
+                    .help("Transcript size on disk")
+            }
 
             Text(session.relativeActivity)
                 .font(.system(size: 9.5))
@@ -452,8 +456,8 @@ private struct SessionDashboardRow: View {
             .fill(isHovering && application != nil ? Theme.surfaceHover : Theme.surface))
         .contentShape(RoundedRectangle(cornerRadius: Theme.chipRadius, style: .continuous))
         .help(session.isActive
-              ? "Written in the last 90 seconds"
-              : session.isIdle ? "Quiet — probably waiting on you" : "No recent writes")
+              ? "Updated in the last 90 seconds"
+              : session.isIdle ? "Quiet — probably waiting on you" : "No recent activity")
     }
 }
 

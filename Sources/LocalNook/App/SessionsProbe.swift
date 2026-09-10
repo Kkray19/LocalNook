@@ -66,6 +66,7 @@ enum SessionsProbe {
         print("  transcripts in the window: \(scan.stats.total)")
         print("  volume: \(SessionStats.volumeLabel(bytes: scan.stats.totalBytes))")
         print("  listed: \(scan.sessions.count)")
+        print("  chatGPT list: \(scan.chatGPT?.summary ?? "not watched")")
         print("")
 
         print("SESSIONS  (presence only for anything a person wrote)")

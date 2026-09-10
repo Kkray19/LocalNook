@@ -397,11 +397,13 @@ struct WidgetDetailSettingsView: View {
             }
 
             SettingsSection(
-                title: "AI coding sessions",
-                footer: "LocalNook watches the transcript folders for Claude Code (~/.claude/projects) and Codex (~/.codex/sessions). It reads file timestamps only — it never opens a transcript or reads any conversation."
+                title: "AI sessions",
+                footer: "Claude Code and Codex are read from their transcript folders (~/.claude/projects, ~/.codex/sessions); ChatGPT from the desktop app's own list of your chats. With labels set to metadata only, LocalNook reads timestamps and sizes and nothing else. ChatGPT chats run in OpenAI's cloud, so LocalNook can see when one was last updated but not whether a reply is being written — and the list only updates while the ChatGPT app is open."
             ) {
                 Toggle("Watch Claude Code", isOn: settings.binding(\.watchClaudeCode))
                 Toggle("Watch Codex", isOn: settings.binding(\.watchCodex))
+                Toggle("Watch the ChatGPT desktop app", isOn: settings.binding(\.watchChatGPT))
+                if settings.watchChatGPT { ChatGPTSourceStatus() }
                 Toggle("Tell me when a session goes quiet", isOn: settings.binding(\.sessionsNotifyOnIdle))
                 Button("Rescan now") { SessionMonitor.shared.restart() }
             }
@@ -477,6 +479,24 @@ private struct BrowserConnectionRows: View {
         case .notDetermined: return "Not requested yet"
         case .targetNotRunning: return "Not running — open it to connect"
         case .other(let code): return "Unexpected status \(code)"
+        }
+    }
+}
+
+/// How the last read of the ChatGPT chat list went, in a sentence.
+///
+/// Its own view so it can observe the monitor without the settings pane doing
+/// so. This is where a format change in the ChatGPT app becomes visible: as a
+/// sentence here, rather than as chats quietly disappearing from the notch.
+private struct ChatGPTSourceStatus: View {
+    @ObservedObject private var monitor = SessionMonitor.shared
+
+    var body: some View {
+        if let status = monitor.chatGPTStatus {
+            Text(status.summary)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

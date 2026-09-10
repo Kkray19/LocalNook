@@ -173,6 +173,10 @@ nonisolated enum SessionDetailReader {
         switch agent {
         case .claudeCode: detail = readClaudeCode(path: path)
         case .codex: detail = readCodex(path: path)
+        case .chatGPT:
+            // No transcript to read: a chat's fields come from
+            // ChatGPTCatalogReader, and the scan never sends one here.
+            return SessionDetail()
         }
         detail.wasNotRead = false
         return detail

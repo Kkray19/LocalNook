@@ -16,6 +16,7 @@
 //  restore what they changed.
 //
 
+import SQLite3
 import AppKit
 import Foundation
 import SwiftUI
@@ -103,6 +104,7 @@ enum SelfTest {
             testSurfaceOpacity()
             testCodexSessions()
             testSessionsDashboard()
+            testChatGPTCatalog()
             testSystemPage()
             testOpeningMotion()
             testHoverAttribution()
@@ -1857,6 +1859,222 @@ enum SelfTest {
             check("battery charge is a percentage", (0...100).contains(charge), "\(charge)")
         } else {
             unmet("battery is readable", "no AppleSmartBattery entry — desktop or VM")
+        }
+    }
+
+    /// The ChatGPT desktop app's chat list: read-only, fail-closed, and never
+    /// claiming more than a timestamp can say.
+    ///
+    /// Fixtures only. Every database here is built by this test in the test
+    /// directory; the real chat list is never opened.
+    private static func testChatGPTCatalog() {
+        section("ChatGPT chat list")
+
+        let dir = AppInfo.testDirectory.appendingPathComponent("chatgpt", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        func exec(_ db: OpaquePointer?, _ sql: String) { sqlite3_exec(db, sql, nil, nil, nil) }
+        func makeDatabase(_ name: String, _ sql: String) -> URL {
+            let url = dir.appendingPathComponent(name)
+            try? FileManager.default.removeItem(at: url)
+            var db: OpaquePointer?
+            sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil)
+            exec(db, sql)
+            sqlite3_close_v2(db)
+            return url
+        }
+        let now = Date()
+        func ago(_ seconds: TimeInterval) -> String {
+            String(now.addingTimeInterval(-seconds).timeIntervalSince1970)
+        }
+        // Stands in for the account identifiers the real host id carries.
+        let cloud = "chatgpt:acct-SECRET:user-SECRET"
+        let schema = """
+            CREATE TABLE local_thread_catalog(host_id TEXT, thread_id TEXT, display_title TEXT,
+                source_created_at REAL, source_updated_at REAL, source_kind TEXT);
+            CREATE TABLE local_thread_catalog_hosts(host_id TEXT, host_kind TEXT);
+            INSERT INTO local_thread_catalog_hosts VALUES('local','local'),('\(cloud)','chatgpt');
+            """
+        func row(_ host: String, _ id: String, _ title: String, _ updated: String) -> String {
+            "INSERT INTO local_thread_catalog VALUES('\(host)','\(id)','\(title)',0,\(updated),'chatgpt');"
+        }
+        let millis = Int64(now.addingTimeInterval(-120).timeIntervalSince1970 * 1000)
+        let catalog = makeDatabase("catalog.db", schema + [
+            row("local", "local-thread-1", "LOCAL-THREAD", ago(5)),
+            row(cloud, "live-1", "Quarterly plan", ago(10)),
+            row(cloud, "hour-1", "Older chat", ago(3600)),
+            row(cloud, "stale-1", "Ten days old", ago(10 * 86400)),
+            row(cloud, "future-1", "From the future",
+                String(now.addingTimeInterval(3600).timeIntervalSince1970)),
+            "INSERT INTO local_thread_catalog VALUES('\(cloud)','ms-1','Millis',0,\(millis),'chatgpt');",
+            row(cloud, "bad id / with spaces", "Bad", ago(20)),
+            "INSERT INTO local_thread_catalog VALUES('\(cloud)','hostile-1',"
+                + "'Plan' || char(10) || 'second line' || char(27) || '[31m',0,\(ago(30)),'chatgpt');"
+        ].joined(separator: "\n"))
+
+        // ── What gets through ──────────────────────────────────────────────
+        let before = try? FileManager.default.attributesOfItem(atPath: catalog.path)
+        let filesBefore = Set((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+        let plain = ChatGPTCatalogReader.read(database: catalog, depth: .metadataOnly, now: now)
+        check("cloud chats are read, in order of activity",
+              plain.sessions.map(\.id)
+                  == ["chatgpt:live-1", "chatgpt:hostile-1", "chatgpt:ms-1", "chatgpt:hour-1"],
+              plain.sessions.map(\.id).joined(separator: ", "))
+        check("and the read reports how many", plain.status == .ok(count: 4),
+              "\(plain.status)")
+        check("this Mac's own threads are excluded — they arrive as transcripts",
+              !plain.sessions.contains { $0.id.contains("local-thread") })
+        check("a chat older than the week is left out",
+              !plain.sessions.contains { $0.id.contains("stale") })
+        check("a timestamp from the future is refused rather than held live",
+              !plain.sessions.contains { $0.id.contains("future") })
+        check("milliseconds are recognised and normalised",
+              plain.sessions.first { $0.id == "chatgpt:ms-1" }
+                  .map { abs(now.timeIntervalSince($0.lastActivity) - 120) < 1 } == true)
+        check("an identifier that is not identifier-shaped is skipped",
+              !plain.sessions.contains { $0.id.contains("bad") })
+        check("a chat updated seconds ago is active",
+              plain.sessions.first?.isActive == true)
+        check("chats are OpenAI's", plain.sessions.allSatisfy { $0.agent.provider == .openAI })
+
+        // ── What a timestamp cannot say ────────────────────────────────────
+        check("a chat is never claimed to be working",
+              plain.sessions.allSatisfy {
+                  $0.detail.activity != .working && $0.detail.step == nil
+                      && !$0.detail.showsProgress
+              })
+        check("with labels off, no title is read",
+              plain.sessions.allSatisfy { $0.detail.title == nil && $0.detail.wasNotRead })
+        check("and a chat is named generically instead",
+              plain.sessions.first?.displayName == "ChatGPT chat")
+
+        if ScreenLock.isLocked {
+            unmet("with labels on, titles are read and cleaned",
+                  "the screen is locked, and titles are never read while it is")
+        } else {
+            let labelled = ChatGPTCatalogReader.read(database: catalog, depth: .richLabels, now: now)
+            check("with labels on, titles are read",
+                  labelled.sessions.first?.detail.title == "Quarterly plan",
+                  labelled.sessions.first?.detail.title ?? "nil")
+            check("and cleaned like every other label",
+                  labelled.sessions.first { $0.id == "chatgpt:hostile-1" }?.detail.title == "Plan",
+                  labelled.sessions.first { $0.id == "chatgpt:hostile-1" }?.detail.title ?? "nil")
+            let leaked = labelled.sessions.contains {
+                [$0.id, $0.projectName, $0.displayName, $0.detail.title ?? ""]
+                    .joined().contains("SECRET")
+            }
+            check("account identifiers never reach a session", !leaked)
+        }
+
+        // ── Read-only means read-only ──────────────────────────────────────
+        let after = try? FileManager.default.attributesOfItem(atPath: catalog.path)
+        let filesAfter = Set((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+        check("reading changes nothing about the file",
+              (before?[.size] as? Int) == (after?[.size] as? Int)
+                  && (before?[.modificationDate] as? Date) == (after?[.modificationDate] as? Date))
+        check("and creates no journal or log beside it", filesBefore == filesAfter,
+              filesAfter.subtracting(filesBefore).sorted().joined(separator: ", "))
+
+        let absent = dir.appendingPathComponent("never-created.db")
+        let missing = ChatGPTCatalogReader.read(database: absent, depth: .metadataOnly, now: now)
+        check("a missing list is reported as missing", missing.status == .missing)
+        check("and is not created by looking for it",
+              !FileManager.default.fileExists(atPath: absent.path))
+
+        // ── Fails closed on anything unfamiliar ────────────────────────────
+        let corrupt = dir.appendingPathComponent("corrupt.db")
+        try? Data(String(repeating: "not a database ", count: 200).utf8).write(to: corrupt)
+        let garbled = ChatGPTCatalogReader.read(database: corrupt, depth: .metadataOnly, now: now)
+        check("a corrupt file yields nothing and says it could not be read",
+              garbled.status == .unreadable && garbled.sessions.isEmpty, "\(garbled.status)")
+
+        let noTable = makeDatabase("no-table.db", "CREATE TABLE something_else(x);")
+        if case .formatChanged = ChatGPTCatalogReader.read(database: noTable, depth: .metadataOnly).status {
+            check("a missing table is reported as a format change", true)
+        } else {
+            check("a missing table is reported as a format change", false)
+        }
+        let noColumn = makeDatabase("no-column.db",
+            "CREATE TABLE local_thread_catalog(host_id TEXT, thread_id TEXT);")
+        let columnless = ChatGPTCatalogReader.read(database: noColumn, depth: .metadataOnly)
+        check("a missing column is named, not guessed around",
+              columnless.status == .formatChanged("missing source_updated_at")
+                  && columnless.sessions.isEmpty, "\(columnless.status)")
+
+        let noHosts = makeDatabase("no-hosts.db", """
+            CREATE TABLE local_thread_catalog(host_id TEXT, thread_id TEXT, source_updated_at REAL);
+            INSERT INTO local_thread_catalog VALUES('local','l1',\(ago(5))),('\(cloud)','c1',\(ago(6)));
+            """)
+        check("without the hosts table, the local host is still excluded",
+              ChatGPTCatalogReader.read(database: noHosts, depth: .metadataOnly, now: now)
+                  .sessions.map(\.id) == ["chatgpt:c1"])
+
+        // ── Live, not stale ────────────────────────────────────────────────
+        //
+        // The real app holds the database open in write-ahead-log mode. A row
+        // it has just written sits in the log until a checkpoint; reading
+        // around the log would report the chat's previous "last updated".
+        let walURL = makeDatabase("wal.db", schema)
+        var writer: OpaquePointer?
+        sqlite3_open_v2(walURL.path, &writer, SQLITE_OPEN_READWRITE, nil)
+        exec(writer, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+        exec(writer, row(cloud, "wal-fresh", "Fresh", ago(3)))
+        let fresh = ChatGPTCatalogReader.read(database: walURL, depth: .metadataOnly, now: now)
+        check("a chat still in the write-ahead log is seen, while the app holds it open",
+              fresh.sessions.map(\.id) == ["chatgpt:wal-fresh"],
+              fresh.sessions.map(\.id).joined(separator: ", ") + " \(fresh.status)")
+        sqlite3_close_v2(writer)
+
+        // ── Bounded ────────────────────────────────────────────────────────
+        let busy = makeDatabase("busy.db", schema + (1...15).map {
+            row(cloud, "chat-\($0)", "Chat \($0)", ago(Double($0)))
+        }.joined(separator: "\n"))
+        let many = ChatGPTCatalogReader.read(database: busy, depth: .metadataOnly, now: now)
+        check("a busy week is capped, newest first",
+              many.sessions.count == ChatGPTCatalogReader.maximumSessions
+                  && many.sessions.first?.id == "chatgpt:chat-1", "\(many.sessions.count)")
+
+        // ── Chats do not crowd out agents ──────────────────────────────────
+        func session(_ agent: SessionAgent, _ id: String, _ age: TimeInterval) -> AgentSession {
+            AgentSession(id: id, agent: agent, projectName: id,
+                         lastActivity: now.addingTimeInterval(-age), byteSize: 1)
+        }
+        let mixed = [session(.chatGPT, "c1", 1), session(.chatGPT, "c2", 2),
+                     session(.codex, "x1", 3), session(.claudeCode, "a1", 4),
+                     session(.chatGPT, "c3", 5), session(.codex, "x2", 6),
+                     session(.codex, "x3", 7), session(.claudeCode, "a2", 8),
+                     session(.codex, "x4", 9), session(.codex, "x5", 10)]
+        let slots = SessionMonitor.transcriptDetailSlots(mixed, now: now)
+        check("chats never take a transcript-reading slot",
+              slots.allSatisfy { mixed[$0].agent.hasTranscript })
+        check("so six transcripts still get their labels", slots.count == 6, "\(slots.count)")
+        check("a chat is not a project, known or unknown",
+              ProjectBreakdown.build(from: [session(.chatGPT, "c1", 1)]).isEmpty)
+        check("a chat does not make OpenAI read as publishing no limits",
+              UsageSummary.build(from: [session(.chatGPT, "c1", 1)])
+                  .providersWithoutLimits.isEmpty)
+        check("a chat beside Codex is still badged as OpenAI",
+              LiveActivityCenter.badge(for: [session(.chatGPT, "c1", 1), session(.codex, "x1", 2)])
+                  .symbol == SessionProvider.openAI.symbol)
+        check("a chat beside Claude falls back to the generic mark",
+              LiveActivityCenter.badge(for: [session(.chatGPT, "c1", 1), session(.claudeCode, "a1", 2)])
+                  .symbol == SessionProvider.mixedSymbol)
+
+        // ── Through the scan ───────────────────────────────────────────────
+        var scanned: SessionScan?
+        Task {
+            scanned = await SessionMonitor.scan(
+                agents: [.chatGPT], roots: [.chatGPT: catalog], depth: .metadataOnly
+            )
+        }
+        if waitUntil({ scanned != nil }, timeout: 5) {
+            check("the scan brings chats in",
+                  scanned?.sessions.contains { $0.id == "chatgpt:live-1" } == true)
+            check("without counting them as transcripts", scanned?.stats.total == 0,
+                  "\(scanned?.stats.total ?? -1)")
+            check("and reports how the read went", scanned?.chatGPT == .ok(count: 4),
+                  "\(String(describing: scanned?.chatGPT))")
+        } else {
+            check("the scan finishes", false, "no result within 5s")
         }
     }
 

@@ -51,7 +51,7 @@ The widgets themselves:
 | **Timers** | Countdown, stopwatch and pomodoro, with notifications |
 | **Notes / To-Do** | Local, searchable, autosaving |
 | **Shortcuts** | Lists and runs your macOS Shortcuts; pin the ones you use |
-| **AI Sessions** | A page of its own: which Claude Code / Codex sessions are working and what they are doing, the folders they are in, tokens by model, and rate-limit windows — from what the agents write locally, never a network call |
+| **AI Sessions** | A page of its own: which Claude Code, Codex and ChatGPT desktop sessions are active and what they are doing, the folders they are in, tokens by model, and rate-limit windows — from what the agents write locally, never a network call |
 | **Stats** | Battery, memory and storage |
 
 > **Note:** if NotchNook is installed, it draws its own notch UI and LocalNook

@@ -99,6 +99,9 @@ nonisolated struct ProjectBreakdown: Equatable, Sendable {
         var unattributed = 0
 
         for session in sessions {
+            // A chat has no working folder. That is not "unknown", it is simply
+            // not a project, so it is neither listed nor counted as unattributed.
+            guard session.agent.hasTranscript else { continue }
             guard let name = session.projectLabel else {
                 unattributed += 1
                 continue
@@ -132,6 +135,7 @@ extension AgentSession {
         switch agent {
         case .claudeCode: projectName
         case .codex: detail.title
+        case .chatGPT: nil
         }
     }
 }
