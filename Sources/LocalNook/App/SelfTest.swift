@@ -1684,6 +1684,20 @@ enum SelfTest {
     private static func testCodexSessions() {
         section("Codex sessions")
 
+        // A locked screen refuses every transcript read — by design, in
+        // SessionDetailReader.read, and asserted a few lines below. That makes
+        // these checks impossible to exercise rather than failing, and the
+        // difference matters: without this, a Mac that locked itself partway
+        // through a batch reported 32 "demonstrated defects" and a verdict of
+        // "must not ship" for code that was working. Unverified is the honest
+        // third state, and it still does not pass the gate silently.
+        guard !ScreenLock.isLocked else {
+            unmet("[locked] Codex sessions",
+                  "the screen is locked, so transcript reads are refused; "
+                      + "unlock and re-run")
+            return
+        }
+
         let dir = AppInfo.testDirectory.appendingPathComponent("codex", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         func write(_ name: String, _ lines: [String]) -> String {
@@ -2702,6 +2716,20 @@ enum SelfTest {
     /// are never opened — not even to check that they parse.
     private static func testSessionDetail() {
         section("Session labels — boundary")
+
+        // A locked screen refuses every transcript read — by design, in
+        // SessionDetailReader.read, and asserted a few lines below. That makes
+        // these checks impossible to exercise rather than failing, and the
+        // difference matters: without this, a Mac that locked itself partway
+        // through a batch reported 32 "demonstrated defects" and a verdict of
+        // "must not ship" for code that was working. Unverified is the honest
+        // third state, and it still does not pass the gate silently.
+        guard !ScreenLock.isLocked else {
+            unmet("[locked] Session labels — boundary",
+                  "the screen is locked, so transcript reads are refused; "
+                      + "unlock and re-run")
+            return
+        }
         let settings = Settings.shared
         let originalDepth = settings.sessionLabelDepthID
         defer { settings.sessionLabelDepthID = originalDepth }
