@@ -411,7 +411,35 @@ struct CompactStatsView: View {
     @ObservedObject private var battery = BatteryMonitor.shared
     private let ticker = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
 
+    /// Set when this column can open the full System page. The dashboard
+    /// passes it; the Tools tile and previews do not, so nothing that is
+    /// already full-size offers to open itself.
+    var model: NotchViewModel?
+
+    @LNState private var isHovering = false
+
+    /// A doorway, like the AI Sessions column. Battery alone is a summary of a
+    /// summary — the load, the memory detail and where the watts are going all
+    /// need the width the page has.
     var body: some View {
+        if let model {
+            Button {
+                withAnimation(NotchMotion.content) { model.focus(.stats, from: .dashboard) }
+            } label: {
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering in withAnimation(NotchMotion.quick) { isHovering = hovering } }
+            .help("Open the System page")
+            .accessibilityLabel("Open the System page")
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text("Battery")
                 .font(Theme.sectionTitle)

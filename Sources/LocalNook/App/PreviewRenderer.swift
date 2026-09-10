@@ -44,6 +44,7 @@ enum PreviewRenderer {
             ("dashboard-browser-ambiguous", true, .media),
             ("dashboard-browser-page", true, .media),
             ("sessions-dashboard", true, .sessions),
+            ("system-page", true, .stats),
             ("sessions-tokens", true, .sessions),
             ("tray-populated", true, .shelf),
             ("tools", true, .timers),
@@ -177,6 +178,13 @@ enum PreviewRenderer {
                 )
                 model.page = .tools
                 model.focusedTool = .sessions
+                model.focusedToolOrigin = .dashboard
+            } else if scene.name == "system-page" {
+                // Nothing staged: every figure here is this machine's own, and
+                // a preview showing the render host's real load is honest in a
+                // way an invented one would not be.
+                model.page = .tools
+                model.focusedTool = .stats
                 model.focusedToolOrigin = .dashboard
             } else if scene.name == "tray-populated" {
                 model.page = .tray

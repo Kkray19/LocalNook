@@ -103,7 +103,7 @@ struct FocusedToolView: View {
     /// The panel is about 120pt tall inside the shoulders, and a title on its
     /// own line costs a fifth of that. A section dense enough to need the
     /// height puts its name on a row it was drawing anyway.
-    private var drawsOwnTitle: Bool { tool == .sessions }
+    private var drawsOwnTitle: Bool { tool == .sessions || tool == .stats }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -129,7 +129,7 @@ struct FocusedToolView: View {
         case .todo: TodoWidgetView()
         case .shortcuts: ShortcutsWidgetView()
         case .sessions: SessionsDashboardView()
-        case .stats: StatsWidgetView()
+        case .stats: SystemPageView()
         }
     }
 }

@@ -103,6 +103,7 @@ enum SelfTest {
             testSurfaceOpacity()
             testCodexSessions()
             testSessionsDashboard()
+            testSystemPage()
             testOpeningMotion()
             testHoverAttribution()
             testBrowserMedia()
@@ -1703,6 +1704,160 @@ enum SelfTest {
         model.focus(.notes, from: .tools)
         check("a tool opened from Tools still goes back to Tools",
               model.focusedToolOrigin == .tools)
+    }
+
+    /// The System page: the arithmetic behind the watts, the classification of
+    /// memory pressure, and the order the panel gives way in.
+    private static func testSystemPage() {
+        section("System page")
+
+        // ── The watts are a subtraction, and it has to hold ────────────────
+        //
+        // Checked against a utility reporting the same three figures on this
+        // Mac at the same moment: adapter 44.8W, battery 28.6W, system 16.2W.
+        check("system draw is the adapter minus the battery",
+              PowerStats.systemDraw(adapter: 44.8, battery: 28.6).map { Int($0.rounded()) } == 16,
+              "\(String(describing: PowerStats.systemDraw(adapter: 44.8, battery: 28.6)))")
+        check("on battery, a negative battery figure becomes the draw",
+              PowerStats.systemDraw(adapter: 0, battery: -12.5).map { Int($0.rounded()) } == 13)
+        check("an impossible negative draw is absent rather than shown",
+              PowerStats.systemDraw(adapter: 10, battery: 25) == nil)
+        check("nothing in, nothing out",
+              PowerStats.systemDraw(adapter: nil, battery: nil) == nil)
+        check("watts are reported whole, never to a decimal they have not earned",
+              PowerStats.watts(16.23) == "16 W" && PowerStats.watts(28.6) == "29 W",
+              "\(PowerStats.watts(16.23) ?? "nil") / \(PowerStats.watts(28.6) ?? "nil")")
+        check("an absent reading has no watts", PowerStats.watts(nil) == nil)
+        check("a non-finite reading is refused", PowerStats.watts(.nan) == nil)
+
+        // Health comes from the source macOS itself reports, because the raw
+        // capacity ratio disagrees with what the user sees everywhere else.
+        let profiler = """
+              Cycle Count: 397
+              Condition: Normal
+              Maximum Capacity: 90%
+            """
+        check("battery health is parsed as macOS reports it",
+              PowerStats.parseHealth(fromProfilerOutput: profiler) == 90,
+              "\(String(describing: PowerStats.parseHealth(fromProfilerOutput: profiler)))")
+        check("a profile without it yields nothing rather than a default",
+              PowerStats.parseHealth(fromProfilerOutput: "Cycle Count: 397") == nil)
+        check("an out-of-range percentage is refused",
+              PowerStats.parseHealth(fromProfilerOutput: "Maximum Capacity: 900%") == nil)
+
+        // ── Processor load needs two samples, and says so ──────────────────
+        let first = ProcessorTicks(used: 1000, total: 4000)
+        let second = ProcessorTicks(used: 1500, total: 6000)
+        check("load is the difference between two samples",
+              second.load(since: first) == 0.25,
+              "\(String(describing: second.load(since: first)))")
+        check("two reads inside one tick report nothing rather than zero",
+              first.load(since: first) == nil)
+        // Counters can only go forwards; going backwards means a different
+        // machine state, not negative work.
+        check("counters that went backwards do not produce a negative load",
+              ProcessorTicks(used: 10, total: 100).load(since:
+                  ProcessorTicks(used: 50, total: 50)) ?? -1 >= 0)
+
+        // ── Memory pressure is a classification, not a reading ─────────────
+        func memory(usedGB: Double, totalGB: Double, swapGB: Double) -> MemoryStats {
+            MemoryStats(used: UInt64(usedGB * 1_073_741_824), total: UInt64(totalGB * 1_073_741_824),
+                        compressed: 0, cached: 0, swapUsed: UInt64(swapGB * 1_073_741_824))
+        }
+        check("a quiet machine reads normal",
+              memory(usedGB: 4, totalGB: 16, swapGB: 0).pressure == .normal)
+        check("swap in use alone is enough for caution",
+              memory(usedGB: 4, totalGB: 16, swapGB: 2).pressure == .caution)
+        check("a nearly full machine is urgent",
+              memory(usedGB: 15, totalGB: 16, swapGB: 0).pressure == .urgent)
+        check("heavy swapping is urgent however much is free",
+              memory(usedGB: 4, totalGB: 16, swapGB: 5).pressure == .urgent)
+        check("no total means no division by zero",
+              memory(usedGB: 0, totalGB: 0, swapGB: 0).fraction == 0)
+        check("sizes read as sizes",
+              MemoryStats.gigabytes(6_720_000_000) == "6.26 GB",
+              MemoryStats.gigabytes(6_720_000_000))
+
+        // ── Uptime ─────────────────────────────────────────────────────────
+        check("days and hours", SystemUptime.label(seconds: 5 * 86400 + 16 * 3600) == "5d 16h",
+              SystemUptime.label(seconds: 5 * 86400 + 16 * 3600))
+        check("hours and minutes", SystemUptime.label(seconds: 3 * 3600 + 4 * 60) == "3h 4m")
+        check("minutes alone", SystemUptime.label(seconds: 240) == "4m")
+        check("a clock that went backwards yields nothing",
+              SystemUptime.seconds(now: Date(timeIntervalSince1970: 0)) == nil)
+
+        // ── The trend line is bounded ──────────────────────────────────────
+        var history: [Double] = []
+        for index in 0..<(SystemMonitor.historyLength + 25) {
+            history = SystemMonitor.appending(Double(index), to: history)
+        }
+        check("history stays bounded however long the page is open",
+              history.count == SystemMonitor.historyLength, "\(history.count)")
+        check("and keeps the newest samples, not the oldest",
+              history.last == Double(SystemMonitor.historyLength + 24))
+
+        // ── Narrowing, and what survives it ────────────────────────────────
+        check("a wide panel shows every region",
+              SystemPageLayout.plan(width: 720).showsMemory
+                  && SystemPageLayout.plan(width: 720).showsPower)
+        check("memory is the first to go",
+              !SystemPageLayout.plan(width: 480).showsMemory
+                  && SystemPageLayout.plan(width: 480).showsPower)
+        check("and power follows it",
+              !SystemPageLayout.plan(width: 300).showsPower)
+        var loadAlwaysFits = true
+        for width in stride(from: 200.0, through: 1400.0, by: 5.0) {
+            let plan = SystemPageLayout.plan(width: CGFloat(width))
+            var used: CGFloat = 0
+            if plan.showsMemory { used += SystemPageLayout.memoryWidth + SystemPageLayout.railGap * 2 + 1 }
+            if plan.showsPower { used += SystemPageLayout.powerWidth + SystemPageLayout.railGap * 2 + 1 }
+            if CGFloat(width) - used < SystemPageLayout.loadWidth,
+               plan.showsMemory || plan.showsPower { loadAlwaysFits = false }
+        }
+        check("no width squeezes the load column out", loadAlwaysFits)
+
+        // ── Sampling only while something is watching ──────────────────────
+        let monitor = SystemMonitor.shared
+        check("nothing samples before a view appears", !monitor.isSampling)
+        // The suite is forbidden from sampling at all, which is itself the
+        // assertion: a harness must not start a timer on the machine it is
+        // measuring.
+        monitor.retain()
+        check("and the suite does not start one either", !monitor.isSampling)
+        monitor.release()
+        check("releasing leaves nothing running", !monitor.isSampling)
+
+        // ── The readers work on this machine ───────────────────────────────
+        if let ticks = ProcessorTicks.read() {
+            check("processor counters are readable", ticks.total > 0)
+        } else {
+            unmet("processor counters are readable", "host_processor_info refused")
+        }
+        if let stats = MemoryStats.read() {
+            check("memory is readable and totals a real machine",
+                  stats.total > 0 && stats.used <= stats.total,
+                  "used \(stats.used) of \(stats.total)")
+        } else {
+            unmet("memory is readable", "host_statistics64 refused")
+        }
+        if let uptime = SystemUptime.seconds() {
+            check("uptime is readable and positive", uptime > 0)
+        } else {
+            unmet("uptime is readable", "kern.boottime refused")
+        }
+        // Graphics and battery are hardware-dependent: a Mac without either is
+        // an unmet precondition, not a defect.
+        if let gpu = GraphicsLoad.read() {
+            check("graphics load is a fraction", (0...1).contains(gpu), "\(gpu)")
+        } else {
+            unmet("graphics load is readable", "no IOAccelerator entry publishes utilisation")
+        }
+        let power = PowerStats.read()
+        if let charge = power.charge {
+            check("battery charge is a percentage", (0...100).contains(charge), "\(charge)")
+        } else {
+            unmet("battery is readable", "no AppleSmartBattery entry — desktop or VM")
+        }
     }
 
     /// Codex sessions, the provider badge, and the trailing indicator.
