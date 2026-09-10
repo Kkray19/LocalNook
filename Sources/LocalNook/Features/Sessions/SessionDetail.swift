@@ -38,6 +38,10 @@
 //      in with a guess.
 //    * A session whose last 256 KB holds no assistant record yields no step. A
 //      single very large record can cause this.
+//    * A long turn can push a Codex session's `turn_context` — and with it the
+//      working directory — out of the tail. The head is searched for that one
+//      field when the tail has none, which is why a 3 MB Codex transcript is
+//      still named after its folder rather than the time of day.
 //    * The head and the tail can come from far apart in a long conversation.
 //      Nothing is inferred across that gap: the model, the effort and the step
 //      are all taken from one record, so they cannot describe different turns.
@@ -273,6 +277,28 @@ nonisolated enum SessionDetailReader {
                 }
             default:
                 break
+            }
+        }
+
+        // A long turn writes hundreds of kilobytes after its `turn_context`,
+        // which pushes that record out of the 256 KB tail — this session's own
+        // transcript is 3.3 MB. When that happens the folder is looked up in
+        // the head window instead, exactly as Claude's title already is.
+        //
+        // The value taken there is the *newest* `turn_context` the head holds,
+        // and it is a fallback rather than an equal: Codex writes `cwd` on
+        // every turn, so a session that changed directory mid-way would be
+        // named after the earlier folder. Naming the folder it started in beats
+        // naming it after the time of day.
+        if detail.title == nil {
+            for line in lines(atPath: path, window: headWindow, fromEnd: false) {
+                guard let object = json(line),
+                      object["type"] as? String == "turn_context",
+                      let payload = object["payload"] as? [String: Any],
+                      let cwd = payload["cwd"] as? String,
+                      let name = projectLabel(forPath: cwd)
+                else { continue }
+                detail.title = name
             }
         }
 

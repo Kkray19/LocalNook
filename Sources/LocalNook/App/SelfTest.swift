@@ -1528,6 +1528,41 @@ enum SelfTest {
               SessionDetailReader.projectLabel(forPath: "/Users/someone/Developer/LedgerApp/")
                   == "LedgerApp")
 
+        // ── A long turn pushes the folder out of the tail ──────────────────
+        //
+        // Observed on this machine: a 3.3 MB transcript whose only recent
+        // `turn_context` sat 250 KB from the end one minute and inside the
+        // window the next, so the session was named after the time of day
+        // until it happened to fall back in. The fixture reproduces that by
+        // padding past the tail window.
+        let filler = String(repeating: "x", count: 4000)
+        var padded = [context(300)]
+        // Comfortably past the 256 KB tail, so the head is the only place the
+        // folder can still be found.
+        for index in 0..<90 {
+            padded.append(
+                #"{"type":"event_msg","timestamp":"\#(stamp(200))","payload":{"type":"agent_reasoning","text":"\#(filler)-\#(index)"}}"#
+            )
+        }
+        padded.append(started)
+        padded.append(exec(3, verb: "search"))
+        let longTurn = write("long-turn.jsonl", padded)
+        let recovered = SessionDetailReader.read(path: longTurn, agent: .codex,
+                                                 depth: .richLabels)
+        check("a folder past the tail window is found in the head",
+              recovered.title == "LedgerApp", "got \(recovered.title ?? "nil")")
+        check("and the step still comes from the tail",
+              recovered.step == "Searching", "got \(recovered.step ?? "nil")")
+        check("the head fallback stays behind consent",
+              SessionDetailReader.read(path: longTurn, agent: .codex,
+                                       depth: .metadataOnly).title == nil)
+
+        // The fallback is a second place to look, not a licence to invent one.
+        let noContext = write("no-context.jsonl", [started, exec(3, verb: "read")])
+        check("a transcript with no folder anywhere is left unnamed",
+              SessionDetailReader.read(path: noContext, agent: .codex,
+                                       depth: .richLabels).title == nil)
+
         // ── The badge names the maker, not the count ───────────────────────
         func session(_ agent: SessionAgent, _ id: String) -> AgentSession {
             AgentSession(id: id, agent: agent, projectName: id,
