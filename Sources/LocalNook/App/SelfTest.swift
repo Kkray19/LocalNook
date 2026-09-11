@@ -208,13 +208,17 @@ enum SelfTest {
         }
     }
 
-    /// End-to-end check of the real hover path.
+    /// End-to-end check of the drawing panel's half of hover.
     ///
     /// Builds the actual `NotchPanel` hosting the actual `NotchRootView`, then
     /// slides it under the stationary cursor. Moving the window rather than the
     /// pointer means this needs no Accessibility permission — which is the whole
     /// point, since `NSEvent.addGlobalMonitorForEvents` silently never fires
     /// without it and hover must not depend on that.
+    ///
+    /// The panel's half is narrower than it was: collapsed, the catcher opens
+    /// the notch (testCatcherHover) and this panel must not; open, this panel
+    /// owns hover and closes the notch when the pointer leaves.
     private static func testHoverPath(screenLocked: Bool = false) {
         section("Hover (end to end)")
         print("    AXIsProcessTrusted = \(AXIsProcessTrusted())")
@@ -274,82 +278,65 @@ enum SelfTest {
             return
         }
 
-        // Retry the gesture, not the assertion — see provokeCrossing.
-        let parkedFrame = NSRect(x: 4, y: 4, width: 320, height: 120)
-        var opened = waitUntil({ model.state == .open }, timeout: 1.0)
-        var attempts = 0
-        while !opened, attempts < 3 {
-            attempts += 1
-            panel.setFrame(parkedFrame, display: true)
-            pumpEvents(for: 0.2)
-            panel.setFrameOrigin(NSPoint(
-                x: cursor.x - hoverWidth / 2,
-                y: cursor.y - 120 + model.closedSize.height / 2 + 2
-            ))
-            opened = waitUntil({ model.state == .open }, timeout: 1.0)
-        }
-
-        // Attribute the outcome to a stage rather than reporting a bare "hover
-        // did not work". Each branch names a different culprit, and only two of
-        // them are LocalNook's.
-        let outcome = HoverProbe.classify(
-            placed: !screenLocked,
-            placementDetail: "the screen is locked; loginwindow is above every "
-                           + "window, so no crossing can reach the panel",
-            opened: opened
-        )
-        switch outcome {
-        case .succeeded:
-            check("[integration] hovering the notch opens it", true)
-        case let .preconditionUnmet(detail):
-            unmet("[integration] hovering the notch opens it", detail)
-        case .noPlatformEvent:
-            unmet("[integration] hovering the notch opens it",
-                  "AppKit delivered no mouseEntered across \(attempts + 1) window moves; "
-                  + "the pointer was verified inside the strip each time. "
-                  + HoverProbe.environmentExplanation)
-        case let .eventDropped(enters):
-            check("[integration] hovering the notch opens it", false,
-                  "AppKit delivered \(enters) crossing(s); LocalNook's handler ran 0 times")
-        case let .wrongState(calls):
-            check("[integration] hovering the notch opens it", false,
-                  "LocalNook handled \(calls) crossing(s) and the notch is still \(model.state)")
-        }
-        // Stage counters say how far a crossing got; the transition source says
-        // which mechanism actually moved the notch. Printing only the counters
-        // produced a passing run whose provenance read handled=0 — true, and
-        // useless, because a different path had done the work.
-        print("    probe: \(HoverProbe.summary) "
-              + "opened-by: \(NotchTransitionLog.all.last { $0.opened }.map { "\($0.source)" } ?? "nothing")")
-        if !opened {
-            // Only noisy when something is actually wrong.
-            print("    cursor: \(cursor)")
-            print("    panel:  \(panel.frame)")
-            for line in HoverTracker.diagnostics { print("    tracker: \(line)") }
-        }
-
-        // Slide it away again.
+        // ── Collapsed: opening is the catcher's job, not this panel's ──────
         //
-        // Only meaningful when the crossing in actually happened: this bare
-        // panel is not owned by NotchWindowController, so its only close path
-        // is the matching mouseExited. Recovery when no crossing is delivered
-        // at all belongs to the real, controller-owned panel and is asserted
-        // unconditionally by testMissedCrossingRecovery in the deterministic
-        // suite — a hard gate on every run rather than one that only fires when
-        // this flaky stimulus happens to work.
-        let entersAtOpen = HoverProbe.entersDelivered
-        panel.setFrameOrigin(NSPoint(x: 4, y: 4))
+        // This used to assert the opposite — that hovering this bare drawing
+        // panel opens a collapsed notch. That predates the two-window split: in
+        // the app a collapsed drawing panel ignores mouse events and the catcher
+        // above it opens the notch. Worse, this panel's containment check was
+        // caught acting on an animation rather than the pointer, opening the
+        // notch from under a live activity's wing; see
+        // NotchViewModel.drawingPanelHoverChanged. So it must now stay shut.
+        //
+        // A negative nothing tested is not a pass: it counts only if a crossing
+        // or a containment check demonstrably reached the panel.
+        pumpEvents(for: max(0.6, settings.openDelay * 4))
+        let reachedPanel = HoverProbe.handlerInvocations
+        let collapsedName = "[integration] a collapsed drawing panel leaves opening to the catcher"
         if screenLocked {
-            unmet("[integration] moving the pointer off it collapses again",
-                  "the screen is locked; unlock and re-run")
-        } else if opened {
-            let closed = waitUntil({ model.state == .closed }, timeout: 2.0)
-            reportExit("[integration] moving the pointer off it collapses again",
-                       closed: closed, entersSeen: entersAtOpen, state: model.state)
+            unmet(collapsedName, "the screen is locked; no crossing can reach the panel")
+        } else if reachedPanel == 0 {
+            unmet(collapsedName, "no crossing or containment check reached the panel "
+                  + "(probe: \(HoverProbe.summary)), so staying collapsed proves nothing")
         } else {
-            unmet("[integration] moving the pointer off it collapses again",
-                  "the notch never opened, so there was no open state to collapse")
+            check(collapsedName, model.state == .closed,
+                  "it opened after \(reachedPanel) report(s); opened-by: "
+                  + (NotchTransitionLog.all.last { $0.opened }.map { "\($0.source)" } ?? "nothing"))
         }
+        print("    probe (collapsed): \(HoverProbe.summary)")
+
+        // ── Open: the panel owns hover, and leaving it closes the notch ────
+        //
+        // A fresh tracker, because the one above has already recorded the
+        // pointer as inside — reported while collapsed and rightly ignored —
+        // and would not report it again. In the app the catcher sets hover as
+        // it opens the notch, so this is a property of the stimulus, not of the
+        // product.
+        model.open()
+        let openHost = NSHostingView(
+            rootView: NotchRootView(model: model).environmentObject(settings)
+        )
+        openHost.sizingOptions = []
+        openHost.frame = NSRect(x: 0, y: 0, width: 320, height: 120)
+        HoverProbe.reset()
+        panel.contentView = openHost
+        pumpEvents(for: 0.5)
+        // What LocalNook had already handled before the exit; classifyExit
+        // fails the run only if nothing beyond this was handled.
+        let handledAtOpen = HoverProbe.handlerInvocations
+        panel.setFrameOrigin(NSPoint(x: 4, y: 4))
+        let exitName = "[integration] moving the pointer off it collapses again"
+        if screenLocked {
+            unmet(exitName, "the screen is locked; unlock and re-run")
+        } else if !model.isHovering {
+            unmet(exitName, "the open panel never registered the pointer "
+                  + "(probe: \(HoverProbe.summary)), so leaving it proves nothing")
+        } else {
+            let closed = waitUntil({ model.state == .closed }, timeout: 2.0)
+            reportExit(exitName, closed: closed, entersSeen: handledAtOpen, state: model.state)
+        }
+        print("    probe (open): \(HoverProbe.summary)")
+        if model.state == .open { model.close() }
 
         // Click toggling must not depend on any permission either.
         model.open()
