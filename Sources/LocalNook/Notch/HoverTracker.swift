@@ -27,6 +27,7 @@
 //  passing near the top of the screen.
 //
 
+import OSLog
 import AppKit
 import SwiftUI
 
@@ -43,6 +44,9 @@ struct HoverTracker: NSViewRepresentable {
     func updateNSView(_ nsView: TrackingView, context: Context) {
         nsView.onChange = onChange
     }
+
+    /// Debug-level trail for the running app; see NotchTransitionLog.logger.
+    nonisolated static let logger = Logger(subsystem: "com.localnook.app", category: "hover")
 
     /// Diagnostic trail, read by `--self-test`. Empty in normal operation.
     nonisolated(unsafe) static var diagnostics: [String] = []
@@ -84,6 +88,9 @@ struct HoverTracker: NSViewRepresentable {
                 if nowInside != isInside {
                     isInside = nowInside
                     HoverProbe.recordContainmentForward()
+                    let r = window.convertToScreen(convert(bounds, to: nil))
+                    let p = NSEvent.mouseLocation
+                    HoverTracker.logger.debug("panel containment inside=\(nowInside, privacy: .public) tracker=\("\(Int(r.minX))..\(Int(r.maxX)) y\(Int(r.minY))..\(Int(r.maxY))", privacy: .public) pointer=\(Int(p.x), privacy: .public),\(Int(p.y), privacy: .public)")
                     onChange?(nowInside)
                 }
             }
@@ -95,6 +102,7 @@ struct HoverTracker: NSViewRepresentable {
             // which happens on every frame of the open animation as the notch
             // grows. Only a genuine transition should reach `onChange`.
             guard !isInside else { return }
+            HoverTracker.logger.debug("panel mouseEntered")
             HoverTracker.record("mouseEntered")
             isInside = true
             HoverProbe.recordHandlerCall()

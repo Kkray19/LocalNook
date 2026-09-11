@@ -30,6 +30,7 @@
 //  real content, so it takes input, and this one steps aside.
 //
 
+import OSLog
 import AppKit
 import UniformTypeIdentifiers
 
@@ -109,6 +110,9 @@ final class NotchHitView: NSView {
             if nowInside != isInside {
                 isInside = nowInside
                 HoverProbe.recordContainmentForward()
+                let r = window.convertToScreen(convert(bounds, to: nil))
+                let p = NSEvent.mouseLocation
+                HoverTracker.logger.debug("catcher containment inside=\(nowInside, privacy: .public) catcher=\("\(Int(r.minX))..\(Int(r.maxX)) y\(Int(r.minY))..\(Int(r.maxY))", privacy: .public) pointer=\(Int(p.x), privacy: .public),\(Int(p.y), privacy: .public)")
                 onHoverChange?(nowInside)
             }
         }
@@ -117,6 +121,7 @@ final class NotchHitView: NSView {
     override func mouseEntered(with event: NSEvent) {
         HoverProbe.recordEnter()
         guard !isInside else { return }
+        HoverTracker.logger.debug("catcher mouseEntered")
         isInside = true
         HoverProbe.recordHandlerCall()
         onHoverChange?(true)

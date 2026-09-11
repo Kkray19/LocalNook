@@ -326,6 +326,7 @@ final class LiveActivityCenter: ObservableObject {
     func setTrailingExpanded(_ expanded: Bool) {
         let allowed = expanded && current.map(ClosedActivityView.canExpand) == true
         guard allowed != trailingExpanded else { return }
+        HoverTracker.logger.debug("wing expanded=\(allowed, privacy: .public)")
         withAnimation(NotchMotion.quick) { trailingExpanded = allowed }
     }
 

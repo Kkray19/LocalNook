@@ -17,6 +17,7 @@
 //  file names, no window titles, no user content ever enters it.
 //
 
+import OSLog
 import AppKit
 import Foundation
 
@@ -63,6 +64,12 @@ struct NotchTransition: Sendable, Equatable {
 /// notch?" during a session, not to build a history of the user's behaviour.
 enum NotchTransitionLog {
     private static let limit = 120
+    /// Debug level, so it is neither stored nor paid for unless someone is
+    /// streaming it: `log stream --level debug --predicate 'subsystem ==
+    /// "com.localnook.app"'`. The in-memory log below belongs to the running
+    /// process, so this is the only way to see from outside what moved the
+    /// notch — which is what diagnosing a live hover problem needs.
+    nonisolated static let logger = Logger(subsystem: "com.localnook.app", category: "transitions")
     nonisolated(unsafe) private static var entries: [NotchTransition] = []
     private static let lock = NSLock()
 
@@ -83,6 +90,7 @@ enum NotchTransitionLog {
         entries.append(entry)
         if entries.count > limit { entries.removeFirst(entries.count - limit) }
         lock.unlock()
+        logger.debug("\(opened ? "open" : "close", privacy: .public) via \(source.label, privacy: .public)")
     }
 
     static var all: [NotchTransition] {
