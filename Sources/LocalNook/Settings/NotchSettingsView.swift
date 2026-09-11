@@ -60,6 +60,21 @@ struct NotchSettingsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                Divider().padding(.vertical, 2)
+                Toggle("Tint the open notch with the playing artwork",
+                       isOn: settings.binding(\.ambientBackground))
+                if settings.ambientBackground {
+                    SettingsSlider(
+                        title: "Tint strength", value: settings.binding(\.ambientIntensity),
+                        range: 0...1, step: 0.05, unit: "", format: "%.2f"
+                    )
+                    Text("A soft wash of colour behind the open notch, taken from "
+                         + "the album art. It fades out when nothing is playing.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             SettingsSection(title: "Closed size") {

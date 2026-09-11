@@ -120,6 +120,7 @@ enum SelfTest {
             testCloseLatch()
             testDrawingPanelHover()
             testSwipeGesture()
+            testAmbientPalette()
             testScriptableControl()
             StabilizationTests.run()
         }
@@ -3772,6 +3773,59 @@ enum SelfTest {
         pumpEvents(for: 0.3)
         check("the recovery check stops once nothing is open",
               waitUntil({ !controller.pointerSafetyNetIsRunning }, timeout: 2.5))
+    }
+
+    /// The colour read from artwork for the ambient wash, tested on images
+    /// built pixel by pixel so "what colour is this picture" is checked without
+    /// rendering anything.
+    private static func testAmbientPalette() {
+        section("Ambient palette")
+
+        func rgba(_ triples: [(UInt8, UInt8, UInt8)]) -> [UInt8] {
+            triples.flatMap { [$0.0, $0.1, $0.2, 255] }
+        }
+        func near(_ a: Double, _ b: Double, _ tol: Double = 0.06) -> Bool { abs(a - b) <= tol }
+
+        let red = AmbientPalette.extract(fromRGBA: rgba(Array(repeating: (230, 20, 20), count: 16)),
+                                         pixelCount: 16)
+        check("a red cover reads as red",
+              near(red.base.red, 0.90) && red.base.green < 0.2 && red.base.blue < 0.2 && !red.isDefault,
+              "base = \(red.base)")
+
+        // Half red, half blue: the average is purple, and the accent is one of
+        // the two saturated colours, not the muddy mean.
+        let split = AmbientPalette.extract(
+            fromRGBA: rgba(Array(repeating: (220, 0, 0), count: 8)
+                           + Array(repeating: (0, 0, 220), count: 8)),
+            pixelCount: 16)
+        check("a two-colour cover averages between them",
+              near(split.base.red, 0.43) && near(split.base.blue, 0.43) && split.base.green < 0.1,
+              "base = \(split.base)")
+        check("and its accent is a saturated colour, not the average",
+              split.accent.saturation > 0.8, "accent sat = \(split.accent.saturation)")
+
+        // A grey cover with one vivid pixel: the wash should pick up the vivid
+        // one rather than washing the notch grey.
+        var mostlyGrey: [(UInt8, UInt8, UInt8)] = Array(repeating: (128, 128, 128), count: 15)
+        mostlyGrey.append((0, 200, 0))
+        let pop = AmbientPalette.extract(fromRGBA: rgba(mostlyGrey), pixelCount: 16)
+        check("a grey cover with one vivid detail takes its accent from the detail",
+              pop.accent.green > pop.accent.red && pop.accent.green > pop.accent.blue
+                  && pop.accent.saturation > 0.7,
+              "accent = \(pop.accent)")
+
+        // Near-black, flat art paints nothing rather than a black wash on black.
+        let dark = AmbientPalette.extract(fromRGBA: rgba(Array(repeating: (6, 6, 8), count: 16)),
+                                          pixelCount: 16)
+        check("near-black flat art yields the default palette", dark.isDefault)
+        check("as does an empty image",
+              AmbientPalette.extract(fromRGBA: [], pixelCount: 0).isDefault)
+        check("the default palette is the shared none", AmbientPalette.none.isDefault)
+
+        // Malformed input — a byte count that does not match the pixel count —
+        // is refused rather than read past its end.
+        check("a short buffer is refused, not over-read",
+              AmbientPalette.extract(fromRGBA: [1, 2, 3], pixelCount: 16).isDefault)
     }
 
     /// Two-finger swipe over the notch: the recogniser's thresholding, and the

@@ -341,6 +341,14 @@ final class Settings: ObservableObject {
     /// a preference on top of that, not a correction for it.
     @Pref("gestures.swipeInverted", false) var swipeInverted: Bool
 
+    // MARK: Ambient background
+
+    /// A wash of colour behind the open notch, drawn from the playing artwork.
+    @Pref("appearance.ambientBackground", true) var ambientBackground: Bool
+    /// How strong the wash is, 0…1. Deliberately gentle even at full: album
+    /// art can be garish and this must not fight the widgets.
+    @Pref("appearance.ambientIntensity", 0.6) var ambientIntensity: Double
+
     // MARK: Sessions (Claude Code / Codex monitoring)
 
     @Pref("sessions.watchClaudeCode", true) var watchClaudeCode: Bool

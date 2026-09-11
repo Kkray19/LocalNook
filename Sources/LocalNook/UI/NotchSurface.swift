@@ -27,6 +27,7 @@ struct NotchSurface: View {
     let hasPhysicalNotch: Bool
 
     @EnvironmentObject var settings: Settings
+    @ObservedObject private var media = MediaManager.shared
 
     private var shape: NotchShape {
         NotchShape(topRadius: topRadius, bottomRadius: bottomRadius)
@@ -64,6 +65,42 @@ struct NotchSurface: View {
     }
 
     var body: some View {
+        paintedSurface
+            .overlay { ambientWash }
+    }
+
+    /// The colour drawn from the playing artwork, over the open panel only.
+    ///
+    /// A wash, not a spotlight: a soft top-down gradient of the artwork's
+    /// average and its most colourful pixel, capped low so it never competes
+    /// with the widgets. Absent when off, when collapsed, or when there is
+    /// nothing playing worth reading a colour from — see AmbientPalette.
+    @ViewBuilder
+    private var ambientWash: some View {
+        let palette = media.ambientPalette
+        if isOpen, settings.ambientBackground, !palette.isDefault {
+            let alpha = min(0.45, max(0, settings.ambientIntensity) * 0.45)
+            LinearGradient(
+                colors: [
+                    color(palette.accent).opacity(alpha),
+                    color(palette.base).opacity(alpha * 0.7),
+                    .clear
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+            .clipShape(shape)
+            .opacity(opacity)
+            .allowsHitTesting(false)
+            .animation(NotchMotion.content, value: palette)
+        }
+    }
+
+    private func color(_ c: AmbientColor) -> Color {
+        Color(red: c.red, green: c.green, blue: c.blue)
+    }
+
+    @ViewBuilder
+    private var paintedSurface: some View {
         if #available(macOS 26.0, *), usesGlass {
             glassSurface
                 // Glass has no colour of its own, so a hairline is what gives

@@ -26,6 +26,9 @@ final class MediaManager: ObservableObject {
 
     @Published private(set) var nowPlaying: NowPlaying = .idle
     @Published private(set) var artwork: NSImage?
+    /// Colours drawn from the current artwork, for the ambient background.
+    /// Default while nothing is playing or the art is too flat to read.
+    @Published private(set) var ambientPalette: AmbientPalette = .none
     /// Set when Automation consent was refused, so the UI can explain itself.
     @Published private(set) var automationDenied = false
 
@@ -319,18 +322,37 @@ final class MediaManager: ObservableObject {
         if resolved.artworkKey != lastArtworkKey {
             lastArtworkKey = resolved.artworkKey
             artwork = nil
+            ambientPalette = .none
             if !resolved.isIdle,
                let provider = availableProviders.first(where: { $0.id == resolved.sourceID }) {
-                artwork = await provider.artwork(for: resolved)
+                let image = await provider.artwork(for: resolved)
+                guard !Task.isCancelled else { return }
+                artwork = image
+                ambientPalette = await Self.palette(from: image)
+            }
+        }
+    }
+
+    /// Reads an ambient palette off the main actor: a CGContext draw and an
+    /// average over 144 pixels, small but not something to do on a hover tick.
+    private static func palette(from image: NSImage?) async -> AmbientPalette {
+        guard let image else { return .none }
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                var rect = CGRect(origin: .zero, size: image.size)
+                guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+                else { continuation.resume(returning: .none); return }
+                continuation.resume(returning: AmbientPalette.from(cg))
             }
         }
     }
 
     /// Injects a fixed track. Used only by `--render-preview` so populated
     /// layouts can be reviewed without playing audio on the user's machine.
-    func previewInject(_ track: NowPlaying?) {
+    func previewInject(_ track: NowPlaying?, ambient: AmbientPalette = .none) {
         nowPlaying = track ?? .idle
         artwork = nil
+        ambientPalette = ambient
     }
 
     // MARK: Transport

@@ -40,6 +40,7 @@ enum PreviewRenderer {
             ("closed-agent-mixed", false, .media),
             ("closed-agent-expanded", false, .media),
             ("dashboard-populated", true, .media),
+            ("dashboard-ambient", true, .media),
             ("dashboard-browser-audio", true, .media),
             ("dashboard-browser-ambiguous", true, .media),
             ("dashboard-browser-page", true, .media),
@@ -63,6 +64,20 @@ enum PreviewRenderer {
                     title: "Fourth of July", artist: "Sufjan Stevens",
                     album: "Carrie & Lowell", duration: 292, position: 96,
                     positionSampledAt: Date(), artworkKey: "preview"
+                ))
+                model.page = .dashboard
+            } else if scene.name == "dashboard-ambient" {
+                // A staged palette, so the ambient wash can be judged without
+                // decoding real artwork in the renderer.
+                MediaManager.shared.previewInject(NowPlaying(
+                    sourceID: "music", sourceName: "Music", state: .playing,
+                    title: "Nightcall", artist: "Kavinsky",
+                    album: "OutRun", duration: 258, position: 70,
+                    positionSampledAt: Date(), artworkKey: "preview"
+                ), ambient: AmbientPalette(
+                    base: AmbientColor(red: 0.35, green: 0.10, blue: 0.45),
+                    accent: AmbientColor(red: 0.95, green: 0.25, blue: 0.55),
+                    isDefault: false
                 ))
                 model.page = .dashboard
             } else if scene.name == "dashboard-browser-audio" {
