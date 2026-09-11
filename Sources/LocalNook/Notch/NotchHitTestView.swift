@@ -36,6 +36,12 @@ final class NotchHitTestView: NSView {
     /// `.zero` makes the panel entirely click-through.
     var interactiveRegion: () -> NSRect = { .zero }
 
+    /// A two-finger swipe over the open panel. SwiftUI scroll views inside the
+    /// panel are earlier in the responder chain, so a swipe over a list scrolls
+    /// the list and only a swipe over empty panel area reaches here.
+    var onSwipe: ((SwipeDirection) -> Void)?
+    private var swipe = SwipeAccumulator()
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         // `point` arrives in the superview's coordinate system.
         let local = superview.map { convert(point, from: $0) } ?? point
@@ -45,4 +51,13 @@ final class NotchHitTestView: NSView {
 
     /// The panel is never opaque; this keeps AppKit from short-circuiting.
     override var isOpaque: Bool { false }
+
+    override func scrollWheel(with event: NSEvent) {
+        if let direction = swipe.feed(
+            deltaY: event.scrollingDeltaY, phase: event.scrollStreamPhase,
+            invertedFromDevice: event.isDirectionInvertedFromDevice
+        ) {
+            onSwipe?(direction)
+        }
+    }
 }

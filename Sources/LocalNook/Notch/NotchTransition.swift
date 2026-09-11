@@ -35,6 +35,8 @@ enum NotchTransitionSource: String, Sendable {
     case outsideClick
     /// A drag arriving over the notch.
     case drag
+    /// A two-finger swipe over the notch.
+    case gesture
     /// Fullscreen suppression, lock, or wake.
     case systemState
     /// Called directly in a test.
@@ -114,7 +116,7 @@ enum NotchTransitionLog {
         text += "\n\nby source:"
         for source in [
             NotchTransitionSource.trackingArea, .explicitCommand, .pointerFallback,
-            .escape, .outsideClick, .drag, .systemState, .programmatic
+            .escape, .outsideClick, .drag, .gesture, .systemState, .programmatic
         ] {
             let n = count(of: source)
             if n > 0 { text += "\n  \(source.label): \(n)" }

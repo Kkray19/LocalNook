@@ -74,9 +74,13 @@ final class NotchHitView: NSView {
     /// `draggingExited` did nothing at all, so a drag that entered and left
     /// without dropping left the notch open with nothing to close it.
     var onDragEnd: (() -> Void)?
+    /// A two-finger swipe over the closed notch. Only ever opens: the catcher
+    /// is inert once the notch is open, so the main panel handles closing.
+    var onSwipe: ((SwipeDirection) -> Void)?
 
     private var trackingArea: NSTrackingArea?
     private var isInside = false
+    private var swipe = SwipeAccumulator()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -139,6 +143,15 @@ final class NotchHitView: NSView {
         onClick?()
     }
 
+    override func scrollWheel(with event: NSEvent) {
+        if let direction = swipe.feed(
+            deltaY: event.scrollingDeltaY, phase: event.scrollStreamPhase,
+            invertedFromDevice: event.isDirectionInvertedFromDevice
+        ) {
+            onSwipe?(direction)
+        }
+    }
+
     // MARK: Dragging
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
@@ -162,5 +175,17 @@ final class NotchHitView: NSView {
         // Recognised, not merely new: reporting failure for a duplicate makes
         // AppKit play the rejection animation for a perfectly good drop.
         return ShelfStore.shared.ingestReportingOutcome(sender.draggingPasteboard).wasHandled
+    }
+}
+
+extension NSEvent {
+    /// Which point in a scroll stream this event is. A legacy mouse wheel has
+    /// no phases, so each of its ticks is a discrete event.
+    var scrollStreamPhase: ScrollStreamPhase {
+        if phase.contains(.began) { return .began }
+        if phase.contains(.ended) || phase.contains(.cancelled) { return .ended }
+        if !momentumPhase.isEmpty { return .momentum }
+        if !phase.isEmpty { return .changed }
+        return .discrete
     }
 }

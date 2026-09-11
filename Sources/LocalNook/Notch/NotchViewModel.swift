@@ -277,6 +277,25 @@ final class NotchViewModel: ObservableObject {
         claims.removeAll()
     }
 
+    /// Acts on a swipe over the notch: down opens a closed notch, up closes an
+    /// open one. Anything else — up on a closed notch, down on an open one — is
+    /// deliberately nothing, so a stripe of scrolling cannot flap the panel.
+    func handleSwipe(_ direction: SwipeDirection) {
+        guard settings.swipeToToggle, !isSuppressed else { return }
+        let effective: SwipeDirection = settings.swipeInverted
+            ? (direction == .down ? .up : .down)
+            : direction
+        switch (effective, state) {
+        case (.down, .closed):
+            allowHoverToReopen()
+            open(source: .gesture)
+        case (.up, .open):
+            close(source: .gesture)
+        default:
+            break
+        }
+    }
+
     func cancelPending() {
         openTask?.cancel(); openTask = nil
         closeTask?.cancel(); closeTask = nil

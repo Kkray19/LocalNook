@@ -50,6 +50,11 @@ struct GeneralSettingsView: View {
                     range: 0...20, step: 1, unit: " pt", format: "%.0f"
                 )
                 Toggle("Collapse when Escape is pressed", isOn: settings.binding(\.closeOnEscape))
+                Toggle("Swipe over the notch to open and close", isOn: settings.binding(\.swipeToToggle))
+                if settings.swipeToToggle {
+                    Toggle("Reverse the swipe direction", isOn: settings.binding(\.swipeInverted))
+                        .padding(.leading, 18)
+                }
             }
 
             SettingsSection(

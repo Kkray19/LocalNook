@@ -484,6 +484,10 @@ final class NotchWindowController: NSObject {
             guard let model, let container else { return .zero }
             return NotchWindowController.interactiveRegion(for: model, in: container.bounds)
         }
+        container.onSwipe = { [weak model] direction in
+            guard let model, !NotchWindowController.shared.ignoresLiveInput else { return }
+            model.handleSwipe(direction)
+        }
         return container
     }
 
@@ -514,6 +518,10 @@ final class NotchWindowController: NSObject {
         view.onClick = { [weak model] in
             guard let model, Settings.shared.openTrigger.allowsClick else { return }
             model.toggle(source: .trackingArea)
+        }
+        view.onSwipe = { [weak model] direction in
+            guard let model, !NotchWindowController.shared.ignoresLiveInput else { return }
+            model.handleSwipe(direction)
         }
         let dragOwner = UUID()
         view.onDragEnter = { [weak model] in

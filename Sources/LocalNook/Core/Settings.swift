@@ -332,6 +332,15 @@ final class Settings: ObservableObject {
 
     @Pref("shortcuts.pinned", [String]()) var pinnedShortcutNames: [String]
 
+    // MARK: Gestures
+
+    /// Two-finger swipe over the notch to open and close it.
+    @Pref("gestures.swipeToToggle", true) var swipeToToggle: Bool
+    /// Flips which finger direction opens, for anyone to whom the default
+    /// feels backwards. The gesture already follows natural-scrolling; this is
+    /// a preference on top of that, not a correction for it.
+    @Pref("gestures.swipeInverted", false) var swipeInverted: Bool
+
     // MARK: Sessions (Claude Code / Codex monitoring)
 
     @Pref("sessions.watchClaudeCode", true) var watchClaudeCode: Bool

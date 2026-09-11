@@ -119,6 +119,7 @@ enum SelfTest {
             testPointerFallback()
             testCloseLatch()
             testDrawingPanelHover()
+            testSwipeGesture()
             testScriptableControl()
             StabilizationTests.run()
         }
@@ -3771,6 +3772,94 @@ enum SelfTest {
         pumpEvents(for: 0.3)
         check("the recovery check stops once nothing is open",
               waitUntil({ !controller.pointerSafetyNetIsRunning }, timeout: 2.5))
+    }
+
+    /// Two-finger swipe over the notch: the recogniser's thresholding, and the
+    /// model's state gating.
+    private static func testSwipeGesture() {
+        section("Swipe gesture")
+
+        // ── The recogniser fires once per gesture, following the fingers ───
+        var acc = SwipeAccumulator(threshold: 18)
+        // A gentle scroll under the threshold is not a command.
+        _ = acc.feed(deltaY: -5, phase: .began, invertedFromDevice: true)
+        check("a small movement does not register",
+              acc.feed(deltaY: -6, phase: .changed, invertedFromDevice: true) == nil)
+        // Crossing the threshold does, exactly once.
+        check("crossing the threshold registers a swipe",
+              acc.feed(deltaY: -12, phase: .changed, invertedFromDevice: true) == .up,
+              "net travel was \(acc.accumulated)")
+        check("and the rest of the same gesture is swallowed",
+              acc.feed(deltaY: -40, phase: .momentum, invertedFromDevice: true) == nil)
+        check("including its momentum tail",
+              acc.feed(deltaY: -80, phase: .momentum, invertedFromDevice: true) == nil)
+
+        // Natural scrolling: fingers down is a positive delta, and must read as
+        // down whichever way scrolling is set.
+        var down = SwipeAccumulator(threshold: 18)
+        _ = down.feed(deltaY: 0, phase: .began, invertedFromDevice: true)
+        check("with natural scrolling, fingers down is a down swipe",
+              down.feed(deltaY: 25, phase: .changed, invertedFromDevice: true) == .down)
+        var downClassic = SwipeAccumulator(threshold: 18)
+        _ = downClassic.feed(deltaY: 0, phase: .began, invertedFromDevice: false)
+        check("with classic scrolling, fingers down is still a down swipe",
+              downClassic.feed(deltaY: -25, phase: .changed, invertedFromDevice: false) == .down)
+
+        // A fresh gesture starts clean: last flick's travel cannot carry in.
+        var reused = SwipeAccumulator(threshold: 18)
+        _ = reused.feed(deltaY: 30, phase: .began, invertedFromDevice: true)
+        _ = reused.feed(deltaY: 30, phase: .changed, invertedFromDevice: true)
+        _ = reused.feed(deltaY: 0, phase: .ended, invertedFromDevice: true)
+        _ = reused.feed(deltaY: 0, phase: .began, invertedFromDevice: true)
+        check("a new gesture starts from zero",
+              reused.feed(deltaY: 5, phase: .changed, invertedFromDevice: true) == nil,
+              "carried \(reused.accumulated)")
+
+        // A legacy mouse wheel has no phases; each discrete tick still counts.
+        var wheel = SwipeAccumulator(threshold: 18)
+        check("a discrete wheel tick past the threshold registers",
+              wheel.feed(deltaY: 20, phase: .discrete, invertedFromDevice: false) == .up)
+
+        // ── The model acts only in the matching state ──────────────────────
+        let settings = Settings.shared
+        let wasEnabled = settings.swipeToToggle
+        let wasInverted = settings.swipeInverted
+        let wasDelay = settings.openDelay
+        settings.swipeToToggle = true
+        settings.swipeInverted = false
+        settings.openDelay = 0.02
+        defer {
+            settings.swipeToToggle = wasEnabled
+            settings.swipeInverted = wasInverted
+            settings.openDelay = wasDelay
+        }
+
+        let model = NotchViewModel(screenID: NSScreen.main?.stableID)
+        model.handleSwipe(.up)
+        check("up on a closed notch does nothing", model.state == .closed)
+        model.handleSwipe(.down)
+        check("down opens a closed notch", waitUntil({ model.state == .open }, timeout: 1.0),
+              "it is \(model.state)")
+        model.handleSwipe(.down)
+        check("down on an open notch does nothing", model.state == .open)
+        model.handleSwipe(.up)
+        check("up closes an open notch", model.state == .closed)
+
+        // The last open must be attributed to the gesture, not to a stray path.
+        check("the open was attributed to the gesture",
+              NotchTransitionLog.all.last { $0.opened }?.source == .gesture,
+              "\(String(describing: NotchTransitionLog.all.last { $0.opened }?.source))")
+
+        settings.swipeInverted = true
+        model.handleSwipe(.up)
+        check("reversed, an up swipe opens", waitUntil({ model.state == .open }, timeout: 1.0))
+        model.close()
+        settings.swipeInverted = false
+
+        settings.swipeToToggle = false
+        model.handleSwipe(.down)
+        pumpEvents(for: 0.1)
+        check("switched off, a swipe does nothing", model.state == .closed)
     }
 
     /// The drawing panel's hover reports count only while the notch is open.
