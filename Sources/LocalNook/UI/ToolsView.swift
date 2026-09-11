@@ -130,6 +130,7 @@ struct FocusedToolView: View {
         case .shortcuts: ShortcutsWidgetView()
         case .sessions: SessionsDashboardView()
         case .stats: SystemPageView()
+        case .apps: AppsWidgetView()
         }
     }
 }

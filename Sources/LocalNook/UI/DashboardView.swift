@@ -122,6 +122,7 @@ private struct DashboardSection: View {
         case .calendar: CompactCalendarView()
         case .timers: CompactTimerView(model: model)
         case .stats: CompactStatsView(model: model)
+        case .apps: CompactAppsView(model: model)
         case .sessions: CompactSessionsView(model: model)
         default: EmptyView()
         }

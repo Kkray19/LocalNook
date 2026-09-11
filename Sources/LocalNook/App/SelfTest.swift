@@ -121,6 +121,7 @@ enum SelfTest {
             testDrawingPanelHover()
             testSwipeGesture()
             testAmbientPalette()
+            testQuickApps()
             testScriptableControl()
             StabilizationTests.run()
         }
@@ -3773,6 +3774,43 @@ enum SelfTest {
         pumpEvents(for: 0.3)
         check("the recovery check stops once nothing is open",
               waitUntil({ !controller.pointerSafetyNetIsRunning }, timeout: 2.5))
+    }
+
+    /// Quick Apps: the pin-list arithmetic, which is where order, duplicates
+    /// and the cap live. Resolving a bundle id to an installed app is
+    /// environment-dependent and covered only where an app is known present.
+    private static func testQuickApps() {
+        section("Quick Apps")
+
+        check("pinning appends in order",
+              AppLauncher.adding("b.two", to: ["a.one"]) == ["a.one", "b.two"])
+        check("a duplicate pin is ignored",
+              AppLauncher.adding("a.one", to: ["a.one", "b.two"]) == ["a.one", "b.two"])
+        check("an empty identifier is not pinned",
+              AppLauncher.adding("", to: ["a.one"]) == ["a.one"])
+        check("unpinning removes exactly one",
+              AppLauncher.removing("a.one", from: ["a.one", "b.two"]) == ["b.two"])
+        check("unpinning something not pinned changes nothing",
+              AppLauncher.removing("z.nine", from: ["a.one"]) == ["a.one"])
+
+        // The cap holds however many are added.
+        var many: [String] = []
+        for index in 0..<(AppLauncher.maximum + 5) {
+            many = AppLauncher.adding("app.\(index)", to: many)
+        }
+        check("the pin list is capped", many.count == AppLauncher.maximum, "\(many.count)")
+        check("and keeps the earliest pins", many.first == "app.0")
+
+        check("resolving nothing yields nothing", AppLauncher.resolve([]).isEmpty)
+        check("an uninstalled bundle id resolves to no app",
+              AppLauncher.resolve(["com.localnook.definitely-not-installed"]).isEmpty)
+        // Finder is on every Mac, so it is a safe positive.
+        let finder = AppLauncher.resolve(["com.apple.finder"])
+        check("an installed app resolves with a name and a url",
+              finder.count == 1 && !finder[0].name.isEmpty && finder[0].url.isFileURL,
+              "\(finder)")
+        check("resolution de-duplicates",
+              AppLauncher.resolve(["com.apple.finder", "com.apple.finder"]).count == 1)
     }
 
     /// The colour read from artwork for the ambient wash, tested on images

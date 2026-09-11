@@ -41,6 +41,7 @@ enum PreviewRenderer {
             ("closed-agent-expanded", false, .media),
             ("dashboard-populated", true, .media),
             ("dashboard-ambient", true, .media),
+            ("apps", true, .apps),
             ("dashboard-browser-audio", true, .media),
             ("dashboard-browser-ambiguous", true, .media),
             ("dashboard-browser-page", true, .media),
@@ -66,6 +67,14 @@ enum PreviewRenderer {
                     positionSampledAt: Date(), artworkKey: "preview"
                 ))
                 model.page = .dashboard
+            } else if scene.name == "apps" {
+                Settings.shared.pinnedAppBundleIDs = [
+                    "com.apple.finder", "com.apple.Safari", "com.apple.mail",
+                    "com.apple.Music", "com.apple.systempreferences",
+                ]
+                model.page = .tools
+                model.focusedTool = .apps
+                model.focusedToolOrigin = .dashboard
             } else if scene.name == "dashboard-ambient" {
                 // A staged palette, so the ambient wash can be judged without
                 // decoding real artwork in the renderer.

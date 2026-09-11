@@ -96,6 +96,7 @@ enum WidgetKind: String, CaseIterable, Identifiable, Codable {
     case shortcuts
     case sessions
     case stats
+    case apps
 
     var id: String { rawValue }
 
@@ -110,6 +111,7 @@ enum WidgetKind: String, CaseIterable, Identifiable, Codable {
         case .shortcuts: "Shortcuts"
         case .sessions: "AI Sessions"
         case .stats: "Stats"
+        case .apps: "Quick Apps"
         }
     }
 
@@ -124,6 +126,7 @@ enum WidgetKind: String, CaseIterable, Identifiable, Codable {
         case .shortcuts: "bolt.fill"
         case .sessions: "brain.head.profile"
         case .stats: "chart.bar.fill"
+        case .apps: "square.grid.2x2.fill"
         }
     }
 }
@@ -348,6 +351,11 @@ final class Settings: ObservableObject {
     /// How strong the wash is, 0…1. Deliberately gentle even at full: album
     /// art can be garish and this must not fight the widgets.
     @Pref("appearance.ambientIntensity", 0.6) var ambientIntensity: Double
+
+    // MARK: Quick Apps
+
+    /// Bundle identifiers of apps pinned to the launcher, in order.
+    @Pref("apps.pinned", [String]()) var pinnedAppBundleIDs: [String]
 
     // MARK: Sessions (Claude Code / Codex monitoring)
 

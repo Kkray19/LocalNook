@@ -42,7 +42,7 @@ enum NotchPage: String, PrefValue, CaseIterable, Identifiable {
 extension WidgetKind {
     var suitsDashboard: Bool {
         switch self {
-        case .media, .calendar, .timers, .stats, .sessions: true
+        case .media, .calendar, .timers, .stats, .sessions, .apps: true
         case .shelf, .notes, .todo, .shortcuts: false
         }
     }
@@ -55,6 +55,7 @@ extension WidgetKind {
         case .calendar: 1.15
         case .sessions: 1.1
         case .stats: 1.1
+        case .apps: 1.0
         case .timers: 0.95
         default: 1
         }
@@ -67,6 +68,7 @@ extension WidgetKind {
         case .calendar: 190
         case .sessions: 170
         case .stats: 180
+        case .apps: 150
         case .timers: 160
         default: 150
         }
