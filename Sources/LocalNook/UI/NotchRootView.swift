@@ -132,13 +132,10 @@ struct NotchRootView: View {
             // The other half of the live-input door the deterministic suite
             // closes; see NotchWindowController.ignoresLiveInput.
             guard !NotchWindowController.shared.ignoresLiveInput else { return }
-            guard !model.isSuppressed else { return }
-            model.isHovering = hovering
-            if hovering {
-                model.scheduleOpen()
-            } else if !model.isDragTargeting {
-                model.scheduleClose()
-            }
+            // Collapsed, hover is the catcher's; while this panel resizes its
+            // tracker's reports describe an animation, not the pointer. See
+            // NotchViewModel.drawingPanelHoverChanged.
+            model.drawingPanelHoverChanged(hovering)
         }
         .frame(width: hoverSize.width, height: hoverSize.height)
     }

@@ -208,6 +208,35 @@ final class NotchViewModel: ObservableObject {
         }
     }
 
+    /// The drawing panel's hover report — honoured only while the notch is open.
+    ///
+    /// Collapsed, hover belongs to the catcher: the small window over the
+    /// notch, whose frame never moves. The drawing panel is inert then, but its
+    /// tracker still runs a manual containment check every time its tracking
+    /// area is rebuilt, and a live activity resizing the panel rebuilds it on
+    /// every frame of an animation. The window's origin jumps at once while
+    /// SwiftUI animates the tracker back to the centre, so for a third of a
+    /// second the tracker's rectangle sweeps across the menu bar — measured at
+    /// 750..919 and then 536..701 while the notch core was 671..840.
+    ///
+    /// That broke hover two ways. A sweep passing over a pointer resting on an
+    /// activity's wing reported "inside" and opened the notch. A sweep that
+    /// did not include the pointer reported "outside", and `scheduleClose`
+    /// cancels a pending open while collapsed — so it could throw away an open
+    /// the catcher had just scheduled. Neither report was about the pointer; both
+    /// were about an animation. So collapsed, they are ignored entirely: the
+    /// catcher opens, and this keeps the notch open and closes it.
+    func drawingPanelHoverChanged(_ hovering: Bool) {
+        guard state == .open, !isSuppressed else { return }
+        isHovering = hovering
+        if hovering {
+            // Already open: this only cancels a close that was about to fire.
+            scheduleOpen()
+        } else if !isDragTargeting {
+            scheduleClose()
+        }
+    }
+
     /// True when a close is scheduled but has not fired. Lets tests assert what
     /// the fallback decided without waiting on the close delay.
     var hasPendingClose: Bool { closeTask != nil }

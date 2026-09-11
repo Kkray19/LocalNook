@@ -118,6 +118,7 @@ enum SelfTest {
             testMissedCrossingRecovery()
             testPointerFallback()
             testCloseLatch()
+            testDrawingPanelHover()
             testScriptableControl()
             StabilizationTests.run()
         }
@@ -3767,6 +3768,42 @@ enum SelfTest {
         pumpEvents(for: 0.3)
         check("the recovery check stops once nothing is open",
               waitUntil({ !controller.pointerSafetyNetIsRunning }, timeout: 2.5))
+    }
+
+    /// The drawing panel's hover reports count only while the notch is open.
+    ///
+    /// Collapsed, a live activity resizing the panel sweeps the panel's tracker
+    /// across the menu bar, and each frame's containment check was acted on:
+    /// caught opening the notch under a pointer resting on an activity's wing.
+    private static func testDrawingPanelHover() {
+        section("Drawing panel hover")
+        let settings = Settings.shared
+        let originalDelay = settings.openDelay
+        settings.openDelay = 0.02
+        defer { settings.openDelay = originalDelay }
+
+        let model = NotchViewModel(screenID: NSScreen.main?.stableID)
+        model.allowHoverToReopen()
+        model.drawingPanelHoverChanged(true)
+        pumpEvents(for: 0.2)
+        check("collapsed, the panel's report cannot open the notch", model.state == .closed,
+              "it is \(model.state)")
+        check("nor claim the pointer", !model.isHovering)
+
+        // The other half of the race: a sweep reporting "outside" used to cancel
+        // an open the catcher had just scheduled.
+        model.isHovering = true
+        model.scheduleOpen()
+        model.drawingPanelHoverChanged(false)
+        check("an open the catcher scheduled survives the panel's report",
+              waitUntil({ model.state == .open }, timeout: 1.0), "still \(model.state)")
+
+        // Open, the panel owns hover.
+        model.drawingPanelHoverChanged(false)
+        check("open, leaving the panel schedules the close", model.hasPendingClose)
+        model.drawingPanelHoverChanged(true)
+        check("and returning cancels it", !model.hasPendingClose)
+        model.close()
     }
 
     /// A deliberate close must not bounce straight back open under a still pointer.
