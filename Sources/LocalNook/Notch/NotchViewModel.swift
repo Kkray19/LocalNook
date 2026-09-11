@@ -35,6 +35,14 @@ final class NotchViewModel: ObservableObject {
     @Published var isHovering: Bool = false
     /// True while a drag is over the notch, which forces the shelf open.
     @Published var isDragTargeting: Bool = false
+
+    /// True while the Tray is handing files to another app.
+    ///
+    /// The pointer necessarily leaves the panel during such a drag — that is
+    /// the whole gesture — and the notch closing underneath it would cancel
+    /// the drag the user is in the middle of. `isDragTargeting` is the mirror
+    /// image of this and covers drags coming *in*.
+    @Published var isExportingDrag: Bool = false
     /// Suppresses the panel entirely (fullscreen apps, lock screen).
     @Published var isSuppressed: Bool = false
 
@@ -209,7 +217,7 @@ final class NotchViewModel: ObservableObject {
         closeTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
-            guard let self, !self.isDragTargeting else { return }
+            guard let self, !self.isDragTargeting, !self.isExportingDrag else { return }
             self.closeTask = nil
             self.close(source: source)
         }
@@ -239,7 +247,7 @@ final class NotchViewModel: ObservableObject {
         if hovering {
             // Already open: this only cancels a close that was about to fire.
             scheduleOpen()
-        } else if !isDragTargeting {
+        } else if !isDragTargeting, !isExportingDrag {
             scheduleClose()
         }
     }

@@ -124,6 +124,7 @@ enum SelfTest {
             testQuickApps()
             testWidgetSizing()
             testAnimationLifecycle()
+            testTrayHandoff()
             testScriptableControl()
             StabilizationTests.run()
         }
@@ -3861,6 +3862,181 @@ enum SelfTest {
               "\(type(of: BusyIndicator(tint: .green).body))")
 
         window.contentView = nil
+    }
+
+    /// Gathering several items and handing them to another app.
+    ///
+    /// The selection arithmetic and the drag payload are both pure, so the
+    /// rules are asserted directly rather than through a gesture. What cannot
+    /// be asserted here is an actual Finder drop; that is a physical check.
+    private static func testTrayHandoff() {
+        section("Tray handoff")
+
+        let ids = (0..<5).map { _ in UUID() }
+        typealias Store = ShelfStore
+
+        // MARK: plain click
+        var result = Store.selection(after: .replace, clicking: ids[1],
+                                     in: ids, current: [], anchor: nil)
+        check("a plain click selects one row", result.selection == [ids[1]])
+        check("and becomes the anchor", result.anchor == ids[1])
+
+        result = Store.selection(after: .replace, clicking: ids[1],
+                                 in: ids, current: [ids[1]], anchor: ids[1])
+        check("clicking the only selected row clears it", result.selection.isEmpty)
+        check("and forgets the anchor with it", result.anchor == nil)
+
+        result = Store.selection(after: .replace, clicking: ids[1], in: ids,
+                                 current: [ids[0], ids[1], ids[2]], anchor: ids[0])
+        check("a plain click inside a multi-selection narrows to that row",
+              result.selection == [ids[1]])
+
+        // MARK: command click
+        result = Store.selection(after: .toggle, clicking: ids[3],
+                                 in: ids, current: [ids[1]], anchor: ids[1])
+        check("command-click adds to the selection",
+              result.selection == [ids[1], ids[3]])
+        result = Store.selection(after: .toggle, clicking: ids[1],
+                                 in: ids, current: [ids[1], ids[3]], anchor: ids[1])
+        check("command-click removes an already selected row",
+              result.selection == [ids[3]])
+        check("and the anchor follows the command-click", result.anchor == ids[1])
+
+        // MARK: shift click
+        result = Store.selection(after: .extend, clicking: ids[3],
+                                 in: ids, current: [ids[1]], anchor: ids[1])
+        check("shift-click selects the range from the anchor",
+              result.selection == Set(ids[1...3]))
+        check("and leaves the anchor where it was", result.anchor == ids[1])
+
+        result = Store.selection(after: .extend, clicking: ids[0],
+                                 in: ids, current: [ids[3]], anchor: ids[3])
+        check("shift-click backwards selects the same range",
+              result.selection == Set(ids[0...3]))
+
+        // Shrinking: a second shift-click re-measures from the anchor rather
+        // than ratcheting the selection outwards.
+        result = Store.selection(after: .extend, clicking: ids[2],
+                                 in: ids, current: Set(ids[0...3]), anchor: ids[3])
+        check("a second shift-click re-measures rather than growing",
+              result.selection == Set(ids[2...3]))
+
+        result = Store.selection(after: .extend, clicking: ids[2],
+                                 in: ids, current: [], anchor: nil)
+        check("shift with no anchor behaves like a plain click",
+              result.selection == [ids[2]] && result.anchor == ids[2])
+
+        // MARK: rows that are gone
+        let stranger = UUID()
+        result = Store.selection(after: .replace, clicking: stranger,
+                                 in: ids, current: [ids[1]], anchor: ids[1])
+        check("clicking a row that is not there changes nothing",
+              result.selection == [ids[1]] && result.anchor == ids[1])
+
+        // MARK: what a drag would carry
+        let directory = AppInfo.testDirectory
+            .appendingPathComponent("tray-handoff", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileA = directory.appendingPathComponent("a.txt")
+        let fileB = directory.appendingPathComponent("b.txt")
+        let folder = directory.appendingPathComponent("folder", isDirectory: true)
+        let vanished = directory.appendingPathComponent("gone.txt")
+        try? "a".write(to: fileA, atomically: true, encoding: .utf8)
+        try? "b".write(to: fileB, atomically: true, encoding: .utf8)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? "g".write(to: vanished, atomically: true, encoding: .utf8)
+
+        let itemA = ShelfItem.fromFile(fileA)
+        let itemB = ShelfItem.fromFile(fileB)
+        let itemFolder = ShelfItem.fromFile(folder)
+        let itemGone = ShelfItem.fromFile(vanished)
+        try? FileManager.default.removeItem(at: vanished)
+        let link = ShelfItem.fromURL(URL(string: "https://example.invalid/page")!)
+
+        check("a folder is offered as a folder", itemFolder.kind == .folder)
+
+        let carried = ShelfDrag.urls(for: [itemA, itemFolder, itemGone, itemB, link])
+        check("files and a folder all travel", carried.count == 4, "\(carried.count)")
+        check("in tray order", carried.first == fileA)
+        check("a missing file is left out",
+              !carried.contains { $0.lastPathComponent == "gone.txt" })
+        check("a link travels as its URL",
+              carried.contains { $0.absoluteString == "https://example.invalid/page" })
+        check("the missing one is counted",
+              ShelfDrag.missingCount(in: [itemA, itemGone, itemB]) == 1)
+
+        // Two rows pointing at one file must not hand it over twice.
+        let duplicate = ShelfItem.fromFile(fileA)
+        check("a duplicate reference is handed over once",
+              ShelfDrag.urls(for: [itemA, duplicate]).count == 1)
+
+        check("nothing draggable is stated, not silently empty",
+              ShelfDrag.exclusionNote(missing: 2, draggable: 0) == "All 2 files are missing")
+        check("a partial exclusion is stated",
+              ShelfDrag.exclusionNote(missing: 1, draggable: 3) == "1 missing file left out")
+        check("a complete set says nothing",
+              ShelfDrag.exclusionNote(missing: 0, draggable: 3) == nil)
+
+        // MARK: the live store
+        let shelf = ShelfStore.shared
+        let saved = shelf.items
+        let savedSelection = shelf.selection
+        defer {
+            shelf.restoreForTesting(saved)
+            shelf.selection = savedSelection
+        }
+
+        shelf.restoreForTesting([itemA, itemB, itemFolder])
+        check("nothing selected means the whole tray would be dragged",
+              shelf.itemsToHandOff.count == 3)
+        shelf.select(itemB.id, gesture: .replace)
+        check("a selection narrows what would be dragged",
+              shelf.itemsToHandOff.map(\.id) == [itemB.id])
+        check("and the anchor is set", shelf.selectionAnchor == itemB.id)
+
+        shelf.select(itemFolder.id, gesture: .extend)
+        check("shift-click through the store selects the range",
+              shelf.selection.count == 2)
+
+        // Removing one row moves the anchor to whatever took its place, so a
+        // shift-click afterwards continues from where the user was rather than
+        // jumping to the top of the tray.
+        shelf.restoreForTesting([itemA, itemB, itemFolder])
+        shelf.select(itemB.id, gesture: .replace)
+        shelf.remove(itemB.id)
+        check("the anchor follows the row that took the removed one's place",
+              shelf.selectionAnchor == itemFolder.id,
+              "\(String(describing: shelf.selectionAnchor))")
+        shelf.restoreForTesting([itemA, itemB, itemFolder])
+        shelf.select(itemFolder.id, gesture: .replace)
+        shelf.remove(itemFolder.id)
+        check("removing the last row moves the anchor to the new last row",
+              shelf.selectionAnchor == itemB.id)
+
+        // Removal must leave the anchor pointing at something real.
+        shelf.restoreForTesting([itemA, itemB, itemFolder])
+        shelf.select(itemB.id, gesture: .replace)
+        shelf.select(itemFolder.id, gesture: .extend)
+        shelf.removeSelected()
+        check("removing the selection empties it", shelf.selection.isEmpty)
+        check("and leaves no dangling anchor",
+              shelf.selectionAnchor == nil || shelf.items.contains { $0.id == shelf.selectionAnchor })
+        check("the unselected row survives", shelf.items.map(\.id) == [itemA.id])
+
+        // The guarantee: removing tray entries never touches the originals.
+        check("removing entries left every original file alone",
+              FileManager.default.fileExists(atPath: fileA.path)
+                  && FileManager.default.fileExists(atPath: fileB.path)
+                  && FileManager.default.fileExists(atPath: folder.path))
+
+        // Selection is UI state and is deliberately not persisted, so a
+        // relaunch cannot restore a selection of rows the user never made.
+        let reloaded = ShelfStore(storeURL: AppInfo.testDirectory
+            .appendingPathComponent("handoff-reload.json"))
+        check("a freshly loaded tray has nothing selected",
+              reloaded.selection.isEmpty && reloaded.selectionAnchor == nil)
+
+        try? FileManager.default.removeItem(at: directory)
     }
 
     private static func testWidgetSizing() {

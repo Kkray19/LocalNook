@@ -37,6 +37,11 @@ struct TrayView: View {
         case (let a, let d): text = "Added \(a), \(d) already here"
         }
         guard let text else { return }
+        announceText(text)
+    }
+
+    /// Shows a short message under the Tray and clears it again.
+    private func announceText(_ text: String) {
         note = text
         noteTask?.cancel()
         noteTask = Task {
@@ -144,8 +149,12 @@ struct TrayView: View {
                 ForEach(shelf.items) { item in
                     TrayTile(item: item, isSelected: shelf.selection.contains(item.id))
                         .onTapGesture {
-                            shelf.toggleSelection(
-                                item.id, extending: NSEvent.modifierFlags.contains(.command)
+                            // Command toggles, shift extends from the anchor,
+                            // a plain click picks one — the same arithmetic
+                            // every macOS list uses. See ShelfStore.selection.
+                            shelf.select(
+                                item.id,
+                                gesture: .from(NSEvent.modifierFlags)
                             )
                         }
                         .simultaneousGesture(TapGesture(count: 2).onEnded { shelf.open(item) })
@@ -184,6 +193,58 @@ struct TrayView: View {
         }
     }
 
+    /// Gathers several files and hands them over in one drag.
+    ///
+    /// An explicit affordance rather than a row drag that silently means
+    /// something different depending on the selection: a row drag stays one
+    /// row, one file, exactly as it was. See ShelfDrag.
+    private var dragHandle: some View {
+        let count = shelf.handOffURLs.count
+        let missing = shelf.handOffMissingCount
+        let isAll = shelf.selection.isEmpty
+        return HStack(spacing: 3) {
+            Image(systemName: "square.and.arrow.up")
+                .font(.system(size: 10, weight: .medium))
+            Text(isAll ? "Drag all" : "Drag \(count)")
+                .font(Theme.caption)
+        }
+        .foregroundStyle(count == 0 ? Theme.quaternaryText : Theme.secondaryText)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(
+            Capsule().fill(count == 0 ? Color.clear : Theme.surface)
+        )
+        .contentShape(Capsule())
+        .overlay {
+            MultiFileDragHandle(
+                urls: { shelf.handOffURLs },
+                onBegin: {
+                    model.isExportingDrag = true
+                    if let text = ShelfDrag.exclusionNote(
+                        missing: missing, draggable: count
+                    ) { note = text }
+                },
+                onEnd: {
+                    model.isExportingDrag = false
+                    // The pointer is wherever the drag was dropped, which is
+                    // usually outside the panel, so the notch has to be told
+                    // to reconsider closing now that it is allowed to.
+                    if !model.isHovering { model.scheduleClose() }
+                },
+                onNothingToDrag: {
+                    announceText(
+                        ShelfDrag.exclusionNote(missing: missing, draggable: 0)
+                            ?? "Nothing here can be dragged out"
+                    )
+                }
+            )
+        }
+        .help(count == 0
+              ? "Nothing here can be dragged out"
+              : "Drag \(count) item\(count == 1 ? "" : "s") to Finder or another app")
+        .accessibilityLabel(isAll ? "Drag all items" : "Drag \(count) selected items")
+    }
+
     private var toolbar: some View {
         HStack(spacing: 9) {
             Text("\(shelf.items.count) item\(shelf.items.count == 1 ? "" : "s")")
@@ -209,6 +270,7 @@ struct TrayView: View {
             TrayAction(symbol: "doc.on.clipboard", help: "Paste from clipboard") {
                 announce(shelf.ingestReportingOutcome(.general))
             }
+            dragHandle
             if !shelf.selection.isEmpty {
                 TrayAction(symbol: "minus.circle", help: "Remove selected") {
                     shelf.removeSelected()

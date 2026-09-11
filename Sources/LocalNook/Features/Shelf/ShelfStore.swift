@@ -87,19 +87,28 @@ final class ShelfStore: NSObject, ObservableObject {
         }
         items.remove(at: index)
         selection.remove(id)
+        // An anchor pointing at a row that no longer exists would make the next
+        // shift-click measure from nowhere and silently behave like a plain
+        // one. It moves to whatever took the removed row's place — the row
+        // below, or the last row when the removed one was at the end — so
+        // extending after a removal continues from where the user was.
+        if selectionAnchor == id {
+            selectionAnchor = items.indices.contains(index) ? items[index].id : items.last?.id
+        }
         save()
     }
 
     func removeSelected() {
-        for id in selection { remove(id) }
-        selection.removeAll()
+        // `remove` mutates `selection`; iterate the copy, not the property.
+        for id in Array(selection) { remove(id) }
+        clearSelection()
     }
 
     /// Replaces the contents wholesale. Test-only: the clearing tests need a
     /// known tray and must put the user's back exactly as they found it.
     func restoreForTesting(_ newItems: [ShelfItem]) {
         items = newItems
-        selection.removeAll()
+        clearSelection()
         save()
     }
 
@@ -154,16 +163,98 @@ final class ShelfStore: NSObject, ObservableObject {
             if let url = deletableOwnedURL(item) { try? FileManager.default.removeItem(at: url) }
         }
         items.removeAll()
-        selection.removeAll()
+        clearSelection()
         save()
     }
 
-    func toggleSelection(_ id: UUID, extending: Bool) {
-        if extending {
-            if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
-        } else {
-            selection = selection == [id] ? [] : [id]
+    // MARK: Selection
+
+    /// Where a shift-click measures from.
+    ///
+    /// macOS extends from the last row clicked *without* shift, not from the
+    /// edge of the current selection, so shift-clicking twice in a row grows
+    /// and shrinks one range rather than ratcheting outwards.
+    @Published private(set) var selectionAnchor: UUID?
+
+    /// Which selection a click means, by the keys held with it.
+    enum SelectionGesture: Equatable {
+        /// A plain click: this row and nothing else.
+        case replace
+        /// Command: add or remove this row, leave the rest alone.
+        case toggle
+        /// Shift: everything between the anchor and this row.
+        case extend
+
+        static func from(_ flags: NSEvent.ModifierFlags) -> SelectionGesture {
+            if flags.contains(.shift) { return .extend }
+            if flags.contains(.command) { return .toggle }
+            return .replace
         }
+    }
+
+    /// The selection arithmetic on its own, so every rule can be asserted
+    /// without a view, an event, or a click.
+    ///
+    /// - Returns: the new selection and the new anchor.
+    static func selection(
+        after gesture: SelectionGesture,
+        clicking id: UUID,
+        in order: [UUID],
+        current: Set<UUID>,
+        anchor: UUID?
+    ) -> (selection: Set<UUID>, anchor: UUID?) {
+        // A click on a row that is no longer there must not invent a selection.
+        guard order.contains(id) else { return (current, anchor) }
+
+        switch gesture {
+        case .replace:
+            // Clicking the single selected row clears it. The tray row has no
+            // empty space to click, so without this there is no way to deselect
+            // with the mouse at all.
+            if current == [id] { return ([], nil) }
+            return ([id], id)
+
+        case .toggle:
+            var next = current
+            if next.contains(id) { next.remove(id) } else { next.insert(id) }
+            // The anchor follows the command-click, so a shift-click after one
+            // measures from where the user last actually pointed.
+            return (next, id)
+
+        case .extend:
+            // Shift with nothing to measure from behaves like a plain click,
+            // which is what Finder does on a fresh list.
+            guard let anchor, let from = order.firstIndex(of: anchor),
+                  let to = order.firstIndex(of: id)
+            else { return ([id], id) }
+            let span = from <= to ? from...to : to...from
+            return (Set(order[span]), anchor)
+        }
+    }
+
+    func select(_ id: UUID, gesture: SelectionGesture) {
+        let result = Self.selection(
+            after: gesture, clicking: id, in: items.map(\.id),
+            current: selection, anchor: selectionAnchor
+        )
+        selection = result.selection
+        selectionAnchor = result.anchor
+    }
+
+    /// Kept for the compact shelf column, which has only a modifier flag to
+    /// offer. Command-click semantics, by the old name.
+    func toggleSelection(_ id: UUID, extending: Bool) {
+        select(id, gesture: extending ? .toggle : .replace)
+    }
+
+    func selectAll() {
+        selection = Set(items.map(\.id))
+        selectionAnchor = items.first?.id
+    }
+
+    func clearSelection() {
+        selection.removeAll()
+        selectionAnchor = nil
     }
 
     // MARK: Ingest
@@ -254,6 +345,22 @@ final class ShelfStore: NSObject, ObservableObject {
     var selectedURLs: [URL] {
         items.filter { selection.contains($0.id) }.compactMap(\.url)
     }
+
+    // MARK: Handing items to another app
+
+    /// What a drag out of the Tray would carry: the selection, or everything
+    /// when nothing is picked. "Drag all" is the sensible reading of a shelf
+    /// nobody has selected within.
+    var itemsToHandOff: [ShelfItem] {
+        selection.isEmpty ? items : items.filter { selection.contains($0.id) }
+    }
+
+    /// Those of them another app will actually accept — existing files and real
+    /// links, deduplicated. See ShelfDrag.
+    var handOffURLs: [URL] { ShelfDrag.urls(for: itemsToHandOff) }
+
+    /// How many of the chosen items cannot travel, so the UI can say so.
+    var handOffMissingCount: Int { ShelfDrag.missingCount(in: itemsToHandOff) }
 
     // Do not trust the persisted ownership flag to authorize arbitrary deletion.
     private func deletableOwnedURL(_ item: ShelfItem) -> URL? {
