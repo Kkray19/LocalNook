@@ -77,8 +77,16 @@ struct HoverTracker: NSViewRepresentable {
             )
             addTrackingArea(area)
             trackingArea = area
-            let inScreen = window.map { w in "\(w.convertToScreen(convert(bounds, to: nil)))" } ?? "no window"
-            HoverTracker.record("area bounds=\(bounds) screen=\(inScreen)")
+            // Deliberately inside the autoclosure. This runs on every layout
+            // pass of the panel — every frame of an animation — and building
+            // the string eagerly formatted four numbers each time for a
+            // diagnostic that production discards.
+            HoverTracker.record({
+                let inScreen = self.window.map { w in
+                    "\(w.convertToScreen(self.convert(self.bounds, to: nil)))"
+                } ?? "no window"
+                return "area bounds=\(self.bounds) screen=\(inScreen)"
+            }())
 
             // The pointer can already be inside when the area is rebuilt, e.g.
             // after the notch resizes under a stationary cursor.

@@ -123,6 +123,7 @@ enum SelfTest {
             testAmbientPalette()
             testQuickApps()
             testWidgetSizing()
+            testAnimationLifecycle()
             testScriptableControl()
             StabilizationTests.run()
         }
@@ -3779,6 +3780,89 @@ enum SelfTest {
 
     /// Per-widget Dashboard sizing: the multiplier's clamping and storage, and
     /// that a scaled weight still apportions the row exactly.
+    /// The indefinite progress indicators must be driven by the render server,
+    /// and must hand their animation back when nobody is looking at them.
+    ///
+    /// This is a lifecycle test, not a timing one: it asks whether the
+    /// animation object is attached, never how far along it is, so a busy Mac
+    /// cannot make it flaky.
+    private static func testAnimationLifecycle() {
+        section("Animation lifecycle")
+
+        // A window is needed because a detached layer tree drops its
+        // animations — which is the behaviour being relied on.
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 120, height: 60),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        let host = NSView(frame: NSRect(x: 0, y: 0, width: 120, height: 60))
+        window.contentView = host
+
+        // MARK: turning arc
+        let arc = SpinningArc.ArcView()
+        arc.frame = NSRect(x: 0, y: 0, width: 11, height: 11)
+        arc.apply(tint: .green, portion: 0.72, lineWidth: 2, period: 0.9, animated: true)
+        check("a detached arc is not animating", !arc.hasSpin)
+
+        host.addSubview(arc)
+        arc.layoutSubtreeIfNeeded()
+        check("an arc in a window animates", arc.hasSpin)
+        check("and does so in the render server, not in SwiftUI",
+              arc.spinIsRepeating && arc.spinIsOnALayer)
+
+        // A redundant update must not restart the spin, or it would stutter
+        // every time the view is re-evaluated.
+        let before = arc.spinAnimation
+        arc.apply(tint: .green, portion: 0.72, lineWidth: 2, period: 0.9, animated: true)
+        check("an unchanged update leaves the running spin alone",
+              arc.spinAnimation === before)
+
+        arc.removeFromSuperview()
+        check("an arc taken out of the window stops animating", !arc.hasSpin)
+
+        // Reduce Motion keeps the ring and drops the movement.
+        let still = SpinningArc.ArcView()
+        still.frame = NSRect(x: 0, y: 0, width: 11, height: 11)
+        still.apply(tint: .green, portion: 0.72, lineWidth: 2, period: 0.9, animated: false)
+        host.addSubview(still)
+        still.layoutSubtreeIfNeeded()
+        check("Reduce Motion leaves the arc still", !still.hasSpin)
+        still.removeFromSuperview()
+
+        // MARK: marching bar
+        let bar = MarchingBar.BarView()
+        bar.frame = NSRect(x: 0, y: 0, width: 14, height: 2.5)
+        bar.apply(tint: .green, trackTint: .gray, fraction: 0.45,
+                  travel: 0.62, period: 0.9, animated: true)
+        check("a detached bar is not animating", !bar.hasMarch)
+
+        host.addSubview(bar)
+        bar.layoutSubtreeIfNeeded()
+        check("a bar in a window animates", bar.hasMarch)
+        check("and reverses rather than jumping back", bar.marchAutoreverses)
+
+        bar.removeFromSuperview()
+        check("a bar taken out of the window stops animating", !bar.hasMarch)
+
+        let stillBar = MarchingBar.BarView()
+        stillBar.frame = NSRect(x: 0, y: 0, width: 14, height: 2.5)
+        stillBar.apply(tint: .green, trackTint: .gray, fraction: 0.45,
+                       travel: 0.62, period: 0.9, animated: false)
+        host.addSubview(stillBar)
+        stillBar.layoutSubtreeIfNeeded()
+        check("Reduce Motion leaves the bar still", !stillBar.hasMarch)
+        stillBar.removeFromSuperview()
+
+        // The SwiftUI wrappers must be the ones actually used, so a future
+        // edit cannot quietly reintroduce a repeating SwiftUI animation.
+        check("the busy indicator is the render-server arc",
+              BusyIndicator(tint: .green).body is SpinningArc
+                  || "\(type(of: BusyIndicator(tint: .green).body))".contains("SpinningArc"),
+              "\(type(of: BusyIndicator(tint: .green).body))")
+
+        window.contentView = nil
+    }
+
     private static func testWidgetSizing() {
         section("Widget sizing")
         let settings = Settings.shared

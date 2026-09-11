@@ -199,25 +199,16 @@ struct ClosedActivityView: View {
 ///
 /// Stops turning under Reduce Motion, where it becomes a plain ring — the
 /// indicator still says "busy", it just does not spin to say it.
+///
+/// Drawn by the render server rather than by SwiftUI: a `.repeatForever` here
+/// kept the whole panel re-laying out at the display's refresh rate for as long
+/// as any agent was working, which was most of the time. See
+/// RenderServerAnimation.
 struct BusyIndicator: View {
     var tint: Color
 
-    @LNState private var turning = false
-
     var body: some View {
-        Circle()
-            .trim(from: 0, to: 0.72)
-            .stroke(tint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+        SpinningArc(tint: tint, animated: NotchMotion.isAnimated)
             .frame(width: 11, height: 11)
-            .rotationEffect(.degrees(turning ? 360 : 0))
-            .onAppear {
-                guard NotchMotion.isAnimated else { return }
-                withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
-                    turning = true
-                }
-            }
-            .background {
-                Circle().stroke(.white.opacity(0.16), lineWidth: 2).frame(width: 11, height: 11)
-            }
     }
 }

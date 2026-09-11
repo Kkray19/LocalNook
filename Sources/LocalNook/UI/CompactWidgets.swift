@@ -594,26 +594,16 @@ struct CompactSessionsView: View {
 /// The marching bar shown beside a session's current step, matching the
 /// progress line the agents show while they are working. Decorative: it says
 /// "still going", not how far along.
+///
+/// Drawn by the render server, for the same reason as BusyIndicator: an
+/// endlessly repeating SwiftUI animation never lets the view graph go quiet.
 struct SessionWorkingBar: View {
-    @LNState private var shift: CGFloat = -1
-
     var body: some View {
-        Capsule()
-            .fill(Theme.quaternaryText.opacity(0.4))
-            .frame(width: 14, height: 2.5)
-            .overlay(alignment: .leading) {
-                GeometryReader { geometry in
-                    Capsule()
-                        .fill(Theme.positive)
-                        .frame(width: geometry.size.width * 0.45)
-                        .offset(x: shift * geometry.size.width * 0.62)
-                }
-            }
-            .clipShape(Capsule())
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                    shift = 1
-                }
-            }
+        MarchingBar(
+            tint: Theme.positive,
+            trackTint: Theme.quaternaryText.opacity(0.4),
+            animated: NotchMotion.isAnimated
+        )
+        .frame(width: 14, height: 2.5)
     }
 }
