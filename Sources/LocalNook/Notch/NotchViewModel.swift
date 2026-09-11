@@ -94,6 +94,13 @@ final class NotchViewModel: ObservableObject {
         isSuppressed ? 0 : closedSize.height
     }
 
+    /// Where a live activity's wings begin: outside the camera housing, however
+    /// narrow the collapsed notch has been set. See NotchGeometry.activityDeadZone.
+    var activityDeadZoneWidth: CGFloat {
+        let housing = screen.flatMap { $0.hasPhysicalNotch ? $0.physicalNotchWidth : nil }
+        return NotchGeometry.activityDeadZone(closedWidth: closedSize.width, physicalWidth: housing)
+    }
+
     func refreshGeometry() {
         let size = NotchGeometry.closedSize(for: screen)
         if size != closedSize { closedSize = size }

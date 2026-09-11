@@ -59,7 +59,7 @@ struct NotchRootView: View {
         // Widen the collapsed notch to make room for a live activity.
         if closedActivity != nil {
             return ClosedActivityView.totalBodyWidth(
-                notchWidth: model.closedSize.width, expanded: activities.trailingExpanded
+                notchWidth: model.activityDeadZoneWidth, expanded: activities.trailingExpanded
             )
         }
         return model.closedSize.width
@@ -250,7 +250,7 @@ struct NotchRootView: View {
         if !isOpen, let activity = closedActivity {
             ClosedActivityView(
                 activity: activity,
-                notchWidth: model.closedSize.width,
+                notchWidth: model.activityDeadZoneWidth,
                 isExpanded: activities.trailingExpanded
             )
                 .frame(

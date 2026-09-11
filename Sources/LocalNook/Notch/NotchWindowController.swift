@@ -843,7 +843,8 @@ final class NotchWindowController: NSObject {
         return NotchGeometry.collapsedWindowSize(
             closed: model.closedSize,
             hasActivity: LiveActivityCenter.shared.current != nil || HUDController.shared.state != nil,
-            expandedActivity: LiveActivityCenter.shared.trailingExpanded
+            expandedActivity: LiveActivityCenter.shared.trailingExpanded,
+            activityDeadZone: model.activityDeadZoneWidth
         )
     }
 
@@ -957,7 +958,7 @@ final class NotchWindowController: NSObject {
         let height = max(model.effectiveClosedHeight, 4) + 3
         let frame = screen.frame
         return CGRect(
-            x: frame.midX + model.closedSize.width / 2,
+            x: frame.midX + model.activityDeadZoneWidth / 2,
             y: frame.maxY - height,
             width: width,
             height: height

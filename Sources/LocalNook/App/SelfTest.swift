@@ -2363,6 +2363,22 @@ enum SelfTest {
         check("with nothing expanded the body needs no offset",
               ClosedActivityView.bodyOffset(expanded: false) == 0)
 
+        // A notch set narrower than the hardware must not take the wings with it.
+        // Measured on the Mac this broke on: a −40pt adjustment made the notch
+        // 149pt against a 185pt camera housing, and 18pt of each 32pt wing —
+        // the badge and the spinner — sat behind the camera.
+        check("the wings start outside a housing wider than the notch",
+              NotchGeometry.activityDeadZone(closedWidth: 149, physicalWidth: 185) == 185)
+        check("a notch set wider than the housing keeps its own width",
+              NotchGeometry.activityDeadZone(closedWidth: 200, physicalWidth: 185) == 200)
+        check("a display with no housing uses the notch as drawn",
+              NotchGeometry.activityDeadZone(closedWidth: 149, physicalWidth: nil) == 149)
+        let housing: CGFloat = 185
+        let gap = NotchGeometry.activityDeadZone(closedWidth: 149, physicalWidth: housing)
+        check("so no part of either wing is behind the camera",
+              gap / 2 >= housing / 2
+                  && abs(ClosedActivityView.deadZoneCentre(notchWidth: gap, expanded: true)) < 0.001)
+
         check("expanding makes room rather than truncating",
               ClosedActivityView.totalBodyWidth(notchWidth: 185, expanded: true)
                   > ClosedActivityView.totalBodyWidth(notchWidth: 185) + 100)

@@ -106,6 +106,20 @@ enum NotchGeometry {
         }
     }
 
+    /// The gap a live activity leaves in its middle: never narrower than the
+    /// camera housing.
+    ///
+    /// The collapsed notch's width is a preference, and it may be set narrower
+    /// than the hardware so that the black shape disappears entirely behind it.
+    /// The activity's wings used to be laid out from that preferred width, so a
+    /// −40pt adjustment put 18pt of each wing under the camera. With 118pt wings
+    /// the loss went unnoticed; with 32pt wings it hid the badge and the spinner
+    /// completely. Screenshots could not show it, because they include the
+    /// pixels behind the housing.
+    static func activityDeadZone(closedWidth: CGFloat, physicalWidth: CGFloat?) -> CGFloat {
+        max(closedWidth, physicalWidth ?? 0)
+    }
+
     static func closedSize(for screen: NSScreen?) -> CGSize {
         guard let screen else {
             let settings = Settings.shared
@@ -175,13 +189,15 @@ enum NotchGeometry {
     }
 
     static func collapsedWindowSize(
-        closed: CGSize, hasActivity: Bool, expandedActivity: Bool = false
+        closed: CGSize, hasActivity: Bool, expandedActivity: Bool = false,
+        activityDeadZone: CGFloat? = nil
     ) -> CGSize {
         // The canvas, not the drawn body: the body is offset to keep the camera
         // gap over the camera, so the window must be symmetric about the notch
         // to contain it. See ClosedActivityView.canvasWidth.
         let body = hasActivity
-            ? ClosedActivityView.canvasWidth(notchWidth: closed.width, expanded: expandedActivity)
+            ? ClosedActivityView.canvasWidth(notchWidth: activityDeadZone ?? closed.width,
+                                             expanded: expandedActivity)
             : closed.width
         return CGSize(width: body + 2 * Settings.shared.closedCornerRadius,
                       height: max(4, closed.height) + 3)
