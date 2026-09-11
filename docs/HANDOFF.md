@@ -1,7 +1,45 @@
 # LocalNook — start here
 
-Updated: 2026-09-10. This file is the portable development context for the next
+Updated: 2026-09-11. This file is the portable development context for the next
 assistant. Read AGENTS.md and inspect current git status before changing anything.
+
+## Branch in progress: `fix/idle-cpu-and-tray`
+
+Two changes, committed separately, branched from `main` at `62370ff`:
+
+1. **Idle CPU.** The collapsed notch burned a measured median 12.6% of a core
+   (range 9.6–14.2%, 60s). Every sample was SwiftUI relayout driven by a
+   `.repeatForever` animation that never lets the view graph go quiet; the busy
+   spinner shows whenever any agent is working. Both indefinite indicators now
+   animate as Core Animation layers, which the window server interpolates while
+   the app sleeps. Full attribution, the bisect table and two measuring traps
+   are in BUGS.md under "Idle CPU".
+2. **Tray multi-item handoff.** macOS selection (plain / command / shift with a
+   proper anchor) and an explicit "Drag all" / "Drag N" affordance that starts a
+   real multi-file `beginDraggingSession`. Copy-only, missing files excluded and
+   said so, duplicates handed over once, nothing copied to stage it. Row
+   dragging is untouched: still one row, one file.
+
+**Not yet done on this branch — it requires an unlocked screen and was left
+undone rather than faked:**
+
+- The post-fix CPU measurement of the same scenarios. `scripts/build-release.sh`
+  refuses to produce a candidate while the screen is locked, because its
+  self-test gate reports the session-label checks as UNVERIFIED — the reader
+  declines to read transcripts while locked, which is a privacy property, not a
+  fault. Nothing is installed from this branch yet; the running app is still
+  `62370ff`.
+- `verify-candidate.sh`, the installer/release/isolation checks, and installing.
+- Every physical drag check in docs/MANUAL_CHECKS.md §1b.
+
+**Measuring CPU here — read this before trusting a number.** `ps`'s `%CPU` is a
+lifetime average and is useless for "what is it doing now"; difference the
+cumulative CPU time instead. A locked screen or a slept display stops
+compositing, so *every* variant reads ~0.4% and a broken build looks fixed —
+always measure a second process as a canary in the same window. And `-key value`
+launch arguments do **not** override preferences: `@Pref` reads
+`object(forKey:) as? Bool` and the argument domain stores a string, so the cast
+fails and the default is used silently.
 
 ## Current baseline
 
@@ -100,6 +138,11 @@ age/context and omit obsolete camera checks. Do not reinstall solely for docs.
 
 ## Next session
 
+0. If `fix/idle-cpu-and-tray` is still unmerged: with the screen **unlocked**,
+   run `./scripts/build-release.sh`, `./scripts/verify-candidate.sh
+   dist/LocalNook.app`, then `./scripts/install.sh`; re-measure the collapsed,
+   sessions-active, media-idle, expanded and two-display cases for 60s each and
+   record medians and ranges; then walk docs/MANUAL_CHECKS.md §1b.
 1. Read this file, AGENTS.md and git status/log.
 2. Confirm the user's next objective; do not restart a broad stabilization audit.
 3. If continuing animation, obtain feedback on the current landing before editing.

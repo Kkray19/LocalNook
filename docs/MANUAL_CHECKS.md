@@ -23,6 +23,33 @@ Each item says what to do and what should happen. Five minutes total.
 8. Remove an item from the Tray with the − button. → **The original file is
    still in Finder.** This is the one that matters most.
 
+## 1b. Multi-item handoff  *(new — nothing automated proves this)*
+
+The selection arithmetic and the exact list of URLs a drag would carry are both
+asserted by `--self-test` ("Tray handoff"). What no test can show is whether
+Finder accepts the drop. That is this check.
+
+1. Put at least four items in the Tray, from **two different folders**.
+2. Click one, then **shift-click** a later one. → The rows between them are
+   selected too, and the toolbar reads "Drag 3" (or however many).
+3. **Command-click** one of the selected rows. → Only that row deselects; the
+   rest stay.
+4. Press the **"Drag 3"** pill and drag it into an open Finder window.
+   → All three arrive, with their real names. **Copied, not moved:** the
+   originals are still in their own folders.
+5. Deselect everything (click the single selected row). → The pill reads
+   "Drag all".
+6. Drag the "Drag all" pill into a Finder window. → Every tray item arrives.
+7. Drag the pill onto the **second display's** Finder window. → Same result.
+8. In Finder, move one original to the Desktop, then reopen the Tray and drag
+   the whole selection out again. → The moved one is **left out**, and the Tray
+   says "1 missing file left out" rather than dragging nothing or failing.
+9. Select two rows and press **−**. → Those rows go; **both original files are
+   still in Finder.**
+10. Drag a **single row** out by itself, the old way. → Still works, one file.
+11. Select two rows, quit and relaunch LocalNook, open the Tray. → The items are
+    still there and **nothing is selected**.
+
 ## 2. Drag across displays
 
 Drag a file onto the notch on the **G274QPF E2**, not the built-in.

@@ -45,15 +45,78 @@ drag — covering multi-file drops, folders, duplicates, long names, deleted and
 renamed files, selection, text with no file of its own, and unsupported content.
 See the "Tray (real files)" section of `--self-test`.
 
-**What is not:** the drag *gesture* from Finder into the panel, and dragging an
-item back out. Both need synthesised pointer input, which requires Accessibility.
-The handling code is covered; the interaction is not.
+Multi-item handoff adds the "Tray handoff" section: the whole selection
+arithmetic (plain, command and shift clicks, anchor movement, removal), and the
+payload a drag would carry (tray order, deduplication, folders, links, missing
+files excluded, exclusion wording).
+
+**What is not:** any actual drag *gesture* — from Finder into the panel, a
+single row back out, or the new multi-file handle out to another app. All need
+synthesised pointer input, which requires Accessibility. The payload is
+asserted; the gesture that carries it is not. A pasteboard assembled in a test
+is not evidence that Finder accepted a drop.
 
 **Manual check:** see docs/MANUAL_CHECKS.md.
 
 ---
 
 ## RESOLVED
+
+### Idle CPU: 12.6% of a core while collapsed and doing nothing
+
+**Reported:** Activity Monitor showed LocalNook near the top of the list on an
+otherwise idle Mac. Confirmed by differencing the process's cumulative CPU time
+over 5-second intervals rather than reading `ps`'s lifetime average: **median
+12.6%, range 9.6–14.2%, over 60s, collapsed**.
+
+**How it was attributed:** `/usr/bin/sample` on the installed app put every
+sample on the main thread inside
+`CATransaction::flush -> NSDisplayCycleFlush -> NSWindow layoutIfNeeded ->
+NSHostingView.layout() -> DisplayList.ViewUpdater`, with **no LocalNook frame
+anywhere on the stack**. The app was not computing anything; it was re-laying
+out the whole panel on every display-link tick.
+
+Bisected on one frozen release build with an environment switch compiled in,
+each variant run against a canary so that a machine-wide render stall could not
+be mistaken for an improvement:
+
+| Variant | Median CPU | Canary |
+|---|---|---|
+| control | 6.7% | 11.2% |
+| busy spinner not animating | **0.4%** | 13.6% |
+| control | 4.1% | 11.2% |
+| busy spinner not animating | **0.4%** | — (stalled, discarded) |
+
+**Cause:** SwiftUI's `.repeatForever` never becomes quiescent. The view graph
+reports pending work every display-link tick for as long as such an animation is
+on screen, and the cost is the pass over the view tree, not the pixels — so an
+11pt spinner costs a full panel relayout at 120Hz. `BusyIndicator` (beside the
+collapsed notch, shown whenever any agent is working) and `SessionWorkingBar`
+both used it.
+
+**Fix:** both indicators are drawn by Core Animation instead. An animation added
+to a layer is handed to the window server once and interpolated there; the app
+sleeps through every frame, and the render server stops on its own when the
+window is occluded or the display sleeps. See
+`Sources/LocalNook/UI/RenderServerAnimation.swift`.
+
+**Verification:** the "Animation lifecycle" section of `--self-test` asserts
+attachment and never progress — installed in a window, removed when the view
+leaves it, absent under Reduce Motion, not restarted by a redundant update — so
+a busy Mac cannot make it flaky.
+
+**Two measuring traps, recorded because both produced confident wrong answers:**
+
+1. **A locked screen or a slept display reads as 0% for everything.** macOS stops
+   compositing, so the runaway animation costs nothing and every variant looks
+   fixed. One bisect round returned "everything is 0.4%" including the control.
+   Always measure a canary process in the same window.
+2. **`-key value` launch arguments do not override these preferences.**
+   `@Pref` reads `object(forKey:) as? Bool`, and `NSArgumentDomain` stores the
+   value as an `NSTaggedPointerString`, so the cast fails and the default is
+   used. An entire pref-based bisect ran with every setting at its default and
+   was discarded. Verified directly with a three-line program before relying on
+   any of it.
 
 ### Hover: resolved into three separate things, none of them open
 
