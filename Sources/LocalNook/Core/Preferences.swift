@@ -54,6 +54,7 @@ extension Double: NativePrefValue {}
 extension String: NativePrefValue {}
 
 extension Array: PrefValue where Element: Codable {}
+extension Dictionary: PrefValue where Key: Codable, Value: Codable {}
 extension Optional: PrefValue where Wrapped: Codable {}
 
 /// `RawRepresentable` enums persist as their raw value.

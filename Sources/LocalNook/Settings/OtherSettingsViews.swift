@@ -21,32 +21,58 @@ struct WidgetSettingsView: View {
                 footer: "Pinned widgets appear side by side when the notch opens, in this order. Anything you unpin still works — it moves to Tools. If the panel is too narrow for everything pinned, the ones at the end move into the “More” control at the right of the dashboard, which takes you to them rather than hiding them."
             ) {
                 ForEach(WidgetKind.allCases.filter(\.suitsDashboard)) { kind in
-                    HStack(spacing: 10) {
-                        Image(systemName: kind.symbol)
-                            .frame(width: 20)
-                            .foregroundStyle(.secondary)
-                        Toggle(kind.label, isOn: Binding(
-                            get: { settings.dashboardWidgetIDs.contains(kind.rawValue) },
-                            set: { settings.setDashboardWidget(kind, on: $0) }
-                        ))
-                        .disabled(!settings.isWidgetEnabled(kind))
-                        Spacer()
-                        if !settings.isWidgetEnabled(kind) {
-                            Text("disabled below")
-                                .font(.system(size: 10))
+                    VStack(spacing: 4) {
+                        HStack(spacing: 10) {
+                            Image(systemName: kind.symbol)
+                                .frame(width: 20)
                                 .foregroundStyle(.secondary)
-                        } else {
-                            Button { moveDashboard(kind, by: -1) } label: {
-                                Image(systemName: "chevron.up")
+                            Toggle(kind.label, isOn: Binding(
+                                get: { settings.dashboardWidgetIDs.contains(kind.rawValue) },
+                                set: { settings.setDashboardWidget(kind, on: $0) }
+                            ))
+                            .disabled(!settings.isWidgetEnabled(kind))
+                            Spacer()
+                            if !settings.isWidgetEnabled(kind) {
+                                Text("disabled below")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Button { moveDashboard(kind, by: -1) } label: {
+                                    Image(systemName: "chevron.up")
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(dashboardIndex(kind) <= 0)
+                                Button { moveDashboard(kind, by: 1) } label: {
+                                    Image(systemName: "chevron.down")
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(dashboardIndex(kind) < 0
+                                          || dashboardIndex(kind) >= settings.dashboardWidgetIDs.count - 1)
                             }
-                            .buttonStyle(.borderless)
-                            .disabled(dashboardIndex(kind) <= 0)
-                            Button { moveDashboard(kind, by: 1) } label: {
-                                Image(systemName: "chevron.down")
+                        }
+                        // Only a widget actually on the dashboard has a width to
+                        // set. A wider one takes a bigger share of the row; if
+                        // the row runs out of space the narrowest, last widgets
+                        // move to the "More" control as before.
+                        if settings.isWidgetEnabled(kind),
+                           settings.dashboardWidgetIDs.contains(kind.rawValue) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.left.and.right")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                                Slider(
+                                    value: Binding(
+                                        get: { settings.widgetSizeMultiplier(kind) },
+                                        set: { settings.setWidgetSizeMultiplier(kind, $0) }
+                                    ),
+                                    in: Settings.widgetSizeRange
+                                )
+                                Button("Reset") { settings.setWidgetSizeMultiplier(kind, 1.0) }
+                                    .buttonStyle(.borderless)
+                                    .font(.system(size: 10))
+                                    .disabled(abs(settings.widgetSizeMultiplier(kind) - 1.0) < 0.01)
                             }
-                            .buttonStyle(.borderless)
-                            .disabled(dashboardIndex(kind) < 0
-                                      || dashboardIndex(kind) >= settings.dashboardWidgetIDs.count - 1)
+                            .padding(.leading, 30)
                         }
                     }
                 }

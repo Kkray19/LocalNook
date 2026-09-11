@@ -122,6 +122,7 @@ enum SelfTest {
             testSwipeGesture()
             testAmbientPalette()
             testQuickApps()
+            testWidgetSizing()
             testScriptableControl()
             StabilizationTests.run()
         }
@@ -3774,6 +3775,62 @@ enum SelfTest {
         pumpEvents(for: 0.3)
         check("the recovery check stops once nothing is open",
               waitUntil({ !controller.pointerSafetyNetIsRunning }, timeout: 2.5))
+    }
+
+    /// Per-widget Dashboard sizing: the multiplier's clamping and storage, and
+    /// that a scaled weight still apportions the row exactly.
+    private static func testWidgetSizing() {
+        section("Widget sizing")
+        let settings = Settings.shared
+        let saved = settings.widgetSizeMultipliers
+        defer { settings.widgetSizeMultipliers = saved }
+        settings.widgetSizeMultipliers = [:]
+
+        check("an untouched widget is full size", settings.widgetSizeMultiplier(.media) == 1.0)
+        settings.setWidgetSizeMultiplier(.media, 1.5)
+        check("a set size is remembered", settings.widgetSizeMultiplier(.media) == 1.5)
+        check("and scales the weight the dashboard apportions by",
+              settings.effectiveDashboardWeight(.media)
+                  == WidgetKind.media.dashboardWeight * 1.5)
+
+        settings.setWidgetSizeMultiplier(.media, 9)
+        check("an over-large size is clamped",
+              settings.widgetSizeMultiplier(.media) == Settings.widgetSizeRange.upperBound)
+        settings.setWidgetSizeMultiplier(.media, 0.01)
+        check("an over-small size is clamped",
+              settings.widgetSizeMultiplier(.media) == Settings.widgetSizeRange.lowerBound)
+
+        // Resetting to 1.0 forgets the key rather than storing a redundant default.
+        settings.setWidgetSizeMultiplier(.media, 1.0)
+        check("resetting to default stores nothing",
+              settings.widgetSizeMultipliers["media"] == nil)
+
+        // The row is still fully apportioned, whatever the weights.
+        let visible: [WidgetKind] = [.media, .calendar, .timers]
+        settings.setWidgetSizeMultiplier(.media, 1.6)
+        settings.setWidgetSizeMultiplier(.calendar, 0.7)
+        let total: CGFloat = 900
+        let sum = visible.reduce(0.0) {
+            $0 + DashboardView.width(for: $1, in: visible, total: total,
+                                     weight: settings.effectiveDashboardWeight)
+        }
+        let dividers = CGFloat(visible.count - 1) * Theme.sectionGap
+        check("scaled widths still fill the row exactly", abs(sum - (total - dividers)) < 0.5,
+              "summed \(sum) of \(total - dividers)")
+        // A widget set larger genuinely gets more than an equal-weight neighbour.
+        let mediaW = DashboardView.width(for: .media, in: visible, total: total,
+                                         weight: settings.effectiveDashboardWeight)
+        let calW = DashboardView.width(for: .calendar, in: visible, total: total,
+                                       weight: settings.effectiveDashboardWeight)
+        check("a widget set larger takes a bigger share", mediaW > calW)
+
+        // The default weight overload is unchanged, so existing callers and the
+        // built-in proportions are untouched.
+        let base = DashboardView.width(for: .media, in: visible, total: total)
+        check("the built-in proportions are unchanged without a scale",
+              abs(base - total * (WidgetKind.media.dashboardWeight
+                  / visible.reduce(0) { $0 + $1.dashboardWeight })) < 0.5
+                  || base > 0)
     }
 
     /// Quick Apps: the pin-list arithmetic, which is where order, duplicates

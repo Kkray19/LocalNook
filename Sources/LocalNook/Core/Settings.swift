@@ -357,6 +357,39 @@ final class Settings: ObservableObject {
     /// Bundle identifiers of apps pinned to the launcher, in order.
     @Pref("apps.pinned", [String]()) var pinnedAppBundleIDs: [String]
 
+    // MARK: Per-widget sizing
+
+    /// How wide each Dashboard widget is drawn, as a multiplier on its natural
+    /// width. Absent means 1.0 — the built-in proportions — so an untouched
+    /// install stores nothing here.
+    @Pref("widgets.sizes", [String: Double]()) var widgetSizeMultipliers: [String: Double]
+
+    /// A widget's size multiplier, clamped to a sane range. 1.0 by default.
+    func widgetSizeMultiplier(_ kind: WidgetKind) -> Double {
+        Settings.clampWidgetSize(widgetSizeMultipliers[kind.rawValue] ?? 1.0)
+    }
+
+    func setWidgetSizeMultiplier(_ kind: WidgetKind, _ value: Double) {
+        var sizes = widgetSizeMultipliers
+        let clamped = Settings.clampWidgetSize(value)
+        // 1.0 is the default, so storing it would only be clutter that outlives
+        // the adjustment. Removing the key keeps "untouched" and "reset" identical.
+        if abs(clamped - 1.0) < 0.001 { sizes.removeValue(forKey: kind.rawValue) }
+        else { sizes[kind.rawValue] = clamped }
+        widgetSizeMultipliers = sizes
+    }
+
+    /// The natural weight scaled by the user's multiplier — what the Dashboard
+    /// actually apportions space by.
+    func effectiveDashboardWeight(_ kind: WidgetKind) -> CGFloat {
+        kind.dashboardWeight * CGFloat(widgetSizeMultiplier(kind))
+    }
+
+    static let widgetSizeRange: ClosedRange<Double> = 0.6...1.8
+    static func clampWidgetSize(_ value: Double) -> Double {
+        min(widgetSizeRange.upperBound, max(widgetSizeRange.lowerBound, value))
+    }
+
     // MARK: Sessions (Claude Code / Codex monitoring)
 
     @Pref("sessions.watchClaudeCode", true) var watchClaudeCode: Bool

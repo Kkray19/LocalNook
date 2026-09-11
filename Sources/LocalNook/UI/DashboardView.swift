@@ -44,7 +44,8 @@ struct DashboardView: View {
                 HStack(spacing: 0) {
                     ForEach(Array(visible.enumerated()), id: \.element) { index, kind in
                         DashboardSection(kind: kind, model: model)
-                            .frame(width: Self.width(for: kind, in: visible, total: sectionSpace))
+                            .frame(width: Self.width(for: kind, in: visible, total: sectionSpace,
+                                                     weight: settings.effectiveDashboardWeight))
 
                         if index < visible.count - 1 {
                             SectionDivider()
@@ -102,12 +103,15 @@ struct DashboardView: View {
     }
 
     /// Weighted share of the remaining width.
-    static func width(for kind: WidgetKind, in visible: [WidgetKind], total: CGFloat) -> CGFloat {
+    static func width(
+        for kind: WidgetKind, in visible: [WidgetKind], total: CGFloat,
+        weight: (WidgetKind) -> CGFloat = { $0.dashboardWeight }
+    ) -> CGFloat {
         let dividers = CGFloat(max(0, visible.count - 1)) * Theme.sectionGap
         let available = max(0, total - dividers)
-        let weightSum = visible.reduce(0) { $0 + $1.dashboardWeight }
+        let weightSum = visible.reduce(0) { $0 + weight($1) }
         guard weightSum > 0 else { return available }
-        return available * (kind.dashboardWeight / weightSum)
+        return available * (weight(kind) / weightSum)
     }
 }
 
