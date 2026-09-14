@@ -3941,9 +3941,10 @@ enum SelfTest {
         let fileB = directory.appendingPathComponent("b.txt")
         let folder = directory.appendingPathComponent("folder", isDirectory: true)
         let vanished = directory.appendingPathComponent("gone.txt")
-        try? "a".write(to: fileA, atomically: true, encoding: .utf8)
-        try? "b".write(to: fileB, atomically: true, encoding: .utf8)
+        try? Data((0..<4096).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 7) }).write(to: fileA)
+        try? "b — not ASCII, and more than one byte\n".write(to: fileB, atomically: true, encoding: .utf8)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? Data([0x00, 0xFF, 0x10, 0x80]).write(to: folder.appendingPathComponent("inside.bin"))
         try? "g".write(to: vanished, atomically: true, encoding: .utf8)
 
         let itemA = ShelfItem.fromFile(fileA)
@@ -3976,6 +3977,33 @@ enum SelfTest {
               ShelfDrag.exclusionNote(missing: 1, draggable: 3) == "1 missing file left out")
         check("a complete set says nothing",
               ShelfDrag.exclusionNote(missing: 0, draggable: 3) == nil)
+
+        // Every regular file under each original, by relative path: its exact
+        // bytes, and the size and modification date the file system reports.
+        // Compared whole before and after the removals below, so a truncated,
+        // rewritten or re-dated original fails — not only a deleted one.
+        struct Original: Equatable { let bytes: Data; let size: Int; let modified: Date }
+        func fingerprint(_ roots: [URL]) -> [String: Original] {
+            var result: [String: Original] = [:]
+            let fm = FileManager.default
+            for root in roots {
+                var files = [root]
+                if let walker = fm.enumerator(at: root, includingPropertiesForKeys: nil) {
+                    files += walker.compactMap { $0 as? URL }
+                }
+                for file in files {
+                    let values = try? file.resourceValues(
+                        forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey])
+                    guard values?.isRegularFile == true,
+                          let bytes = try? Data(contentsOf: file) else { continue }
+                    let key = root.lastPathComponent + "/" + file.path.dropFirst(root.path.count)
+                    result[key] = Original(bytes: bytes, size: values?.fileSize ?? -1,
+                                           modified: values?.contentModificationDate ?? .distantPast)
+                }
+            }
+            return result
+        }
+        let originalsBefore = fingerprint([fileA, fileB, folder])
 
         // MARK: the live store
         let shelf = ShelfStore.shared
@@ -4023,11 +4051,15 @@ enum SelfTest {
               shelf.selectionAnchor == nil || shelf.items.contains { $0.id == shelf.selectionAnchor })
         check("the unselected row survives", shelf.items.map(\.id) == [itemA.id])
 
-        // The guarantee: removing tray entries never touches the originals.
-        check("removing entries left every original file alone",
-              FileManager.default.fileExists(atPath: fileA.path)
-                  && FileManager.default.fileExists(atPath: fileB.path)
-                  && FileManager.default.fileExists(atPath: folder.path))
+        // The guarantee: removing tray entries never touches the originals —
+        // checked byte for byte, not by whether a path still resolves.
+        let originalsAfter = fingerprint([fileA, fileB, folder])
+        check("the originals were really fixtures with content",
+              originalsBefore.count == 3 && originalsBefore.values.allSatisfy { $0.size > 0 },
+              "\(originalsBefore.count) files")
+        check("removing entries left every original byte-for-byte intact",
+              !originalsBefore.isEmpty && originalsAfter == originalsBefore,
+              "before \(originalsBefore.keys.sorted()) after \(originalsAfter.keys.sorted())")
 
         // Selection is UI state and is deliberately not persisted, so a
         // relaunch cannot restore a selection of rows the user never made.
