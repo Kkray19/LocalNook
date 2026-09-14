@@ -30,6 +30,9 @@ FAKE_APP_BINARY = {
     "stale": fake_app(0, 0),
     # The deterministic half fails.
     "tests": fake_app(1, 0),
+    # Clean in every test, but carries the builder's home directory — the way a
+    # linker debug map does. Must not ship, because it names the builder.
+    "home_path": fake_app(0, 0) + f"# {os.environ['HOME']}/Developer/LocalNook/.build/Object.o\n",
     # The deterministic half is clean and the integration half demonstrates a
     # defect. This must still block.
     "integration_defect": fake_app(0, 1),
@@ -41,7 +44,7 @@ FAKE_APP_BINARY = {
 # blocks whichever half of the suite found it. "integration_unverified" is its
 # counterpart: a scenario that could not be exercised is a limitation, not a
 # defect, and must not redden the build.
-BLOCKING = ("compiler", "missing", "stale", "tests", "integration_defect")
+BLOCKING = ("compiler", "missing", "stale", "tests", "integration_defect", "home_path")
 for scenario in BLOCKING:
     with tempfile.TemporaryDirectory(prefix="localnook-release-test-") as root:
         root = pathlib.Path(root)
@@ -68,11 +71,12 @@ if [[ "$*" == build* ]]; then
   case '{scenario}' in
     compiler) exit 1;;
     missing) rm -f '{binary}';;
-    tests|integration_defect) sleep 1; touch '{binary}';;
+    tests|integration_defect|home_path) sleep 1; touch '{binary}';;
   esac
 fi
 exit 0""",
           "iconutil": "exit 0", "codesign": "exit 0", "plutil": "exit 0",
+          "strip": "exit 0",
           "hdiutil": "echo PACKAGED >> packaged; exit 0"
         }
         for name, body in scripts.items():
@@ -88,6 +92,8 @@ exit 0""",
             assert b"DETERMINISTIC SUITE FAILED" in result.stdout, result.stdout.decode()
         if scenario == "integration_defect":
             assert b"INTEGRATION CHECK FAILED" in result.stdout, result.stdout.decode()
+        if scenario == "home_path":
+            assert b"BUILD-MACHINE PATH IN BUNDLE" in result.stdout, result.stdout.decode()
         print("PASS release gate blocks:", scenario)
 
 # ── An unverified scenario is a limitation, not a blocker ────────────────────
@@ -117,6 +123,7 @@ if [[ "$*" == 'package clean' ]]; then exit 0; fi
 if [[ "$*" == build* ]]; then sleep 1; touch '{binary}'; fi
 exit 0""",
         "iconutil": "exit 0", "codesign": "exit 0", "plutil": "exit 0",
+        "strip": "exit 0",
         "hdiutil": "exit 0",
     }
     for name, body in scripts.items():

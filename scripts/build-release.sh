@@ -74,6 +74,13 @@ cp "$BINARY" "$CONTENTS/MacOS/$APP_NAME"
 cmp "$BINARY" "$CONTENTS/MacOS/$APP_NAME"
 SOURCE_SHA="$(shasum -a 256 "$BINARY" | cut -d ' ' -f1)"
 
+# The linker leaves a debug map in the executable: one absolute path per object
+# file, all under the build machine's home directory. That is the builder's
+# account name, shipped to everyone who downloads the app, and it does nothing
+# for them. `-S` removes only debugging symbols; the symbol table stays, so a
+# crash report still names functions.
+strip -S "$CONTENTS/MacOS/$APP_NAME"
+
 # Licence documents travel with the app: the GPL requires that recipients can
 # get the licence text, and the About pane links to these.
 cp "$ROOT/LICENSE" "$CONTENTS/Resources/LICENSE"
@@ -131,6 +138,19 @@ ICONSET="$WORK/AppIcon.iconset"
 swift "$ROOT/scripts/make-icon.swift" "$ICONSET"
 iconutil -c icns "$ICONSET" -o "$CONTENTS/Resources/AppIcon.icns"
 rm -rf "$ICONSET"
+
+# ── 3b. Nothing from the build machine ───────────────────────────────────────
+# A gate rather than a hope: if the builder's home directory appears anywhere in
+# the bundle — the executable, the plist, a resource — the app is not published.
+# Checked against $HOME rather than a name, so the repository itself never has
+# to contain anyone's account name to enforce this.
+step "Checking the bundle for build-machine paths…"
+if grep -r -a -l -F "$HOME/" "$APP" >/dev/null 2>&1; then
+  echo "    BUILD-MACHINE PATH IN BUNDLE — not packaging. Found in:" >&2
+  grep -r -a -l -F "$HOME/" "$APP" | sed "s|^|      |" >&2
+  exit 1
+fi
+echo "    no build-machine paths"
 
 # ── 4. Sign ──────────────────────────────────────────────────────────────────
 # Ad-hoc signature. It is enough for the app to run and to hold TCC permissions
