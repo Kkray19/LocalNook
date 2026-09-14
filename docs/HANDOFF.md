@@ -1,11 +1,12 @@
 # LocalNook — start here
 
-Updated: 2026-09-11. This file is the portable development context for the next
+Updated: 2026-09-14. This file is the portable development context for the next
 assistant. Read AGENTS.md and inspect current git status before changing anything.
 
 ## Branch in progress: `fix/idle-cpu-and-tray`
 
-Two changes, committed separately, branched from `main` at `62370ff`:
+Changes committed separately, branched from `main` at `62370ff`. Ready for
+review; **not merged into `main`**.
 
 1. **Idle CPU.** The collapsed notch burned a measured median 12.6% of a core
    (range 9.6–14.2%, 60s). Every sample was SwiftUI relayout driven by a
@@ -18,19 +19,35 @@ Two changes, committed separately, branched from `main` at `62370ff`:
    proper anchor) and an explicit "Drag all" / "Drag N" affordance that starts a
    real multi-file `beginDraggingSession`. Copy-only, missing files excluded and
    said so, duplicates handed over once, nothing copied to stage it. Row
-   dragging is untouched: still one row, one file.
+   dragging is untouched: still one row, one file. The originals guarantee is
+   asserted byte for byte (bytes, size, modification date).
+3. **Release hygiene.** `scripts/build-release.sh` strips the linker's debug map
+   (which named the builder's home directory 82 times) and refuses to publish a
+   bundle containing `$HOME/`; `test-release.py` has a blocking scenario for it.
 
-**Not yet done on this branch — it requires an unlocked screen and was left
-undone rather than faked:**
+**Verified candidate (2026-09-14, one display, screen unlocked):**
 
-- The post-fix CPU measurement of the same scenarios. `scripts/build-release.sh`
-  refuses to produce a candidate while the screen is locked, because its
-  self-test gate reports the session-label checks as UNVERIFIED — the reader
-  declines to read transcripts while locked, which is a privacy property, not a
-  fault. Nothing is installed from this branch yet; the running app is still
-  `62370ff`.
-- `verify-candidate.sh`, the installer/release/isolation checks, and installing.
-- Every physical drag check in docs/MANUAL_CHECKS.md §1b.
+- Source `be9ee72`. Executable SHA-256
+  `a27485653346cc5ba7aee35954f01644ba2cbd4317d97945a1189381029fc935`.
+- `build-release.sh`: 7 release-gate scenarios, 36 installer checks, no
+  build-machine paths, signature verified, 806 deterministic checks, isolation
+  23/23, integration 10/10.
+- `verify-candidate.sh` on the frozen copy: 10/10 deterministic and 12/12
+  integration clean, nothing unverified.
+- Installed via `scripts/install.sh`; the installed and the running executable
+  both match the hash above. Preferences, `shelf.json` (13 entries) and
+  `notes.json` were byte-identical to a pre-build snapshot after the isolation
+  test and again after install.
+- CPU, collapsed with an agent working: **14.4% → 0.4%** median (60s each);
+  interleaved isolated rounds 7.3%/9.4% old vs 0.4%/0.3% new. Full table and the
+  scenarios that were not measured are in BUGS.md under "Idle CPU".
+
+**Still not done:**
+
+- Expanded-and-idle CPU has only a partial reading (the run was interrupted);
+  two-display and locked-screen readings for the new build do not exist.
+- Every physical drag check in docs/MANUAL_CHECKS.md §1b — no synthetic test
+  proves Finder accepts a multi-file drop.
 
 **Measuring CPU here — read this before trusting a number.** `ps`'s `%CPU` is a
 lifetime average and is useless for "what is it doing now"; difference the
@@ -44,7 +61,10 @@ fails and the default is used silently.
 ## Current baseline
 
 The user authorized moving the completed stabilization work onto `main` and
-publishing `main` to the private `Kkray19/LocalNook` repository. This supersedes the
+publishing `main` to `Kkray19/LocalNook`. The repository is now **public**, with
+release `v0.1.0` built from `main` at `62370ff` (asset `LocalNook.zip`, SHA-256
+`bad9458a40e8a83283b6c461a646d7de7f8f179c107e04ad56f1e286bae0ed4b`, hand-stripped of
+build-machine paths before the release script did it automatically). This supersedes the
 previous hold on merging main for this publication only. New development should
 use a feature branch. `fix/stabilization` retains the previous development tip.
 
@@ -156,6 +176,6 @@ age/context and omit obsolete camera checks. Do not reinstall solely for docs.
 > task before editing. Preserve the constraints and user data. My next request is:
 > [describe the change]. Update the handoff when finished.
 
-The repository is private. Each AI service needs authorized repository access;
-sharing its URL does not make the code publicly readable. If a service cannot
+The repository is public, so its URL is enough to read the code; pushing still
+requires authorized access. If a service cannot
 connect, provide these two handoff files and the source relevant to the task.

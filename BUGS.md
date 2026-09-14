@@ -56,7 +56,16 @@ synthesised pointer input, which requires Accessibility. The payload is
 asserted; the gesture that carries it is not. A pasteboard assembled in a test
 is not evidence that Finder accepted a drop.
 
-**Manual check:** see docs/MANUAL_CHECKS.md.
+The originals guarantee is now asserted byte for byte: fixtures with real
+content (non-text bytes, multi-byte UTF-8, a file inside the folder) are
+fingerprinted by exact bytes, size and modification date before the removals and
+compared whole afterwards, with a companion check that fails if the fixtures were
+empty.
+
+Candidate `be9ee72` is installed; none of the physical checks below were
+performed in that session.
+
+**Manual check:** see docs/MANUAL_CHECKS.md §1b.
 
 ---
 
@@ -105,6 +114,41 @@ attachment and never progress — installed in a window, removed when the view
 leaves it, absent under Reduce Motion, not restarted by a redundant update — so
 a busy Mac cannot make it flaky.
 
+**Measured after the fix (2026-09-14).** Candidate `be9ee72`, executable SHA-256
+`a27485653346cc5ba7aee35954f01644ba2cbd4317d97945a1189381029fc935`, installed
+through `scripts/install.sh`. One display, screen unlocked. CPU from differenced
+cumulative CPU time, 5-second intervals.
+
+| Scenario | Before (`62370ff`) | After (`be9ee72`) |
+|---|---|---|
+| Installed app, collapsed, an agent working (spinner visible in a screenshot), 60s | median **14.4%**, range 13.2–16.7% | median **0.4%**, range 0.4–0.8% |
+| Isolated default-preference instance, collapsed, round 1 of 2 (30s each) | 7.3% (6.4–9.6%) | 0.4% (0.2–0.6%) |
+| Isolated default-preference instance, collapsed, round 2 of 2 | 9.4% (8.2–9.8%) | 0.3% (0.0–3.4%) |
+| Screen locked (measured 2026-09-11) | 0.4% | not measured |
+
+The isolated rounds were interleaved old, new, old, new, with the installed new
+build measured alongside as a second process (0.3–0.7% throughout). The old
+build burning 7–9% in rounds 1 and 3 is itself the proof that compositing was
+live around the new build's rounds, so the new build's low readings are not a
+locked-screen artefact.
+
+**Not measured, and why:**
+
+- *Expanded and idle* — attempted by warping the pointer onto the notch. The
+  panel opened, showing the Dashboard with an agent's working bar and "No media
+  app running", and read 0.6–1.6% for the first ~25s. Someone then used the Mac,
+  the pointer moved and the notch closed, so the 60-second run is **invalid** and
+  recorded only as a partial reading. No "before" exists for this state on this
+  configuration.
+- *Media monitoring on, nothing playing* — covered only by that partial expanded
+  reading and by the collapsed readings, which ran with the installed
+  configuration's media monitoring as set.
+- *Collapsed with no live activity* — not isolatable while an agent session is
+  running the measurement itself; the busy-spinner readings above are the
+  heavier case.
+- *Two displays, and locked/asleep on the new build* — only one display was
+  attached, and the screen was not locked during this session.
+
 **Two measuring traps, recorded because both produced confident wrong answers:**
 
 1. **A locked screen or a slept display reads as 0% for everything.** macOS stops
@@ -117,6 +161,31 @@ a busy Mac cannot make it flaky.
    used. An entire pref-based bisect ran with every setting at its default and
    was discarded. Verified directly with a three-line program before relying on
    any of it.
+
+### The published app carried the builder's account name
+
+**Observed:** preparing the public v0.1.0 download, a search of the built bundle
+found the builder's home directory in the executable. `nm -pa` showed 82 `OSO`
+entries — the linker's debug map, one absolute path per object file under
+`~/Developer/LocalNook/.build/`. The source tree and the whole git history were
+clean; only the compiled artefact leaked it.
+
+**Consequence:** every download names the account that built it. The v0.1.0
+asset was hand-cleaned (`strip -S`, ad-hoc re-sign, re-verified: 758 checks,
+signature valid, zero occurrences) before upload, and the published zip was
+re-downloaded and matched by SHA-256.
+
+**Fix:** `scripts/build-release.sh` strips debugging symbols while assembling the
+bundle (`strip -S` keeps the symbol table, so crash reports still name
+functions) and then refuses to publish if `$HOME/` appears anywhere in the
+bundle. Matching `$HOME` rather than a name keeps any account name out of the
+repository.
+
+**Verification:** `scripts/test-release.py` adds a blocking `home_path` scenario —
+a fixture that passes every test but carries a home-directory path — and asserts
+the release stops with `BUILD-MACHINE PATH IN BUNDLE`. The real candidate build
+printed "no build-machine paths", and `grep` over the candidate app and the app
+inside its DMG found none.
 
 ### Hover: resolved into three separate things, none of them open
 
